@@ -12,7 +12,8 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key        = os.getenv("ADMIN_PASSWORD", "fallback-secret")
-app.config['SQLALCHEMY_DATABASE_URI']        = 'sqlite:///khayyam.db'
+database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
