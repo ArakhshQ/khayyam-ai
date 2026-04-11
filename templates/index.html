@@ -460,10 +460,17 @@
       <span class="logo-text">خیام</span>
     </a>
     <div class="nav-right">
-      <a href="/chat" class="nav-link">چت</a>
-      <a href="/tutor" class="nav-link">بیاموز</a>
-      <a href="/chat" class="nav-cta">شروع کنید ←</a>
-    </div>
+  <a href="/chat" class="nav-link">چت</a>
+  <a href="/tutor" class="nav-link">بیاموز</a>
+  <div id="auth-buttons">
+    <a href="/login" class="nav-link">ورود</a>
+    <a href="/register" class="nav-cta">ثبت‌نام</a>
+  </div>
+  <div id="user-menu" style="display:none; align-items:center; gap:8px;">
+    <a href="/profile" class="nav-link" id="nav-username">پروفایل</a>
+    <a href="/logout" class="nav-link">خروج</a>
+  </div>
+</div>
   </nav>
 
   <!-- HERO -->
@@ -581,6 +588,17 @@
   </footer>
 
   <script>
+     async function checkAuth() {
+    const res  = await fetch('/api/me');
+    const data = await res.json();
+    if (data.logged_in) {
+      document.getElementById('auth-buttons').style.display = 'none';
+      const menu = document.getElementById('user-menu');
+      menu.style.display = 'flex';
+      document.getElementById('nav-username').textContent = data.username;
+    }
+  }
+  checkAuth();
     // scroll reveal animation
     const observer = new IntersectionObserver((entries) => {
       entries.forEach((entry, i) => {

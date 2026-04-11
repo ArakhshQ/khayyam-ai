@@ -495,9 +495,18 @@
       <span class="logo-text">خیام</span>
     </a>
     <nav class="nav-links">
-      <a href="/chat" class="nav-btn">چت</a>
-      <a href="/tutor" class="nav-btn active">بیاموز</a>
-    </nav>
+  <a href="/chat" class="nav-btn active">چت</a>
+  <a href="/figures" class="nav-btn">شخصیت‌ها</a>
+  <a href="/tutor" class="nav-btn">بیاموز</a>
+</nav>
+<div id="auth-buttons" style="display:flex; gap:6px;">
+  <a href="/login" class="nav-btn">ورود</a>
+  <a href="/register" class="nav-btn" style="border-color:var(--gold-dim);color:var(--gold);">ثبت‌نام</a>
+</div>
+<div id="user-menu" style="display:none; align-items:center; gap:6px;">
+  <a href="/profile" class="nav-btn" id="nav-username">پروفایل</a>
+  <a href="/logout" class="nav-btn">خروج</a>
+</div>
     <button class="reset-btn" id="reset-btn" onclick="resetSession()" style="display:none">
       ← تغییر مضمون
     </button>
@@ -784,6 +793,18 @@
     inputEl.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
+    async function checkAuth() {
+    const res  = await fetch('/api/me');
+    const data = await res.json();
+    if (data.logged_in) {
+      document.getElementById('auth-buttons').style.display = 'none';
+      const menu = document.getElementById('user-menu');
+      menu.style.display = 'flex';
+      document.getElementById('nav-username').textContent = data.username;
+    }
+  }
+  checkAuth();
+
   </script>
 </body>
 </html>
