@@ -1,0 +1,386 @@
+/* ── KHAYYAM AI — SHARED STYLES ── */
+@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap');
+
+/* ── CSS VARIABLES ── */
+:root {
+  --bg:          #0f0e0c;
+  --surface:     #1a1814;
+  --surface2:    #232018;
+  --border:      #2e2a22;
+  --gold:        #c9a84c;
+  --gold-dim:    #8a6e2f;
+  --gold-glow:   rgba(201,168,76,0.12);
+  --text:        #ede8df;
+  --text-dim:    #7a7060;
+  --user-bg:     #1e2a1a;
+  --user-border: #3a5c2e;
+  --green:       #2a4a20;
+  --green-lt:    #7abf6a;
+  --red:         #4a2020;
+  --red-lt:      #bf6a6a;
+  --radius:      14px;
+  --header-h:    56px;
+  --bottom-nav-h:64px;
+}
+
+/* ── RESET ── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Vazirmatn', sans-serif;
+  direction: rtl;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── GEOMETRIC BACKGROUND ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(45deg, transparent, transparent 40px, rgba(201,168,76,0.015) 40px, rgba(201,168,76,0.015) 41px),
+    repeating-linear-gradient(-45deg, transparent, transparent 40px, rgba(201,168,76,0.015) 40px, rgba(201,168,76,0.015) 41px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── HEADER ── */
+.kh-header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  height: var(--header-h);
+  background: rgba(26,24,20,0.95);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  gap: 12px;
+}
+
+/* ── LOGO ── */
+.kh-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.kh-logo-mark {
+  width: 32px;
+  height: 32px;
+  border: 1.5px solid var(--gold);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gold);
+  flex-shrink: 0;
+}
+
+.kh-logo-text {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--gold);
+}
+
+/* ── NAV BUTTONS ── */
+.kh-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kh-nav-btn {
+  padding: 6px 13px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'Vazirmatn', sans-serif;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.kh-nav-btn:hover {
+  background: var(--surface2);
+  color: var(--text);
+  border-color: var(--gold-dim);
+}
+
+.kh-nav-btn.active {
+  border-color: var(--gold-dim);
+  color: var(--gold);
+}
+
+.kh-nav-btn.primary {
+  background: var(--gold);
+  color: #0f0e0c;
+  border-color: var(--gold);
+  font-weight: 700;
+}
+
+.kh-nav-btn.primary:hover {
+  background: #e0bb60;
+  color: #0f0e0c;
+}
+
+.kh-nav-btn.danger:hover {
+  border-color: var(--red);
+  color: var(--red-lt);
+  background: transparent;
+}
+
+/* ── AUTH AREA IN HEADER ── */
+.kh-auth {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ── PAGE WRAPPER ── */
+.kh-page {
+  position: relative;
+  z-index: 1;
+  padding-top: var(--header-h);
+  min-height: 100vh;
+}
+
+/* ── BUTTONS ── */
+.kh-btn-primary {
+  background: var(--gold);
+  color: #0f0e0c;
+  font-family: 'Vazirmatn', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 13px 28px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.kh-btn-primary:hover {
+  background: #e0bb60;
+  transform: translateY(-1px);
+}
+
+.kh-btn-primary:disabled {
+  background: var(--border);
+  color: var(--text-dim);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.kh-btn-secondary {
+  background: transparent;
+  color: var(--text);
+  font-family: 'Vazirmatn', sans-serif;
+  font-weight: 500;
+  font-size: 15px;
+  padding: 13px 28px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.kh-btn-secondary:hover {
+  border-color: var(--gold-dim);
+  background: var(--surface);
+}
+
+/* ── FORM ELEMENTS ── */
+.kh-input {
+  width: 100%;
+  padding: 11px 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  font-family: 'Vazirmatn', sans-serif;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.kh-input:focus { border-color: var(--gold-dim); }
+.kh-input::placeholder { color: var(--text-dim); }
+
+/* ── CARDS ── */
+.kh-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+/* ── ALERTS ── */
+.kh-error {
+  background: var(--red);
+  border: 1px solid #6a2a2a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--red-lt);
+  margin-bottom: 16px;
+  display: none;
+}
+
+.kh-success {
+  background: var(--green);
+  border: 1px solid #3a6a2a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--green-lt);
+  margin-bottom: 16px;
+  display: none;
+}
+
+/* ── TOAST ── */
+.kh-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: var(--surface);
+  border: 1px solid var(--gold-dim);
+  color: var(--gold);
+  padding: 10px 24px;
+  border-radius: 99px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: transform 0.3s ease;
+  z-index: 200;
+  white-space: nowrap;
+}
+
+.kh-toast.show { transform: translateX(-50%) translateY(0); }
+
+/* ── ANIMATIONS ── */
+@keyframes kh-fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.kh-fade-up { animation: kh-fadeUp 0.5s ease both; }
+
+/* ── BOTTOM NAV (mobile only) ── */
+.kh-bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 100;
+  height: var(--bottom-nav-h);
+  background: rgba(26,24,20,0.98);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border);
+  padding: 0 8px;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.kh-bottom-nav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  height: 100%;
+}
+
+.kh-bottom-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
+  transition: all 0.2s;
+  flex: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: 'Vazirmatn', sans-serif;
+}
+
+.kh-bottom-tab .tab-icon { font-size: 20px; line-height: 1; }
+.kh-bottom-tab .tab-label { font-size: 10px; }
+
+.kh-bottom-tab.active {
+  color: var(--gold);
+  background: var(--gold-glow);
+}
+
+.kh-bottom-tab:hover { color: var(--text); }
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ════════════════════════════════
+   MOBILE — under 768px
+   ════════════════════════════════ */
+@media (max-width: 768px) {
+
+  /* show bottom nav */
+  .kh-bottom-nav { display: block; }
+
+  /* hide desktop nav links */
+  .kh-nav { display: none; }
+
+  /* add bottom padding so content not hidden behind bottom nav */
+  .kh-page { padding-bottom: var(--bottom-nav-h); }
+
+  /* header adjustments */
+  .kh-header { padding: 0 14px; }
+  .kh-logo-text { font-size: 15px; }
+
+  /* auth buttons in header — smaller */
+  .kh-auth .kh-nav-btn { padding: 5px 10px; font-size: 12px; }
+
+  /* bigger touch targets */
+  .kh-btn-primary, .kh-btn-secondary {
+    padding: 14px 24px;
+    font-size: 15px;
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* inputs bigger on mobile */
+  .kh-input { font-size: 16px; padding: 13px 14px; }
+
+  /* cards less padding */
+  .kh-card { padding: 18px 16px; }
+}
+
+/* ════════════════════════════════
+   SMALL PHONES — under 400px
+   ════════════════════════════════ */
+@media (max-width: 400px) {
+  .kh-logo-text { display: none; }
+  .kh-auth .kh-nav-btn { padding: 5px 8px; font-size: 11px; }
+}
