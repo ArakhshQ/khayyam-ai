@@ -159,8 +159,8 @@ def api_register():
     data     = request.get_json()
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
-    email    = data.get("email", "").strip() or None
-    phone    = data.get("phone", "").strip() or None
+    email    = (data.get("email") or "").strip() or None
+    phone    = (data.get("phone") or "").strip() or None
 
     if len(username) < 3:
         return jsonify({"success": False, "error": "نام کاربری باید حداقل ۳ حرف باشد"})
