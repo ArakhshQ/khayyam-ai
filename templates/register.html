@@ -7,6 +7,176 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <style>
+  body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  nav {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    height: 56px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-link {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 5px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    transition: all 0.2s;
+  }
+  .nav-link:hover { color: var(--text); background: var(--surface2); }
+
+  .page {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 16px 100px;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 440px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px 32px;
+    animation: fadeUp 0.5s ease both;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .card-top { text-align: center; margin-bottom: 28px; }
+  .card-icon { font-size: 36px; display: block; margin-bottom: 12px; }
+  .card-top h1 { font-size: 22px; font-weight: 700; color: var(--gold); margin-bottom: 6px; }
+  .card-top p  { font-size: 13px; color: var(--text-dim); line-height: 1.7; }
+
+  .form-group { margin-bottom: 16px; }
+  .form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: 7px;
+    letter-spacing: 0.05em;
+  }
+
+  .form-input {
+    width: 100%;
+    padding: 11px 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--text);
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .form-input:focus { border-color: var(--gold-dim); }
+  .form-input::placeholder { color: var(--text-dim); }
+
+  .method-toggle {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .method-btn {
+    flex: 1;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .method-btn.active {
+    border-color: var(--gold);
+    background: rgba(201,168,76,0.1);
+    color: var(--gold);
+    font-weight: 500;
+  }
+
+  .password-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 5px;
+    padding-right: 4px;
+  }
+
+  .submit-btn {
+    width: 100%;
+    padding: 13px;
+    background: var(--gold);
+    color: #0f0e0c;
+    border: none;
+    border-radius: 9px;
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 4px;
+  }
+  .submit-btn:hover { background: #e0bb60; transform: translateY(-1px); }
+  .submit-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
+
+  .error-box {
+    background: var(--red);
+    border: 1px solid #6a2a2a;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--red-lt);
+    margin-bottom: 16px;
+    display: none;
+  }
+
+  .success-box {
+    background: var(--green);
+    border: 1px solid #3a6a2a;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--green-lt);
+    margin-bottom: 16px;
+    display: none;
+  }
+
+  .footer-link {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .footer-link a { color: var(--gold); text-decoration: none; }
+  .footer-link a:hover { text-decoration: underline; }
+
+  @media (max-width: 600px) {
+    nav { padding: 0 14px; }
+    .card { padding: 28px 18px; }
+  }
+</style>
 </head>
 <body>
   <nav>
@@ -70,21 +240,21 @@
     </div>
   </div>
 <!-- BOTTOM NAV — mobile only -->
-<nav class="kh-bottom-nav">
-  <div class="kh-bottom-nav-inner">
-    <a href="/" class="kh-bottom-tab">
+<nav class="bottom-nav">
+  <div class="bottom-nav-inner">
+    <a href="/" class="bottom-tab">
       <span class="tab-icon">🏠</span>
       <span class="tab-label">خانه</span>
     </a>
-    <a href="/chat" class="kh-bottom-tab">
+    <a href="/chat" class="bottom-tab">
       <span class="tab-icon">💬</span>
       <span class="tab-label">چت</span>
     </a>
-    <a href="/tutor" class="kh-bottom-tab">
+    <a href="/tutor" class="bottom-tab">
       <span class="tab-icon">📚</span>
       <span class="tab-label">بیاموز</span>
     </a>
-    <a href="/profile" class="kh-bottom-tab">
+    <a href="/profile" class="bottom-tab">
       <span class="tab-icon">👤</span>
       <span class="tab-label">پروفایل</span>
     </a>

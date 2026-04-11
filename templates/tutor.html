@@ -7,6 +7,327 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <style>
+  body {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── HEADER ── */
+  header {
+    position: relative;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    height: 56px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .nav-links { display: flex; gap: 4px; }
+
+  .nav-btn {
+    padding: 5px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+  .nav-btn:hover { background: var(--surface2); color: var(--text); }
+  .nav-btn.active { border-color: var(--gold-dim); color: var(--gold); }
+
+  .reset-btn {
+    padding: 5px 14px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .reset-btn:hover { border-color: var(--gold-dim); color: var(--gold); }
+
+  /* ── MAIN ── */
+  .main {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── SETUP SCREEN ── */
+  .setup-screen {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+
+  .setup-card {
+    width: 100%;
+    max-width: 580px;
+    animation: fadeUp 0.5s ease both;
+  }
+
+  .setup-top { text-align: center; margin-bottom: 36px; }
+  .setup-icon { font-size: 48px; display: block; margin-bottom: 16px; }
+  .setup-top h1 { font-size: 26px; font-weight: 700; color: var(--gold); margin-bottom: 8px; }
+  .setup-top p { font-size: 14px; color: var(--text-dim); line-height: 1.8; }
+
+  .setup-section { margin-bottom: 28px; }
+
+  .setup-section-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  .pill-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  .pill {
+    padding: 8px 18px;
+    border-radius: 99px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pill:hover { border-color: var(--gold-dim); color: var(--text); background: var(--surface2); }
+  .pill.selected { border-color: var(--gold); background: rgba(201,168,76,0.12); color: var(--gold); font-weight: 500; }
+
+  .grade-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+
+  .grade-card {
+    padding: 14px 18px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+  }
+  .grade-card:hover { border-color: var(--gold-dim); background: var(--surface2); }
+  .grade-card.selected { border-color: var(--gold); background: rgba(201,168,76,0.1); }
+
+  .grade-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .grade-card.selected .grade-title { color: var(--gold); }
+  .grade-sub { font-size: 12px; color: var(--text-dim); }
+
+  .start-btn {
+    width: 100%;
+    padding: 14px;
+    border-radius: 10px;
+    border: none;
+    background: var(--gold);
+    color: #0f0e0c;
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 8px;
+  }
+  .start-btn:hover { background: #e0bb60; transform: translateY(-1px); }
+  .start-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
+
+  /* ── CHAT SCREEN ── */
+  .chat-screen {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .session-bar {
+    padding: 8px 20px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .session-tag {
+    padding: 3px 12px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .tag-subject { background: rgba(201,168,76,0.15); color: var(--gold); border: 1px solid var(--gold-dim); }
+  .tag-grade { background: rgba(58,92,46,0.25); color: #7abf6a; border: 1px solid #3a5c2e; }
+  .session-bar-hint { font-size: 12px; color: var(--text-dim); margin-right: auto; }
+
+  .chat-wrapper {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 16px;
+    scroll-behavior: smooth;
+  }
+  .chat-wrapper::-webkit-scrollbar { width: 4px; }
+  .chat-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .messages {
+    max-width: 700px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .message { display: flex; gap: 10px; animation: fadeUp 0.3s ease both; }
+  .message.user { flex-direction: row-reverse; }
+
+  .avatar {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; flex-shrink: 0; margin-top: 2px;
+  }
+  .avatar.ai { background: var(--surface2); border: 1px solid var(--gold-dim); color: var(--gold); font-weight: 700; font-size: 13px; }
+  .avatar.user { background: var(--user-bg); border: 1px solid var(--user-border); }
+
+  .bubble {
+    max-width: 78%;
+    padding: 13px 17px;
+    border-radius: 14px;
+    font-size: 15px;
+    line-height: 1.85;
+  }
+  .message.ai .bubble { background: var(--surface); border: 1px solid var(--border); border-top-right-radius: 4px; }
+  .message.user .bubble { background: var(--user-bg); border: 1px solid var(--user-border); border-top-left-radius: 4px; }
+
+  .typing-dots { display: flex; gap: 5px; align-items: center; padding: 4px 0; }
+  .typing-dots span {
+    width: 7px; height: 7px;
+    background: var(--gold-dim);
+    border-radius: 50%;
+    animation: bounce 1.2s infinite;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes bounce {
+    0%,60%,100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-6px); opacity: 1; }
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* topic chips */
+  .topic-chips {
+    max-width: 700px;
+    margin: 0 auto 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    padding: 0 4px;
+  }
+
+  .chip {
+    padding: 5px 14px;
+    border-radius: 99px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .chip:hover { border-color: var(--gold-dim); color: var(--text); }
+
+  /* input */
+  .input-area {
+    padding: 12px 20px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .input-box {
+    max-width: 700px;
+    margin: 0 auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 10px 12px;
+    transition: border-color 0.2s;
+  }
+  .input-box:focus-within { border-color: var(--gold-dim); }
+
+  #user-input {
+    flex: 1;
+    background: transparent;
+    border: none; outline: none;
+    color: var(--text);
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 15px;
+    resize: none;
+    max-height: 140px;
+    line-height: 1.6;
+    direction: rtl;
+  }
+  #user-input::placeholder { color: var(--text-dim); }
+
+  #send-btn {
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    border: none;
+    background: var(--gold);
+    color: #0f0e0c;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.2s;
+  }
+  #send-btn:hover { background: #e0bb60; transform: scale(1.05); }
+  #send-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
+
+  .input-hint { text-align: center; font-size: 11px; color: var(--text-dim); margin-top: 7px; }
+
+  /* ── MOBILE ── */
+  @media (max-width: 600px) {
+    .grade-grid { grid-template-columns: 1fr 1fr; }
+    .bubble { max-width: 88%; font-size: 14px; }
+    .nav-links { display: none; }
+    header { padding: 0 14px; }
+    .setup-screen { padding: 20px 14px; }
+  }
+</style>
 </head>
 <body>
 
@@ -118,21 +439,21 @@
   </div>
 <!-- BOTTOM NAV — mobile only -->
 <!-- BOTTOM NAV — mobile only -->
-<nav class="kh-bottom-nav">
-  <div class="kh-bottom-nav-inner">
-    <a href="/" class="kh-bottom-tab">
+<nav class="bottom-nav">
+  <div class="bottom-nav-inner">
+    <a href="/" class="bottom-tab">
       <span class="tab-icon">🏠</span>
       <span class="tab-label">خانه</span>
     </a>
-    <a href="/chat" class="kh-bottom-tab">
+    <a href="/chat" class="bottom-tab">
       <span class="tab-icon">💬</span>
       <span class="tab-label">چت</span>
     </a>
-    <a href="/tutor" class="kh-bottom-tab">
+    <a href="/tutor" class="bottom-tab">
       <span class="tab-icon">📚</span>
       <span class="tab-label">بیاموز</span>
     </a>
-    <a href="/profile" class="kh-bottom-tab">
+    <a href="/profile" class="bottom-tab">
       <span class="tab-icon">👤</span>
       <span class="tab-label">پروفایل</span>
     </a>
