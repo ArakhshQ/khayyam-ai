@@ -1,23 +1,42 @@
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from groq import Groq
 from dotenv import load_dotenv
+from database import db, User, Conversation, Message
+from auth import register_user, login_user_by_username, hash_password
+from datetime import datetime
 import os
 import json
 
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("ADMIN_PASSWORD", "fallback-secret")
+app.secret_key        = os.getenv("ADMIN_PASSWORD", "fallback-secret")
+app.config['SQLALCHEMY_DATABASE_URI']        = 'sqlite:///khayyam.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login_page'
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 ADMIN_PASSWORD   = os.getenv("ADMIN_PASSWORD")
 ADMIN_SECRET_URL = os.getenv("ADMIN_SECRET_URL", "admin-secret")
+KNOWLEDGE_FILE   = "knowledge.json"
+EXAMPLES_FILE    = "examples.json"
 
-KNOWLEDGE_FILE = "knowledge.json"
-EXAMPLES_FILE  = "examples.json"
+# ── CREATE TABLES ──
+with app.app_context():
+    db.create_all()
 
-# ── LOAD / SAVE ──
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# ── KNOWLEDGE ──
 def load_knowledge():
     try:
         with open(KNOWLEDGE_FILE, "r", encoding="utf-8") as f:
@@ -73,10 +92,10 @@ def build_system_prompt():
 - از کلمات "برادر"، "خواهر"، "احسنت"، "تشکر" استفاده کن
 - افغانستان، فرهنگ، تاریخ و مردمش را دوست داری
 - هرگز خود را ChatGPT یا هوش مصنوعی ایرانی معرفی نکن
-- اسم تو خیام است — نامت از عمر خیام شاعر و ریاضیدان بزرگ گرفته شده
+- اسم تو خیام است
 - وقتی کسی پرسید کی هستی بگو: من خیام هستم، دستیار هوشمند افغانی
 
-نمونه‌های گفتگو — دقیقاً به همین سبک صحبت کن:
+نمونه‌های گفتگو:
 {example_block}"""
 
 def build_tutor_prompt(subject, grade):
@@ -86,27 +105,23 @@ def build_tutor_prompt(subject, grade):
         dialect_rules += f'- بگو "{item["correct"]}" نه "{item["wrong"]}"\n'
 
     return f"""تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
-
 مضمون: {subject}
 سطح: {grade}
-
 قوانین زبانی:
 - فقط دری افغانی، هرگز پشتو یا فارسی ایرانی
 {dialect_rules}
-
 روش تدریس:
 - مفاهیم را ساده و با مثال‌های افغانی توضیح بده
 - بعد از هر توضیح یک سوال کوتاه برای امتحان فهم بپرس
-- اگر جواب درست بود: تشویق کن و موضوع بعدی را پیشنهاد بده
-- اگر جواب غلط بود: با مهربانی تصحیح کن و دوباره توضیح بده
-- از کلمات افغانی مثل "احسنت"، "آفرین"، "عالی" استفاده کن"""
+- اگر جواب درست بود تشویق کن
+- اگر جواب غلط بود با مهربانی تصحیح کن
+- از کلمات افغانی مثل احسنت، آفرین، عالی استفاده کن"""
 
-# ── GROQ HELPER ──
+# ── GROQ ──
 def groq_chat(system_prompt, history, user_message, temperature=0.8):
     messages = [{"role": "system", "content": system_prompt}]
     messages += history
     messages.append({"role": "user", "content": user_message})
-
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=messages,
@@ -114,6 +129,74 @@ def groq_chat(system_prompt, history, user_message, temperature=0.8):
         temperature=temperature
     )
     return response.choices[0].message.content
+
+# ── AUTH ROUTES ──
+@app.route("/register")
+def register_page():
+    if current_user.is_authenticated:
+        return redirect(url_for('chat_page'))
+    return render_template("register.html")
+
+@app.route("/login")
+def login_page():
+    if current_user.is_authenticated:
+        return redirect(url_for('chat_page'))
+    return render_template("login.html")
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('home'))
+
+@app.route("/profile")
+@login_required
+def profile_page():
+    return render_template("profile.html")
+
+@app.route("/api/register", methods=["POST"])
+def api_register():
+    data     = request.get_json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    email    = data.get("email", "").strip() or None
+    phone    = data.get("phone", "").strip() or None
+
+    if len(username) < 3:
+        return jsonify({"success": False, "error": "نام کاربری باید حداقل ۳ حرف باشد"})
+    if len(password) < 6:
+        return jsonify({"success": False, "error": "رمز عبور باید حداقل ۶ حرف باشد"})
+
+    user, error = register_user(username, password, email, phone)
+    if error:
+        return jsonify({"success": False, "error": error})
+
+    login_user(user)
+    return jsonify({"success": True})
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    data       = request.get_json()
+    identifier = data.get("identifier", "").strip()
+    password   = data.get("password", "").strip()
+
+    user, error = login_user_by_username(identifier, password)
+    if error:
+        return jsonify({"success": False, "error": error})
+
+    login_user(user)
+    return jsonify({"success": True})
+
+@app.route("/api/me")
+def api_me():
+    if current_user.is_authenticated:
+        return jsonify({
+            "logged_in": True,
+            "username":  current_user.username,
+            "email":     current_user.email,
+            "phone":     current_user.phone
+        })
+    return jsonify({"logged_in": False})
 
 # ── MAIN ROUTES ──
 @app.route("/")
@@ -142,6 +225,7 @@ def chat():
     data         = request.get_json()
     user_message = data.get("message", "")
     history      = data.get("history", [])
+    conv_id      = data.get("conversation_id")
 
     reply = groq_chat(
         system_prompt=build_system_prompt(),
@@ -149,6 +233,38 @@ def chat():
         user_message=user_message,
         temperature=0.8
     )
+
+    # save to database if user is logged in
+    if current_user.is_authenticated:
+        if conv_id:
+            conv = Conversation.query.filter_by(
+                id=conv_id,
+                user_id=current_user.id
+            ).first()
+        else:
+            conv = None
+
+        if not conv:
+            title = user_message[:60] if len(user_message) > 0 else "گفتگوی جدید"
+            conv  = Conversation(user_id=current_user.id, title=title)
+            db.session.add(conv)
+            db.session.flush()
+
+        db.session.add(Message(
+            conversation_id=conv.id,
+            role='user',
+            content=user_message
+        ))
+        db.session.add(Message(
+            conversation_id=conv.id,
+            role='assistant',
+            content=reply
+        ))
+        conv.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        return jsonify({"reply": reply, "conversation_id": conv.id})
+
     return jsonify({"reply": reply})
 
 # ── TUTOR API ──
@@ -183,6 +299,39 @@ def persona_chat():
         temperature=0.9
     )
     return jsonify({"reply": reply})
+
+# ── CONVERSATION APIs ──
+@app.route("/api/conversations", methods=["GET"])
+@login_required
+def get_conversations():
+    convs = Conversation.query.filter_by(
+        user_id=current_user.id
+    ).order_by(Conversation.updated_at.desc()).all()
+    return jsonify([{
+        "id":         c.id,
+        "title":      c.title,
+        "updated_at": c.updated_at.isoformat()
+    } for c in convs])
+
+@app.route("/api/conversations/<int:conv_id>", methods=["GET"])
+@login_required
+def get_conversation(conv_id):
+    conv = Conversation.query.filter_by(
+        id=conv_id,
+        user_id=current_user.id
+    ).first_or_404()
+    return jsonify(conv.to_dict())
+
+@app.route("/api/conversations/<int:conv_id>", methods=["DELETE"])
+@login_required
+def delete_conversation(conv_id):
+    conv = Conversation.query.filter_by(
+        id=conv_id,
+        user_id=current_user.id
+    ).first_or_404()
+    db.session.delete(conv)
+    db.session.commit()
+    return jsonify({"success": True})
 
 # ── ADMIN ROUTES ──
 @app.route(f"/{ADMIN_SECRET_URL}")

@@ -2,3 +2,6 @@ flask
 python-dotenv
 gunicorn
 groq
+flask-sqlalchemy
+flask-login
+bcrypt
