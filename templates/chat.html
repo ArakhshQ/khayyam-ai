@@ -435,274 +435,262 @@
   </div>
 </nav>
   <script>
-    // ── STATE ──
-    const STORAGE_KEY = 'darigpt_conversations';
-    let conversations = loadAllConversations();
-    let currentId     = null;
-    let history       = [];
-    let isLoading     = false;
-    let sidebarOpen   = true;
+   // ── STATE ──
+let currentUser   = null;
+let currentConvId = null;
+let history       = [];
+let isLoading     = false;
+let sidebarOpen   = true;
 
-    // ── STORAGE ──
-    function loadAllConversations() {
-      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
-      catch { return {}; }
-    }
+// ── INIT ──
+async function init() {
+  const res  = await fetch('/api/me');
+  const data = await res.json();
 
-    function saveAllConversations() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
-    }
-
-    function generateId() {
-      return 'conv_' + Date.now();
-    }
-
-    // take first 40 chars of first user message as title
-    function makeTitleFromMessage(msg) {
-      const trimmed = msg.trim().replace(/\n/g, ' ');
-      return trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed;
-    }
-
-    function formatDate(ts) {
-      const d = new Date(ts);
-      const now = new Date();
-      const diff = now - d;
-      if (diff < 60000)   return 'همین الان';
-      if (diff < 3600000) return Math.floor(diff/60000) + ' دقیقه پیش';
-      if (diff < 86400000)return Math.floor(diff/3600000) + ' ساعت پیش';
-      return d.toLocaleDateString('fa-AF');
-    }
-
-    // ── SIDEBAR ──
-    function toggleSidebar() {
-      sidebarOpen = !sidebarOpen;
-      document.getElementById('sidebar').classList.toggle('collapsed', !sidebarOpen);
-    }
-
-    function renderSidebar() {
-      const list  = document.getElementById('sidebar-list');
-      const empty = document.getElementById('sidebar-empty');
-      const ids   = Object.keys(conversations).sort((a,b) =>
-        conversations[b].updatedAt - conversations[a].updatedAt
-      );
-
-      if (ids.length === 0) {
-        if (!empty) list.innerHTML = '<div class="sidebar-empty" id="sidebar-empty">هنوز گفتگویی ندارید.<br/>یک چت جدید شروع کنید.</div>';
-        return;
-      }
-
-      list.innerHTML = '';
-      ids.forEach(id => {
-        const conv = conversations[id];
-        const item = document.createElement('div');
-        item.className = 'conv-item' + (id === currentId ? ' active' : '');
-        item.innerHTML = `
-          <span class="conv-title">${conv.title}</span>
-          <span class="conv-date">${formatDate(conv.updatedAt)}</span>
-          <button class="conv-delete" onclick="deleteConv(event,'${id}')" title="حذف">✕</button>
-        `;
-        item.addEventListener('click', () => loadConversation(id));
-        list.appendChild(item);
-      });
-    }
-
-    // ── CONVERSATION ACTIONS ──
-    function newChat() {
-      currentId = null;
-      history   = [];
-      const messagesEl = document.getElementById('messages');
-      messagesEl.innerHTML = `
-        <div class="welcome" id="welcome">
-          <span class="welcome-symbol">🕌</span>
-          <h1>سلام! خوش آمدید</h1>
-          <p>من خیام هستم — دستیار هوشمند افغانی شما.</p>
-          <div class="suggestion-grid">
-            <button class="suggestion" onclick="useSuggestion(this)">تاریخچه کابل را برایم بگو</button>
-            <button class="suggestion" onclick="useSuggestion(this)">یک شعر دری برایم بنویس</button>
-            <button class="suggestion" onclick="useSuggestion(this)">غذاهای مشهور افغانستان کدام‌اند؟</button>
-            <button class="suggestion" onclick="useSuggestion(this)">ولایات افغانستان را نام ببر</button>
-          </div>
-        </div>`;
-      renderSidebar();
-      document.getElementById('user-input').focus();
-    }
-
-    function loadConversation(id) {
-      const conv = conversations[id];
-      if (!conv) return;
-
-      currentId = id;
-      history   = conv.messages.map(m => ({ role: m.role, content: m.content }));
-
-      const messagesEl = document.getElementById('messages');
-      messagesEl.innerHTML = '';
-
-      conv.messages.forEach(m => {
-        appendBubble(m.role === 'user' ? 'user' : 'ai', m.content);
-      });
-
-      renderSidebar();
-      scrollToBottom();
-
-      // on mobile close sidebar after selecting
-      if (window.innerWidth <= 640) {
-        sidebarOpen = false;
-        document.getElementById('sidebar').classList.add('collapsed');
-      }
-    }
-
-    function deleteConv(e, id) {
-      e.stopPropagation();
-      delete conversations[id];
-      saveAllConversations();
-      if (currentId === id) newChat();
-      else renderSidebar();
-    }
-
-    // ── CHAT UI ──
-    function scrollToBottom() {
-      const w = document.getElementById('chat-wrapper');
-      w.scrollTop = w.scrollHeight;
-    }
-
-    function appendBubble(role, text) {
-      const messagesEl = document.getElementById('messages');
-      const welcome    = document.getElementById('welcome');
-      if (welcome) welcome.style.display = 'none';
-
-      const div    = document.createElement('div');
-      div.className = `message ${role}`;
-
-      const avatar = document.createElement('div');
-      avatar.className = `avatar ${role}`;
-      avatar.textContent = role === 'ai' ? 'د' : '👤';
-
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.textContent = text;
-
-      div.appendChild(avatar);
-      div.appendChild(bubble);
-      messagesEl.appendChild(div);
-      scrollToBottom();
-      return bubble;
-    }
-
-    function showTyping() {
-      const messagesEl = document.getElementById('messages');
-      const welcome    = document.getElementById('welcome');
-      if (welcome) welcome.style.display = 'none';
-
-      const div = document.createElement('div');
-      div.className = 'message ai';
-      div.id = 'typing-indicator';
-
-      const avatar = document.createElement('div');
-      avatar.className = 'avatar ai';
-      avatar.textContent = 'د';
-
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-
-      div.appendChild(avatar);
-      div.appendChild(bubble);
-      messagesEl.appendChild(div);
-      scrollToBottom();
-    }
-
-    function removeTyping() {
-      const t = document.getElementById('typing-indicator');
-      if (t) t.remove();
-    }
-
-    function useSuggestion(btn) {
-      document.getElementById('user-input').value = btn.textContent.trim();
-      sendMessage();
-    }
-
-    // ── SEND MESSAGE ──
-    async function sendMessage() {
-      const input = document.getElementById('user-input');
-      const text  = input.value.trim();
-      if (!text || isLoading) return;
-
-      isLoading = true;
-      document.getElementById('send-btn').disabled = true;
-      input.value = '';
-      input.style.height = 'auto';
-
-      // if brand new conversation, create it now
-      if (!currentId) {
-        currentId = generateId();
-        conversations[currentId] = {
-          id:        currentId,
-          title:     makeTitleFromMessage(text),
-          messages:  [],
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        };
-      }
-
-      appendBubble('user', text);
-      showTyping();
-
-      history.push({ role: 'user', content: text });
-
-      try {
-        const res  = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, history: history.slice(-10) })
-        });
-        const data = await res.json();
-        removeTyping();
-
-        appendBubble('ai', data.reply);
-        history.push({ role: 'assistant', content: data.reply });
-
-        // save both messages to conversation
-        conversations[currentId].messages.push(
-          { role: 'user',      content: text       },
-          { role: 'assistant', content: data.reply }
-        );
-        conversations[currentId].updatedAt = Date.now();
-        saveAllConversations();
-        renderSidebar();
-
-      } catch (err) {
-        removeTyping();
-        appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
-      }
-
-      isLoading = false;
-      document.getElementById('send-btn').disabled = false;
-      input.focus();
-    }
-
-    // ── INPUT BEHAVIOR ──
-    const inputEl = document.getElementById('user-input');
-    inputEl.addEventListener('input', () => {
-      inputEl.style.height = 'auto';
-      inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
-    });
-    inputEl.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-    });
-      async function checkAuth() {
-    const res  = await fetch('/api/me');
-    const data = await res.json();
-    if (data.logged_in) {
-      document.getElementById('auth-buttons').style.display = 'none';
-      const menu = document.getElementById('user-menu');
-      menu.style.display = 'flex';
-      document.getElementById('nav-username').textContent = data.username;
-    }
+  if (data.logged_in) {
+    currentUser = data;
+    document.getElementById('auth-buttons').style.display = 'none';
+    const menu = document.getElementById('user-menu');
+    menu.style.display = 'flex';
+    document.getElementById('nav-username').textContent = data.username;
+    await loadSidebar();
+  } else {
+    // guest — show empty sidebar with message
+    document.getElementById('sidebar-empty').innerHTML =
+      'برای ذخیره گفتگوها <a href="/login" style="color:var(--gold)">وارد شوید</a>';
   }
-  checkAuth();
 
-    // ── INIT ──
-    renderSidebar();
+  // check if URL has ?conv=ID to load a specific conversation
+  const params = new URLSearchParams(window.location.search);
+  const convId = params.get('conv');
+  if (convId && currentUser) {
+    await loadConversation(parseInt(convId));
+  }
+}
+
+// ── SIDEBAR ──
+function toggleSidebar() {
+  sidebarOpen = !sidebarOpen;
+  document.getElementById('sidebar').classList.toggle('collapsed', !sidebarOpen);
+}
+
+async function loadSidebar() {
+  if (!currentUser) return;
+
+  const list = document.getElementById('sidebar-list');
+  try {
+    const res   = await fetch('/api/conversations');
+    const convs = await res.json();
+
+    if (convs.length === 0) {
+      list.innerHTML = '<div class="sidebar-empty">هنوز گفتگویی ندارید.<br/>یک چت جدید شروع کنید.</div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    convs.forEach(conv => {
+      const item = document.createElement('div');
+      item.className = 'conv-item' + (conv.id === currentConvId ? ' active' : '');
+      item.innerHTML = `
+        <span class="conv-title">${conv.title}</span>
+        <span class="conv-date">${formatDate(conv.updated_at)}</span>
+        <button class="conv-delete" onclick="deleteConv(event, ${conv.id})" title="حذف">✕</button>
+      `;
+      item.addEventListener('click', () => loadConversation(conv.id));
+      list.appendChild(item);
+    });
+  } catch (err) {
+    list.innerHTML = '<div class="sidebar-empty">خطا در بارگذاری</div>';
+  }
+}
+
+async function loadConversation(id) {
+  if (!currentUser) return;
+
+  try {
+    const res  = await fetch(`/api/conversations/${id}`);
+    const conv = await res.json();
+
+    currentConvId = id;
+    history = conv.messages.map(m => ({ role: m.role, content: m.content }));
+
+    const messagesEl = document.getElementById('messages');
+    messagesEl.innerHTML = '';
+
+    conv.messages.forEach(m => {
+      appendBubble(m.role === 'user' ? 'user' : 'ai', m.content);
+    });
+
+    await loadSidebar();
+    scrollToBottom();
+
+    if (window.innerWidth <= 640) {
+      sidebarOpen = false;
+      document.getElementById('sidebar').classList.add('collapsed');
+    }
+  } catch (err) {
+    console.error('Failed to load conversation', err);
+  }
+}
+
+async function deleteConv(e, id) {
+  e.stopPropagation();
+  await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+  if (currentConvId === id) newChat();
+  else await loadSidebar();
+}
+
+function newChat() {
+  currentConvId = null;
+  history       = [];
+
+  document.getElementById('messages').innerHTML = `
+    <div class="welcome" id="welcome">
+      <span class="welcome-symbol">🕌</span>
+      <h1>سلام! خوش آمدید</h1>
+      <p>من خیام هستم — دستیار هوشمند افغانی شما.</p>
+      <div class="suggestion-grid">
+        <button class="suggestion" onclick="useSuggestion(this)">تاریخچه کابل را برایم بگو</button>
+        <button class="suggestion" onclick="useSuggestion(this)">یک شعر دری برایم بنویس</button>
+        <button class="suggestion" onclick="useSuggestion(this)">غذاهای مشهور افغانستان کدام‌اند؟</button>
+        <button class="suggestion" onclick="useSuggestion(this)">ولایات افغانستان را نام ببر</button>
+      </div>
+    </div>`;
+
+  loadSidebar();
+  document.getElementById('user-input').focus();
+}
+
+// ── HELPERS ──
+function formatDate(iso) {
+  const d    = new Date(iso);
+  const now  = new Date();
+  const diff = now - d;
+  if (diff < 60000)    return 'همین الان';
+  if (diff < 3600000)  return Math.floor(diff / 60000) + ' دقیقه پیش';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + ' ساعت پیش';
+  return d.toLocaleDateString('fa-AF');
+}
+
+function scrollToBottom() {
+  const w = document.getElementById('chat-wrapper');
+  w.scrollTop = w.scrollHeight;
+}
+
+function appendBubble(role, text) {
+  const messagesEl = document.getElementById('messages');
+  const welcome    = document.getElementById('welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  const div    = document.createElement('div');
+  div.className = `message ${role}`;
+
+  const avatar = document.createElement('div');
+  avatar.className = `avatar ${role}`;
+  avatar.textContent = role === 'ai' ? 'خ' : '👤';
+
+  const bubble = document.createElement('div');
+  bubble.className  = 'bubble';
+  bubble.textContent = text;
+
+  div.appendChild(avatar);
+  div.appendChild(bubble);
+  messagesEl.appendChild(div);
+  scrollToBottom();
+}
+
+function showTyping() {
+  const messagesEl = document.getElementById('messages');
+  const welcome    = document.getElementById('welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  const div = document.createElement('div');
+  div.className = 'message ai';
+  div.id = 'typing-indicator';
+
+  const avatar = document.createElement('div');
+  avatar.className   = 'avatar ai';
+  avatar.textContent = 'خ';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+
+  div.appendChild(avatar);
+  div.appendChild(bubble);
+  messagesEl.appendChild(div);
+  scrollToBottom();
+}
+
+function removeTyping() {
+  const t = document.getElementById('typing-indicator');
+  if (t) t.remove();
+}
+
+function useSuggestion(btn) {
+  document.getElementById('user-input').value = btn.textContent.trim();
+  sendMessage();
+}
+
+// ── SEND MESSAGE ──
+async function sendMessage() {
+  const input = document.getElementById('user-input');
+  const text  = input.value.trim();
+  if (!text || isLoading) return;
+
+  isLoading = true;
+  document.getElementById('send-btn').disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
+
+  appendBubble('user', text);
+  showTyping();
+  history.push({ role: 'user', content: text });
+
+  try {
+    const res  = await fetch('/api/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message:         text,
+        history:         history.slice(-10),
+        conversation_id: currentConvId
+      })
+    });
+
+    const data = await res.json();
+    removeTyping();
+    appendBubble('ai', data.reply);
+    history.push({ role: 'assistant', content: data.reply });
+
+    // if logged in, update conversation id and refresh sidebar
+    if (currentUser && data.conversation_id) {
+      currentConvId = data.conversation_id;
+      await loadSidebar();
+    }
+
+  } catch (err) {
+    removeTyping();
+    appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+  }
+
+  isLoading = false;
+  document.getElementById('send-btn').disabled = false;
+  input.focus();
+}
+
+// ── INPUT BEHAVIOR ──
+const inputEl = document.getElementById('user-input');
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+});
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+// ── START ──
+init();
   </script>
 </body>
 </html>
