@@ -1,9 +1,10 @@
-from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from functools import wraps
 from groq import Groq
 from dotenv import load_dotenv
 from database import db, User, Conversation, Message
-from auth import register_user, login_user_by_username, hash_password
+from auth import register_user, login_user_by_username
 from datetime import datetime
 import os
 import json
@@ -11,7 +12,7 @@ import json
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key        = os.getenv("ADMIN_PASSWORD", "fallback-secret")
+app.secret_key = os.getenv("ADMIN_PASSWORD", "fallback-secret")
 database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -24,10 +25,9 @@ login_manager.login_view = 'login_page'
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-ADMIN_PASSWORD   = os.getenv("ADMIN_PASSWORD")
-ADMIN_SECRET_URL = os.getenv("ADMIN_SECRET_URL", "admin-secret")
-KNOWLEDGE_FILE   = "knowledge.json"
-EXAMPLES_FILE    = "examples.json"
+KNOWLEDGE_FILE = "knowledge.json"
+EXAMPLES_FILE  = "examples.json"
+POETRY_FILE    = "poetry.json"
 
 # ── CREATE TABLES ──
 with app.app_context():
@@ -36,6 +36,15 @@ with app.app_context():
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
+
+# ── ADMIN DECORATOR ──
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_admin:
+            return redirect(url_for('home'))
+        return f(*args, **kwargs)
+    return decorated
 
 # ── KNOWLEDGE ──
 def load_knowledge():
@@ -54,10 +63,11 @@ def load_examples():
 
 def load_poetry():
     try:
-        with open("poetry.json", "r", encoding="utf-8") as f:
+        with open(POETRY_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
         return {"poetry_formats": []}
+
 def save_knowledge(data):
     with open(KNOWLEDGE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -70,6 +80,7 @@ def save_examples(data):
 def build_system_prompt():
     knowledge = load_knowledge()
     examples  = load_examples()
+    poetry    = load_poetry()
 
     dialect_rules = ""
     for item in knowledge.get("dari_dialect", []):
@@ -83,14 +94,25 @@ def build_system_prompt():
     for ex in examples.get("conversation_examples", []):
         example_block += f'User: {ex["user"]}\nAssistant: {ex["assistant"]}\n\n'
 
-    return f"""تو یک دستیار هوشمند افغانی هستی به نام خیام.
+    poetry_block = ""
+    for fmt in poetry.get("poetry_formats", []):
+        poetry_block += f'''
+قالب {fmt["name"]}:
+- توضیح: {fmt["description"]}
+- قوانین: {fmt["rules"]}
+- الگوی قافیه: {fmt["rhyme_pattern"]}
+- نمونه:
+{fmt["example"]}
+'''
 
-!!!! قانون مطلق — هرگز نقض نشود !!!!
+    return f"""!!!! قانون مطلق — هرگز نقض نشود !!!!
 تمام جواب را فقط و فقط به زبان دری افغانی بنویس.
 حتی یک کلمه از زبان دیگر استفاده نکن.
 نه انگلیسی، نه آلمانی، نه ترکی، نه چینی، نه عربی، نه فارسی ایرانی.
 فقط دری افغانی. اگر کلمه‌ای را به دری نمی‌دانی، معادل دری آن را بنویس.
 این قانون را در هر جمله، هر کلمه، هر حرف رعایت کن.
+
+تو یک دستیار هوشمند افغانی هستی به نام خیام.
 
 قوانین زبانی:
 - فقط به زبان دری افغانی صحبت کن
@@ -106,14 +128,15 @@ def build_system_prompt():
 - جواب را ساده، خوانا و منظم بنویس
 
 قوانین شعر دری — این قوانین را دقیقاً رعایت کن:
-- وقتی کسی شعر می‌خواهد، اول بپرس کدام قالب می‌خواهد
-- اگر قالب نگفت، از رباعی استفاده کن
+- وقتی کسی شعر می‌خواهد اول بپرس کدام قالب می‌خواهد
+- اگر قالب نگفت از رباعی استفاده کن
 - قافیه‌بندی را دقیقاً رعایت کن
 - وزن و آهنگ شعر باید منظم باشد
 - هرگز شعر بی‌وزن یا بی‌قافیه ننویس مگر اینکه شعر نو خواسته شود
 
 قالب‌های شعر دری که می‌دانی:
 {poetry_block}
+
 دانش فرهنگی افغانستان:
 {cultural_knowledge}
 
@@ -134,21 +157,27 @@ def build_tutor_prompt(subject, grade):
     for item in knowledge.get("dari_dialect", []):
         dialect_rules += f'- بگو "{item["correct"]}" نه "{item["wrong"]}"\n'
 
-    return f"""تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
+    return f"""!!!! قانون مطلق !!!!
+تمام جواب را فقط به زبان دری افغانی بنویس.
+نه انگلیسی، نه آلمانی، نه ترکی، نه چینی، نه فارسی ایرانی.
+
+تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
 مضمون: {subject}
 سطح: {grade}
+
 قوانین زبانی:
 - فقط دری افغانی، هرگز پشتو یا فارسی ایرانی
 {dialect_rules}
+
 روش تدریس:
 - مفاهیم را ساده و با مثال‌های افغانی توضیح بده
 - بعد از هر توضیح یک سوال کوتاه برای امتحان فهم بپرس
 - اگر جواب درست بود تشویق کن
 - اگر جواب غلط بود با مهربانی تصحیح کن
-- از کلمات افغانی مثل آفرین، عالی استفاده کن"""
+- از کلمات افغانی مثل احسنت، آفرین، عالی استفاده کن"""
 
 # ── GROQ ──
-def groq_chat(system_prompt, history, user_message, temperature=0.8):
+def groq_chat(system_prompt, history, user_message, temperature=0.6):
     messages = [{"role": "system", "content": system_prompt}]
     messages += history
     messages.append({"role": "user", "content": user_message})
@@ -156,7 +185,8 @@ def groq_chat(system_prompt, history, user_message, temperature=0.8):
         model="llama-3.3-70b-versatile",
         messages=messages,
         max_tokens=1000,
-        temperature=temperature
+        temperature=temperature,
+        top_p=0.9
     )
     return response.choices[0].message.content
 
@@ -224,7 +254,8 @@ def api_me():
             "logged_in": True,
             "username":  current_user.username,
             "email":     current_user.email,
-            "phone":     current_user.phone
+            "phone":     current_user.phone,
+            "is_admin":  current_user.is_admin
         })
     return jsonify({"logged_in": False})
 
@@ -261,10 +292,9 @@ def chat():
         system_prompt=build_system_prompt(),
         history=history[-10:],
         user_message=user_message,
-        temperature=0.8
+        temperature=0.6
     )
 
-    # save to database if user is logged in
     if current_user.is_authenticated:
         if conv_id:
             conv = Conversation.query.filter_by(
@@ -292,7 +322,6 @@ def chat():
         ))
         conv.updated_at = datetime.utcnow()
         db.session.commit()
-
         return jsonify({"reply": reply, "conversation_id": conv.id})
 
     return jsonify({"reply": reply})
@@ -310,7 +339,7 @@ def tutor_chat():
         system_prompt=build_tutor_prompt(subject, grade),
         history=history[-12:],
         user_message=user_message,
-        temperature=0.7
+        temperature=0.6
     )
     return jsonify({"reply": reply})
 
@@ -364,49 +393,42 @@ def delete_conversation(conv_id):
     return jsonify({"success": True})
 
 # ── ADMIN ROUTES ──
-@app.route(f"/{ADMIN_SECRET_URL}")
-def admin_login_page():
-    if session.get("admin_logged_in"):
-        return redirect(url_for("admin_panel"))
-    return render_template("admin_login.html")
-
-@app.route(f"/{ADMIN_SECRET_URL}/login", methods=["POST"])
-def admin_login():
-    data     = request.get_json()
-    password = data.get("password", "")
-    if password == ADMIN_PASSWORD:
-        session["admin_logged_in"] = True
-        return jsonify({"success": True})
-    return jsonify({"success": False, "error": "رمز عبور اشتباه است"})
-
-@app.route(f"/{ADMIN_SECRET_URL}/panel")
+@app.route("/admin")
+@login_required
+@admin_required
 def admin_panel():
-    if not session.get("admin_logged_in"):
-        return redirect(f"/{ADMIN_SECRET_URL}")
     return render_template("admin_panel.html")
 
-@app.route(f"/{ADMIN_SECRET_URL}/logout")
-def admin_logout():
-    session.clear()
-    return redirect(f"/{ADMIN_SECRET_URL}")
+@app.route("/api/admin/users", methods=["GET"])
+@login_required
+@admin_required
+def get_users():
+    users = User.query.order_by(User.created_at.desc()).all()
+    return jsonify([{
+        "id":         u.id,
+        "username":   u.username,
+        "email":      u.email,
+        "phone":      u.phone,
+        "is_admin":   u.is_admin,
+        "created_at": u.created_at.isoformat()
+    } for u in users])
 
-# ── ADMIN APIs ──
 @app.route("/api/admin/knowledge", methods=["GET"])
+@login_required
+@admin_required
 def get_knowledge():
-    if not session.get("admin_logged_in"):
-        return jsonify({"error": "Unauthorized"}), 401
     return jsonify(load_knowledge())
 
 @app.route("/api/admin/examples", methods=["GET"])
+@login_required
+@admin_required
 def get_examples():
-    if not session.get("admin_logged_in"):
-        return jsonify({"error": "Unauthorized"}), 401
     return jsonify(load_examples())
 
 @app.route("/api/admin/dialect", methods=["POST"])
+@login_required
+@admin_required
 def add_dialect():
-    if not session.get("admin_logged_in"):
-        return jsonify({"error": "Unauthorized"}), 401
     data      = request.get_json()
     knowledge = load_knowledge()
     knowledge["dari_dialect"].append({
@@ -418,9 +440,9 @@ def add_dialect():
     return jsonify({"success": True})
 
 @app.route("/api/admin/dialect/<int:index>", methods=["DELETE"])
+@login_required
+@admin_required
 def delete_dialect(index):
-    if not session.get("admin_logged_in"):
-        return jsonify({"error": "Unauthorized"}), 401
     knowledge = load_knowledge()
     if 0 <= index < len(knowledge["dari_dialect"]):
         knowledge["dari_dialect"].pop(index)
@@ -428,9 +450,9 @@ def delete_dialect(index):
     return jsonify({"success": True})
 
 @app.route("/api/admin/culture", methods=["POST"])
+@login_required
+@admin_required
 def add_culture():
-    if not session.get("admin_logged_in"):
-        return jsonify({"error": "Unauthorized"}), 401
     data      = request.get_json()
     knowledge = load_knowledge()
     knowledge["cultural_customs"].append({
@@ -441,9 +463,9 @@ def add_culture():
     return jsonify({"success": True})
 
 @app.route("/api/admin/culture/<int:index>", methods=["DELETE"])
+@login_required
+@admin_required
 def delete_culture(index):
-    if not session.get("admin_logged_in"):
-        return jsonify({"error": "Unauthorized"}), 401
     knowledge = load_knowledge()
     if 0 <= index < len(knowledge["cultural_customs"]):
         knowledge["cultural_customs"].pop(index)
@@ -451,9 +473,9 @@ def delete_culture(index):
     return jsonify({"success": True})
 
 @app.route("/api/admin/example", methods=["POST"])
+@login_required
+@admin_required
 def add_example():
-    if not session.get("admin_logged_in"):
-        return jsonify({"error": "Unauthorized"}), 401
     data     = request.get_json()
     examples = load_examples()
     examples["conversation_examples"].append({
@@ -464,9 +486,9 @@ def add_example():
     return jsonify({"success": True})
 
 @app.route("/api/admin/example/<int:index>", methods=["DELETE"])
+@login_required
+@admin_required
 def delete_example(index):
-    if not session.get("admin_logged_in"):
-        return jsonify({"error": "Unauthorized"}), 401
     examples = load_examples()
     if 0 <= index < len(examples["conversation_examples"]):
         examples["conversation_examples"].pop(index)

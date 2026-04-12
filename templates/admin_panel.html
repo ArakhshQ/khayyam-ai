@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>پنل ادمین — خیام</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { min-height: 100vh; }
+
+    header {
+      position: relative; z-index: 10;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; height: 56px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+
+    .nav-links { display: flex; gap: 6px; }
+    .nav-btn {
+      padding: 5px 12px; border-radius: 7px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--text-dim); font-family: 'Vazirmatn', sans-serif;
+      font-size: 13px; cursor: pointer; text-decoration: none; transition: all 0.2s;
+    }
+    .nav-btn:hover { background: var(--surface2); color: var(--text); }
+
+    .page { max-width: 860px; margin: 0 auto; padding: 32px 20px 100px; }
+
+    .stats {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 12px; margin-bottom: 28px;
+    }
+
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px; text-align: center;
+    }
+    .stat-num { font-size: 28px; font-weight: 700; color: var(--gold); }
+    .stat-label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+    .tabs {
+      display: flex; gap: 6px; margin-bottom: 24px;
+      border-bottom: 1px solid var(--border); padding-bottom: 0;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      padding: 8px 16px; border-radius: 8px 8px 0 0;
+      border: 1px solid transparent; border-bottom: none;
+      background: transparent; color: var(--text-dim);
+      font-family: 'Vazirmatn', sans-serif; font-size: 13px;
+      cursor: pointer; transition: all 0.2s; margin-bottom: -1px;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      background: var(--surface); border-color: var(--border);
+      color: var(--gold); border-bottom-color: var(--surface);
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .section-title {
+      font-size: 15px; font-weight: 700;
+      color: var(--text); margin-bottom: 16px;
+    }
+
+    .add-form {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 20px; margin-bottom: 20px;
+    }
+
+    .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .form-row:last-child { margin-bottom: 0; }
+
+    input[type=text], textarea {
+      flex: 1; min-width: 140px;
+      padding: 9px 14px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text);
+      font-family: 'Vazirmatn', sans-serif; font-size: 14px; outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type=text]:focus, textarea:focus { border-color: var(--gold-dim); }
+    textarea { resize: vertical; min-height: 72px; width: 100%; }
+
+    .add-btn {
+      padding: 9px 20px; background: var(--gold); color: #0f0e0c;
+      border: none; border-radius: 8px;
+      font-family: 'Vazirmatn', sans-serif; font-size: 14px; font-weight: 700;
+      cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+    .add-btn:hover { background: #e0bb60; }
+
+    .items-list { display: flex; flex-direction: column; gap: 8px; }
+
+    .item-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 16px;
+      display: flex; align-items: flex-start; gap: 12px;
+    }
+
+    .item-body { flex: 1; font-size: 14px; line-height: 1.7; }
+    .item-label {
+      font-size: 11px; font-weight: 500; color: var(--text-dim);
+      letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 3px;
+    }
+    .item-correct { color: var(--green-lt); font-weight: 500; }
+    .item-wrong   { color: var(--red-lt); text-decoration: line-through; }
+    .item-note    { color: var(--text-dim); font-size: 12px; }
+    .item-topic   { color: var(--gold); font-weight: 500; margin-bottom: 4px; }
+    .item-content { color: var(--text); font-size: 13px; }
+    .item-date    { color: var(--text-dim); font-size: 12px; margin-top: 4px; }
+
+    .del-btn {
+      width: 28px; height: 28px; flex-shrink: 0;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: transparent; color: var(--text-dim);
+      cursor: pointer; font-size: 14px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+    }
+    .del-btn:hover { background: var(--red); color: var(--red-lt); border-color: var(--red); }
+
+    .empty-state {
+      text-align: center; padding: 32px;
+      color: var(--text-dim); font-size: 14px;
+    }
+
+    .toast {
+      position: fixed; bottom: 24px; left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: var(--surface); border: 1px solid var(--gold-dim);
+      color: var(--gold); padding: 10px 24px; border-radius: 99px;
+      font-size: 14px; font-weight: 500;
+      transition: transform 0.3s ease; z-index: 200;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+
+    .user-badge {
+      display: inline-block; font-size: 10px; padding: 2px 8px;
+      border-radius: 99px; font-weight: 500; margin-right: 6px;
+    }
+    .badge-admin { background: rgba(201,168,76,0.15); color: var(--gold); border: 1px solid var(--gold-dim); }
+    .badge-user  { background: var(--surface2); color: var(--text-dim); border: 1px solid var(--border); }
+
+    @media (max-width: 600px) {
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      header { padding: 0 14px; }
+      .page { padding: 20px 14px 100px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <a href="/" class="logo">
+    <div class="logo-mark">خ</div>
+    <span class="logo-text">خیام — ادمین</span>
+  </a>
+  <div class="nav-links">
+    <a href="/chat" class="nav-btn">← بازگشت به چت</a>
+  </div>
+</header>
+
+<div class="page">
+
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-num" id="stat-users">0</div>
+      <div class="stat-label">کاربران</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="stat-dialect">0</div>
+      <div class="stat-label">کلمات دری</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="stat-culture">0</div>
+      <div class="stat-label">فرهنگ‌ها</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="stat-examples">0</div>
+      <div class="stat-label">نمونه گفتگو</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('dialect', this)">کلمات دری</button>
+    <button class="tab" onclick="switchTab('culture', this)">فرهنگ و سنت</button>
+    <button class="tab" onclick="switchTab('examples', this)">نمونه گفتگو</button>
+    <button class="tab" onclick="switchTab('users', this)">کاربران</button>
+  </div>
+
+  <!-- DIALECT -->
+  <div class="tab-content active" id="tab-dialect">
+    <div class="add-form">
+      <div class="section-title">+ کلمه دری جدید</div>
+      <div class="form-row">
+        <input type="text" id="d-correct" placeholder='کلمه درست — مثال: "موتر"'/>
+        <input type="text" id="d-wrong"   placeholder='کلمه اشتباه — مثال: "ماشین"'/>
+        <input type="text" id="d-note"    placeholder='توضیح'/>
+        <button class="add-btn" onclick="addDialect()">اضافه</button>
+      </div>
+    </div>
+    <div class="items-list" id="dialect-list"></div>
+  </div>
+
+  <!-- CULTURE -->
+  <div class="tab-content" id="tab-culture">
+    <div class="add-form">
+      <div class="section-title">+ فرهنگ یا سنت جدید</div>
+      <div class="form-row">
+        <input type="text" id="c-topic" placeholder='موضوع — مثال: "مهمان‌نوازی"'/>
+      </div>
+      <div class="form-row">
+        <textarea id="c-content" placeholder="توضیح کامل به دری افغانی..."></textarea>
+      </div>
+      <div class="form-row">
+        <button class="add-btn" onclick="addCulture()">اضافه</button>
+      </div>
+    </div>
+    <div class="items-list" id="culture-list"></div>
+  </div>
+
+  <!-- EXAMPLES -->
+  <div class="tab-content" id="tab-examples">
+    <div class="add-form">
+      <div class="section-title">+ نمونه گفتگو جدید</div>
+      <div class="form-row">
+        <textarea id="e-user" placeholder="پیام کاربر..."></textarea>
+      </div>
+      <div class="form-row">
+        <textarea id="e-assistant" placeholder="جواب ایده‌آل خیام به دری افغانی..."></textarea>
+      </div>
+      <div class="form-row">
+        <button class="add-btn" onclick="addExample()">اضافه</button>
+      </div>
+    </div>
+    <div class="items-list" id="examples-list"></div>
+  </div>
+
+  <!-- USERS -->
+  <div class="tab-content" id="tab-users">
+    <div class="items-list" id="users-list">
+      <div class="empty-state">در حال بارگذاری...</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  let knowledge = {};
+  let examples  = {};
+
+  async function init() {
+    const [k, e, u] = await Promise.all([
+      fetch('/api/admin/knowledge').then(r => r.json()),
+      fetch('/api/admin/examples').then(r => r.json()),
+      fetch('/api/admin/users').then(r => r.json())
+    ]);
+    knowledge = k;
+    examples  = e;
+    renderAll();
+    renderUsers(u);
+    document.getElementById('stat-users').textContent = u.length;
+  }
+
+  function renderAll() {
+    renderDialect();
+    renderCulture();
+    renderExamples();
+    updateStats();
+  }
+
+  function updateStats() {
+    document.getElementById('stat-dialect').textContent  = (knowledge.dari_dialect || []).length;
+    document.getElementById('stat-culture').textContent  = (knowledge.cultural_customs || []).length;
+    document.getElementById('stat-examples').textContent = (examples.conversation_examples || []).length;
+  }
+
+  function switchTab(name, el) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById('tab-' + name).classList.add('active');
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2500);
+  }
+
+  // ── DIALECT ──
+  function renderDialect() {
+    const list  = document.getElementById('dialect-list');
+    const items = knowledge.dari_dialect || [];
+    if (items.length === 0) {
+      list.innerHTML = '<div class="empty-state">هنوز کلمه‌ای اضافه نشده</div>';
+      return;
+    }
+    list.innerHTML = '';
+    items.forEach((item, i) => {
+      const div = document.createElement('div');
+      div.className = 'item-card';
+      div.innerHTML = `
+        <div class="item-body">
+          <div class="item-label">درست ← اشتباه</div>
+          <span class="item-correct">${item.correct}</span>
+          <span style="color:var(--text-dim)"> ← </span>
+          <span class="item-wrong">${item.wrong}</span>
+          <div class="item-note">${item.note}</div>
+        </div>
+        <button class="del-btn" onclick="deleteDialect(${i})">✕</button>`;
+      list.appendChild(div);
+    });
+  }
+
+  async function addDialect() {
+    const correct = document.getElementById('d-correct').value.trim();
+    const wrong   = document.getElementById('d-wrong').value.trim();
+    const note    = document.getElementById('d-note').value.trim();
+    if (!correct || !wrong) return;
+    await fetch('/api/admin/dialect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ correct, wrong, note })
+    });
+    knowledge.dari_dialect.push({ correct, wrong, note });
+    document.getElementById('d-correct').value = '';
+    document.getElementById('d-wrong').value   = '';
+    document.getElementById('d-note').value    = '';
+    renderDialect();
+    updateStats();
+    showToast('✓ کلمه اضافه شد');
+  }
+
+  async function deleteDialect(i) {
+    await fetch(`/api/admin/dialect/${i}`, { method: 'DELETE' });
+    knowledge.dari_dialect.splice(i, 1);
+    renderDialect();
+    updateStats();
+    showToast('حذف شد');
+  }
+
+  // ── CULTURE ──
+  function renderCulture() {
+    const list  = document.getElementById('culture-list');
+    const items = knowledge.cultural_customs || [];
+    if (items.length === 0) {
+      list.innerHTML = '<div class="empty-state">هنوز فرهنگی اضافه نشده</div>';
+      return;
+    }
+    list.innerHTML = '';
+    items.forEach((item, i) => {
+      const div = document.createElement('div');
+      div.className = 'item-card';
+      div.innerHTML = `
+        <div class="item-body">
+          <div class="item-topic">${item.topic}</div>
+          <div class="item-content">${item.content}</div>
+        </div>
+        <button class="del-btn" onclick="deleteCulture(${i})">✕</button>`;
+      list.appendChild(div);
+    });
+  }
+
+  async function addCulture() {
+    const topic   = document.getElementById('c-topic').value.trim();
+    const content = document.getElementById('c-content').value.trim();
+    if (!topic || !content) return;
+    await fetch('/api/admin/culture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic, content })
+    });
+    knowledge.cultural_customs.push({ topic, content });
+    document.getElementById('c-topic').value   = '';
+    document.getElementById('c-content').value = '';
+    renderCulture();
+    updateStats();
+    showToast('✓ فرهنگ اضافه شد');
+  }
+
+  async function deleteCulture(i) {
+    await fetch(`/api/admin/culture/${i}`, { method: 'DELETE' });
+    knowledge.cultural_customs.splice(i, 1);
+    renderCulture();
+    updateStats();
+    showToast('حذف شد');
+  }
+
+  // ── EXAMPLES ──
+  function renderExamples() {
+    const list  = document.getElementById('examples-list');
+    const items = examples.conversation_examples || [];
+    if (items.length === 0) {
+      list.innerHTML = '<div class="empty-state">هنوز نمونه‌ای اضافه نشده</div>';
+      return;
+    }
+    list.innerHTML = '';
+    items.forEach((item, i) => {
+      const div = document.createElement('div');
+      div.className = 'item-card';
+      div.innerHTML = `
+        <div class="item-body">
+          <div class="item-label">کاربر</div>
+          <div class="item-content" style="margin-bottom:8px">${item.user}</div>
+          <div class="item-label">خیام</div>
+          <div class="item-correct">${item.assistant}</div>
+        </div>
+        <button class="del-btn" onclick="deleteExample(${i})">✕</button>`;
+      list.appendChild(div);
+    });
+  }
+
+  async function addExample() {
+    const user      = document.getElementById('e-user').value.trim();
+    const assistant = document.getElementById('e-assistant').value.trim();
+    if (!user || !assistant) return;
+    await fetch('/api/admin/example', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user, assistant })
+    });
+    examples.conversation_examples.push({ user, assistant });
+    document.getElementById('e-user').value      = '';
+    document.getElementById('e-assistant').value = '';
+    renderExamples();
+    updateStats();
+    showToast('✓ نمونه اضافه شد');
+  }
+
+  async function deleteExample(i) {
+    await fetch(`/api/admin/example/${i}`, { method: 'DELETE' });
+    examples.conversation_examples.splice(i, 1);
+    renderExamples();
+    updateStats();
+    showToast('حذف شد');
+  }
+
+  // ── USERS ──
+  function renderUsers(users) {
+    const list = document.getElementById('users-list');
+    if (!users || users.length === 0) {
+      list.innerHTML = '<div class="empty-state">هنوز کاربری ثبت‌نام نکرده</div>';
+      return;
+    }
+    list.innerHTML = '';
+    users.forEach(u => {
+      const div = document.createElement('div');
+      div.className = 'item-card';
+      div.innerHTML = `
+        <div class="item-body">
+          <div style="display:flex;align-items:center;margin-bottom:4px">
+            <span class="item-topic" style="margin-left:8px">${u.username}</span>
+            <span class="user-badge ${u.is_admin ? 'badge-admin' : 'badge-user'}">
+              ${u.is_admin ? '👑 ادمین' : 'کاربر'}
+            </span>
+          </div>
+          ${u.email ? `<div class="item-content">📧 ${u.email}</div>` : ''}
+          ${u.phone ? `<div class="item-content">📱 ${u.phone}</div>` : ''}
+          <div class="item-date">${new Date(u.created_at).toLocaleDateString('fa-AF')}</div>
+        </div>`;
+      list.appendChild(div);
+    });
+  }
+
+  init();
+</script>
+</body>
+</html>
