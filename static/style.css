@@ -375,6 +375,21 @@ header {
   .form-input { font-size: 16px; padding: 13px 14px; }
   .card { padding: 18px 16px; }
 }
+@media (max-width: 640px) {
+  .app-body {
+    padding-bottom: 64px;
+  }
+  .input-area {
+    position: fixed;
+    bottom: 64px;
+    left: 0;
+    right: 0;
+    z-index: 10;
+  }
+  .chat-wrapper {
+    padding-bottom: 140px;
+  }
+}
 
 /* ════════════════════════════════
    SMALL PHONES — under 400px
