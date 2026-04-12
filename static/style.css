@@ -381,16 +381,16 @@ header {
   }
   .input-area {
     position: fixed;
-    bottom: 64px;
+    bottom: 0;
     left: 0;
     right: 0;
     z-index: 10;
+    padding-bottom: 80px;
   }
   .chat-wrapper {
-    padding-bottom: 140px;
+    padding-bottom: 160px;
   }
 }
-
 /* ════════════════════════════════
    SMALL PHONES — under 400px
    ════════════════════════════════ */

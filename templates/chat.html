@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <style>
   body {
     height: 100vh;
@@ -278,6 +279,54 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 
+  .bubble p { margin-bottom: 10px; }
+.bubble p:last-child { margin-bottom: 0; }
+.bubble ul, .bubble ol {
+  padding-right: 20px;
+  margin-bottom: 10px;
+}
+.bubble li { margin-bottom: 4px; line-height: 1.7; }
+.bubble h1, .bubble h2, .bubble h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--gold);
+  margin: 14px 0 6px;
+}
+.bubble h1:first-child,
+.bubble h2:first-child,
+.bubble h3:first-child { margin-top: 0; }
+.bubble strong { color: var(--text); font-weight: 700; }
+.bubble code {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 13px;
+  direction: ltr;
+  display: inline-block;
+}
+.bubble pre {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 10px 0;
+  direction: ltr;
+  text-align: left;
+}
+.bubble pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+}
+.bubble a { color: var(--gold); }
+.bubble hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
   /* ── INPUT ── */
   .input-area {
   padding: 14px 20px 18px;
@@ -592,8 +641,7 @@ function appendBubble(role, text) {
 
   const bubble = document.createElement('div');
   bubble.className  = 'bubble';
-  bubble.textContent = text;
-
+  bubble.innerHTML = marked.parse(text);
   div.appendChild(avatar);
   div.appendChild(bubble);
   messagesEl.appendChild(div);
