@@ -52,6 +52,12 @@ def load_examples():
     except:
         return {"conversation_examples": []}
 
+def load_poetry():
+    try:
+        with open("poetry.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {"poetry_formats": []}
 def save_knowledge(data):
     with open(KNOWLEDGE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -77,7 +83,7 @@ def build_system_prompt():
     for ex in examples.get("conversation_examples", []):
         example_block += f'User: {ex["user"]}\nAssistant: {ex["assistant"]}\n\n'
 
-    return freturn f"""تو یک دستیار هوشمند افغانی هستی به نام خیام.
+    return f"""تو یک دستیار هوشمند افغانی هستی به نام خیام.
 
 !!!! قانون مطلق — هرگز نقض نشود !!!!
 تمام جواب را فقط و فقط به زبان دری افغانی بنویس.
@@ -99,6 +105,15 @@ def build_system_prompt():
 - هرگز همه چیز را در یک پاراگراف ندهی
 - جواب را ساده، خوانا و منظم بنویس
 
+قوانین شعر دری — این قوانین را دقیقاً رعایت کن:
+- وقتی کسی شعر می‌خواهد، اول بپرس کدام قالب می‌خواهد
+- اگر قالب نگفت، از رباعی استفاده کن
+- قافیه‌بندی را دقیقاً رعایت کن
+- وزن و آهنگ شعر باید منظم باشد
+- هرگز شعر بی‌وزن یا بی‌قافیه ننویس مگر اینکه شعر نو خواسته شود
+
+قالب‌های شعر دری که می‌دانی:
+{poetry_block}
 دانش فرهنگی افغانستان:
 {cultural_knowledge}
 
