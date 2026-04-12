@@ -376,9 +376,7 @@ header {
   .card { padding: 18px 16px; }
 }
 @media (max-width: 640px) {
-  .app-body {
-    padding-bottom: 64px;
-  }
+  
   .input-area {
     position: fixed;
     bottom: 0;
