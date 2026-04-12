@@ -336,6 +336,41 @@
   position: relative;
   z-index: 10;
 }
+#mic-btn {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+#mic-btn:hover { background: var(--surface2); color: var(--text); }
+#mic-btn.listening {
+  background: rgba(201,168,76,0.15);
+  border-color: var(--gold);
+  color: var(--gold);
+  animation: pulse-mic 1s infinite;
+}
+#mic-btn.speaking {
+  background: rgba(58,92,46,0.25);
+  border-color: #3a5c2e;
+  color: #7abf6a;
+}
+@keyframes pulse-mic {
+  0%,100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.15); opacity: 0.7; }
+}
+.voice-status {
+  text-align: center;
+  font-size: 12px;
+  color: var(--gold);
+  margin-top: 6px;
+  min-height: 16px;
+}
   .input-box {
     max-width: 700px;
     margin: 0 auto;
@@ -396,6 +431,8 @@
     .new-chat-btn { font-size: 12px; padding: 5px 10px; }
     .input-area { padding: 10px 12px 14px; }
   }
+
+
 </style>
 </head>
 <body>
@@ -453,13 +490,13 @@
         </div>
       </div>
 
-      <div class="input-area">
-        <div class="input-box">
-          <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
-          <button id="send-btn" onclick="sendMessage()">↑</button>
-        </div>
-        <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
-      </div>
+      <div class="input-box">
+  <button id="mic-btn" onclick="toggleVoice()" title="صحبت کنید">🎤</button>
+  <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
+  <button id="send-btn" onclick="sendMessage()">↑</button>
+</div>
+<p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
+<p class="voice-status" id="voice-status"></p>
     </div>
 
   </div>
@@ -730,6 +767,7 @@ async function sendMessage() {
     removeTyping();
     appendBubble('ai', data.reply);
     history.push({ role: 'assistant', content: data.reply });
+    speakText(data.reply);
 
     // if logged in, update conversation id and refresh sidebar
     if (currentUser && data.conversation_id) {
@@ -757,7 +795,136 @@ inputEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 
+// ── VOICE MODE ──
+let recognition  = null;
+let isListening  = false;
+let currentAudio = null;
+
+function initVoice() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    document.getElementById('mic-btn').style.display = 'none';
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang           = 'fa-AF';
+  recognition.continuous     = false;
+  recognition.interimResults = true;
+
+  recognition.onstart = () => {
+    isListening = true;
+    document.getElementById('mic-btn').className = 'listening';
+    setVoiceStatus('در حال گوش دادن...');
+  };
+
+  recognition.onresult = (event) => {
+    const transcript = Array.from(event.results)
+      .map(r => r[0].transcript)
+      .join('');
+    document.getElementById('user-input').value = transcript;
+
+    if (event.results[event.results.length - 1].isFinal) {
+      stopListening();
+      setTimeout(() => sendMessage(), 300);
+    }
+  };
+
+  recognition.onerror = (e) => {
+    stopListening();
+    if (e.error === 'not-allowed') {
+      setVoiceStatus('اجازه میکروفون داده نشد');
+    } else {
+      setVoiceStatus('خطا در تشخیص صدا');
+    }
+    setTimeout(() => setVoiceStatus(''), 3000);
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    if (document.getElementById('mic-btn').className === 'listening') {
+      document.getElementById('mic-btn').className = '';
+    }
+  };
+}
+
+function toggleVoice() {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+    document.getElementById('mic-btn').className = '';
+    setVoiceStatus('');
+    return;
+  }
+  if (isListening) {
+    stopListening();
+  } else {
+    startListening();
+  }
+}
+
+function startListening() {
+  if (!recognition) return;
+  try { recognition.start(); }
+  catch(e) { console.log('already started'); }
+}
+
+function stopListening() {
+  if (recognition && isListening) recognition.stop();
+  isListening = false;
+  document.getElementById('mic-btn').className = '';
+  setVoiceStatus('');
+}
+
+function setVoiceStatus(msg) {
+  document.getElementById('voice-status').textContent = msg;
+}
+
+async function speakText(text) {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
+
+  document.getElementById('mic-btn').className = 'speaking';
+  setVoiceStatus('خیام در حال صحبت است...');
+
+  try {
+    const res = await fetch('/api/speak', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ text })
+    });
+
+    if (!res.ok) throw new Error('failed');
+
+    const blob   = await res.blob();
+    const url    = URL.createObjectURL(blob);
+    currentAudio = new Audio(url);
+
+    currentAudio.onended = () => {
+      currentAudio = null;
+      document.getElementById('mic-btn').className = '';
+      setVoiceStatus('');
+      URL.revokeObjectURL(url);
+    };
+
+    currentAudio.onerror = () => {
+      currentAudio = null;
+      document.getElementById('mic-btn').className = '';
+      setVoiceStatus('');
+    };
+
+    await currentAudio.play();
+
+  } catch(err) {
+    console.error('Voice error:', err);
+    document.getElementById('mic-btn').className = '';
+    setVoiceStatus('');
+  }
+}
 // ── START ──
+initVoice();
 init();
   </script>
 </body>

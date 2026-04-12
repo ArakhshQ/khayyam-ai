@@ -8,7 +8,7 @@ from auth import register_user, login_user_by_username
 from datetime import datetime
 import os
 import json
-
+import requests
 load_dotenv()
 
 app = Flask(__name__)
@@ -77,22 +77,7 @@ def save_examples(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ── LANGUAGE GUARDRAIL ──
-def clean_language(text):
-    clean_prompt = """تو یک ویراستار زبان دری هستی.
-متن زیر را بخوان. اگر کلمه‌ای از زبان دیگر (انگلیسی، آلمانی، ترکی، چینی، ) در آن وجود دارد، آن را با معادل دری افغانی جایگزین کن.
-فقط متن تصحیح شده را برگردان. هیچ توضیحی ندهی. هیچ چیز اضافه نکنی.
-اگر متن کاملاً دری است، عیناً همان را برگردان.
 
-متن:
-""" + text
-
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": clean_prompt}],
-        max_tokens=1200,
-        temperature=0.1
-    )
-    return response.choices[0].message.content
 
 # ── PROMPTS ──
 def build_system_prompt():
@@ -238,12 +223,11 @@ def groq_chat(system_prompt, history, user_message, temperature=0.6):
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=messages,
-        max_tokens=1000,
+        max_tokens=800,
         temperature=temperature,
         top_p=0.9
     )
-    reply = response.choices[0].message.content
-    return clean_language(reply)
+    return response.choices[0].message.content
 
 # ── AUTH ROUTES ──
 @app.route("/register")
@@ -549,6 +533,46 @@ def delete_example(index):
         examples["conversation_examples"].pop(index)
         save_examples(examples)
     return jsonify({"success": True})
+
+@app.route("/api/speak", methods=["POST"])
+def speak():
+    data = request.get_json()
+    text = data.get("text", "")
+    if not text:
+        return jsonify({"error": "no text"}), 400
+
+    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+    if not ELEVENLABS_API_KEY:
+        return jsonify({"error": "no api key"}), 500
+
+    # eleven_multilingual_v2 supports Dari/Persian
+    voice_id = "EXAVITQu4vr4xnSDxMaL"
+
+    response = requests.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+        headers={
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json"
+        },
+        json={
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75
+            }
+        }
+    )
+
+    if response.status_code == 200:
+        from flask import Response
+        return Response(
+            response.content,
+            mimetype="audio/mpeg",
+            headers={"Content-Disposition": "inline"}
+        )
+    else:
+        return jsonify({"error": "voice failed"}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
