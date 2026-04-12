@@ -239,6 +239,21 @@
   </div>
 </nav>
   <script>
+    async function checkAdminLink() {
+    const res  = await fetch('/api/me');
+    const data = await res.json();
+    if (data.is_admin) {
+      const links = document.querySelector('.nav-links');
+      const adminLink = document.createElement('a');
+      adminLink.href      = '/admin';
+      adminLink.className = 'nav-btn';
+      adminLink.textContent = '⚙️ ادمین';
+      adminLink.style.borderColor = 'var(--gold-dim)';
+      adminLink.style.color = 'var(--gold)';
+      links.prepend(adminLink);
+    }
+  }
+  checkAdminLink();
     function formatDate(iso) {
       const d    = new Date(iso);
       const now  = new Date();

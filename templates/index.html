@@ -486,16 +486,25 @@
   </footer>
 
   <script>
-     async function checkAuth() {
-    const res  = await fetch('/api/me');
-    const data = await res.json();
-    if (data.logged_in) {
-      document.getElementById('auth-buttons').style.display = 'none';
-      const menu = document.getElementById('user-menu');
-      menu.style.display = 'flex';
-      document.getElementById('nav-username').textContent = data.username;
+   async function checkAuth() {
+  const res  = await fetch('/api/me');
+  const data = await res.json();
+  if (data.logged_in) {
+    document.getElementById('auth-buttons').style.display = 'none';
+    const menu = document.getElementById('user-menu');
+    menu.style.display = 'flex';
+    document.getElementById('nav-username').textContent = data.username;
+    if (data.is_admin) {
+      const adminLink = document.createElement('a');
+      adminLink.href      = '/admin';
+      adminLink.className = 'nav-btn';
+      adminLink.textContent = '⚙️ ادمین';
+      adminLink.style.borderColor = 'var(--gold-dim)';
+      adminLink.style.color = 'var(--gold)';
+      menu.appendChild(adminLink);
     }
   }
+}
   checkAuth();
     // scroll reveal animation
     const observer = new IntersectionObserver((entries) => {
