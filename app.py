@@ -8,7 +8,7 @@ from auth import register_user, login_user_by_username
 from datetime import datetime
 import os
 import json
-import requests
+
 load_dotenv()
 
 app = Flask(__name__)
