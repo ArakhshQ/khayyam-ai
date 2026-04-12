@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from database import db, User, Conversation, Message
 from auth import register_user, login_user_by_username
 from datetime import datetime
+import requests
 import os
 import json
 
@@ -220,14 +221,23 @@ def groq_chat(system_prompt, history, user_message, temperature=0.6):
     messages = [{"role": "system", "content": system_prompt}]
     messages += history
     messages.append({"role": "user", "content": user_message})
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=messages,
-        max_tokens=800,
-        temperature=temperature,
-        top_p=0.9
-    )
-    return response.choices[0].message.content
+
+    for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        try:
+            response = groq_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=800,
+                temperature=temperature,
+                top_p=0.9
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            if "rate_limit" in str(e).lower() or "429" in str(e):
+                continue
+            raise e
+
+    return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه صبر کنید و دوباره امتحان کنید."
 
 # ── AUTH ROUTES ──
 @app.route("/register")
