@@ -46,7 +46,23 @@
   .sidebar-toggle:hover { background: var(--surface2); color: var(--text); }
 
   .nav-links { display: flex; gap: 4px; }
+.wave-bar {
+  width: 4px;
+  height: 20px;
+  background: var(--gold);
+  border-radius: 2px;
+  animation: wave-anim 0.8s ease-in-out infinite;
+}
+.wave-bar:nth-child(1) { animation-delay: 0s;    }
+.wave-bar:nth-child(2) { animation-delay: 0.15s; }
+.wave-bar:nth-child(3) { animation-delay: 0.3s;  }
+.wave-bar:nth-child(4) { animation-delay: 0.45s; }
+.wave-bar:nth-child(5) { animation-delay: 0.6s;  }
 
+@keyframes wave-anim {
+  0%,100% { height: 8px;  opacity: 0.4; }
+  50%      { height: 40px; opacity: 1;   }
+}
   .nav-btn {
     padding: 5px 12px;
     border-radius: 7px;
@@ -491,7 +507,7 @@
       </div>
 
       <div class="input-box">
-  <button id="mic-btn" onclick="toggleVoice()" title="صحبت کنید">🎤</button>
+  <button id="mic-btn" onclick="toggleVoiceMode()" title="حالت صوتی">🎤</button>
   <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
   <button id="send-btn" onclick="sendMessage()">↑</button>
 </div>
@@ -521,6 +537,37 @@
     </a>
   </div>
 </nav>
+<!-- VOICE MODE OVERLAY -->
+<div id="voice-overlay" style="display:none; position:fixed; inset:0; z-index:999;
+  background:rgba(15,14,12,0.96); flex-direction:column;
+  align-items:center; justify-content:center; gap:32px;">
+
+  <div style="font-size:48px;">🕌</div>
+
+  <div style="font-size:22px; font-weight:700; color:var(--gold);">خیام</div>
+
+  <!-- animated voice wave -->
+  <div id="voice-wave" style="display:flex; gap:6px; align-items:center; height:48px;">
+    <span class="wave-bar"></span>
+    <span class="wave-bar"></span>
+    <span class="wave-bar"></span>
+    <span class="wave-bar"></span>
+    <span class="wave-bar"></span>
+  </div>
+
+  <div id="voice-overlay-status" style="font-size:15px; color:var(--text-dim);">
+    در حال گوش دادن...
+  </div>
+
+  <button onclick="stopVoiceMode()" style="
+    margin-top:16px; padding:12px 32px;
+    background:transparent; border:1px solid var(--border);
+    border-radius:99px; color:var(--text-dim);
+    font-family:'Vazirmatn',sans-serif; font-size:14px;
+    cursor:pointer; transition:all 0.2s;">
+    توقف ⏹
+  </button>
+</div>
   <script>
    // ── STATE ──
 let currentUser   = null;
@@ -669,10 +716,13 @@ function newChat() {
 
 // ── HELPERS ──
 function formatDate(iso) {
-  const d    = new Date(iso);
+  // server sends UTC time without timezone info — add Z to tell
+  // JavaScript it is UTC so it converts to local time correctly
+  const utcString = iso.endsWith('Z') ? iso : iso + 'Z';
+  const d    = new Date(utcString);
   const now  = new Date();
   const diff = now - d;
-  if (diff < 60000)    return 'همین لحظه';
+  if (diff < 60000)    return 'همین الان';
   if (diff < 3600000)  return Math.floor(diff / 60000) + ' دقیقه پیش';
   if (diff < 86400000) return Math.floor(diff / 3600000) + ' ساعت پیش';
   return d.toLocaleDateString('fa-AF');
@@ -796,9 +846,11 @@ inputEl.addEventListener('keydown', e => {
 });
 
 // ── VOICE MODE ──
-let recognition  = null;
-let isListening  = false;
-let currentAudio = null;
+// ── VOICE MODE ──
+let recognition    = null;
+let isListening    = false;
+let currentAudio   = null;
+let voiceModeOn    = false;
 
 function initVoice() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -810,83 +862,135 @@ function initVoice() {
   recognition = new SpeechRecognition();
   recognition.lang           = 'fa-AF';
   recognition.continuous     = false;
-  recognition.interimResults = true;
-
-  recognition.onstart = () => {
-    isListening = true;
-    document.getElementById('mic-btn').className = 'listening';
-    setVoiceStatus('در حال گوش دادن...');
-  };
+  recognition.interimResults = false;
 
   recognition.onresult = (event) => {
-    const transcript = Array.from(event.results)
-      .map(r => r[0].transcript)
-      .join('');
-    document.getElementById('user-input').value = transcript;
-
-    if (event.results[event.results.length - 1].isFinal) {
-      stopListening();
-      setTimeout(() => sendMessage(), 300);
+    const transcript = event.results[0][0].transcript;
+    if (transcript && voiceModeOn) {
+      sendVoiceMessage(transcript);
     }
   };
 
   recognition.onerror = (e) => {
-    stopListening();
-    if (e.error === 'not-allowed') {
-      setVoiceStatus('اجازه میکروفون داده نشد');
-    } else {
-      setVoiceStatus('خطا در تشخیص صدا');
+    setVoiceStatus('خطا در میکروفون');
+    if (voiceModeOn) {
+      setTimeout(() => listenAgain(), 2000);
     }
-    setTimeout(() => setVoiceStatus(''), 3000);
   };
 
   recognition.onend = () => {
     isListening = false;
-    if (document.getElementById('mic-btn').className === 'listening') {
-      document.getElementById('mic-btn').className = '';
-    }
   };
 }
 
-function toggleVoice() {
+function toggleVoiceMode() {
+  if (voiceModeOn) {
+    stopVoiceMode();
+  } else {
+    startVoiceMode();
+  }
+}
+
+function startVoiceMode() {
+  if (!recognition) {
+    alert('مرورگر شما از میکروفون پشتیبانی نمی‌کند. لطفاً از Chrome استفاده کنید.');
+    return;
+  }
+
+  voiceModeOn = true;
+  document.getElementById('mic-btn').className  = 'listening';
+  document.getElementById('mic-btn').textContent = '⏹';
+  document.getElementById('voice-overlay').style.display = 'flex';
+  setVoiceStatus('در حال گوش دادن...');
+  startListening();
+}
+
+function stopVoiceMode() {
+  voiceModeOn = false;
+  isListening = false;
+
+  if (recognition) {
+    try { recognition.stop(); } catch(e) {}
+  }
   if (currentAudio) {
     currentAudio.pause();
     currentAudio = null;
-    document.getElementById('mic-btn').className = '';
-    setVoiceStatus('');
-    return;
   }
-  if (isListening) {
-    stopListening();
-  } else {
-    startListening();
-  }
-}
 
-function startListening() {
-  if (!recognition) return;
-  try { recognition.start(); }
-  catch(e) { console.log('already started'); }
-}
-
-function stopListening() {
-  if (recognition && isListening) recognition.stop();
-  isListening = false;
-  document.getElementById('mic-btn').className = '';
+  document.getElementById('mic-btn').className   = '';
+  document.getElementById('mic-btn').textContent = '🎤';
+  document.getElementById('voice-overlay').style.display = 'none';
   setVoiceStatus('');
 }
 
-function setVoiceStatus(msg) {
-  document.getElementById('voice-status').textContent = msg;
+function startListening() {
+  if (!voiceModeOn || isListening) return;
+  try {
+    isListening = true;
+    recognition.start();
+    setVoiceStatus('در حال گوش دادن...');
+    document.getElementById('voice-wave').style.animationPlayState = 'running';
+  } catch(e) {
+    isListening = false;
+  }
 }
 
-async function speakText(text) {
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio = null;
+function listenAgain() {
+  if (!voiceModeOn) return;
+  setTimeout(() => startListening(), 500);
+}
+
+function setVoiceStatus(msg) {
+  document.getElementById('voice-status').textContent     = msg;
+  document.getElementById('voice-overlay-status').textContent = msg;
+}
+
+async function sendVoiceMessage(text) {
+  if (!text || isLoading) return;
+
+  setVoiceStatus('خیام در حال فکر کردن است...');
+  document.getElementById('voice-wave').style.animationPlayState = 'paused';
+
+  // show message in chat too
+  appendBubble('user', text);
+  history.push({ role: 'user', content: text });
+
+  isLoading = true;
+  document.getElementById('send-btn').disabled = true;
+
+  try {
+    const res  = await fetch('/api/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message:         text,
+        history:         history.slice(-10),
+        conversation_id: currentConvId
+      })
+    });
+
+    const data = await res.json();
+    appendBubble('ai', data.reply);
+    history.push({ role: 'assistant', content: data.reply });
+
+    if (currentUser && data.conversation_id) {
+      currentConvId = data.conversation_id;
+      await loadSidebar();
+    }
+
+    // speak the reply then listen again
+    await speakAndListen(data.reply);
+
+  } catch (err) {
+    appendBubble('ai', 'خطایی رخ داد.');
+    if (voiceModeOn) listenAgain();
   }
 
-  document.getElementById('mic-btn').className = 'speaking';
+  isLoading = false;
+  document.getElementById('send-btn').disabled = false;
+}
+
+async function speakAndListen(text) {
   setVoiceStatus('خیام در حال صحبت است...');
 
   try {
@@ -896,31 +1000,52 @@ async function speakText(text) {
       body:    JSON.stringify({ text })
     });
 
-    if (!res.ok) throw new Error('failed');
+    if (!res.ok) throw new Error('voice failed');
 
     const blob   = await res.blob();
     const url    = URL.createObjectURL(blob);
     currentAudio = new Audio(url);
 
-    currentAudio.onended = () => {
-      currentAudio = null;
-      document.getElementById('mic-btn').className = '';
-      setVoiceStatus('');
-      URL.revokeObjectURL(url);
-    };
-
-    currentAudio.onerror = () => {
-      currentAudio = null;
-      document.getElementById('mic-btn').className = '';
-      setVoiceStatus('');
-    };
-
-    await currentAudio.play();
+    await new Promise((resolve) => {
+      currentAudio.onended = () => {
+        URL.revokeObjectURL(url);
+        currentAudio = null;
+        resolve();
+      };
+      currentAudio.onerror = () => {
+        currentAudio = null;
+        resolve();
+      };
+      currentAudio.play().catch(() => resolve());
+    });
 
   } catch(err) {
-    console.error('Voice error:', err);
-    document.getElementById('mic-btn').className = '';
-    setVoiceStatus('');
+    console.error('speak error:', err);
+  }
+
+  // after speaking, listen again automatically
+  if (voiceModeOn) {
+    listenAgain();
+  }
+}
+
+// for regular text chat — speak reply without loop
+async function speakText(text) {
+  if (!text) return;
+  try {
+    const res = await fetch('/api/speak', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ text })
+    });
+    if (!res.ok) return;
+    const blob   = await res.blob();
+    const url    = URL.createObjectURL(blob);
+    currentAudio = new Audio(url);
+    currentAudio.onended = () => { currentAudio = null; URL.revokeObjectURL(url); };
+    currentAudio.play().catch(e => console.log('autoplay blocked:', e));
+  } catch(err) {
+    console.error('speakText error:', err);
   }
 }
 // ── START ──

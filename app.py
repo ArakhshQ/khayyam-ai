@@ -9,6 +9,7 @@ from datetime import datetime
 import requests
 import os
 import json
+import re
 
 load_dotenv()
 
@@ -77,6 +78,19 @@ def save_examples(data):
     with open(EXAMPLES_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def filter_non_dari(text):
+    # Remove any characters that are not Arabic script, spaces,
+    # punctuation, or numbers — Dari is written in Arabic script only
+    # Keep: Arabic/Persian letters, spaces, newlines, common punctuation
+    cleaned = re.sub(
+        r'[^\u0600-\u06FF\u200c\u200d\s\d\.\،\؟\!\:\؛\-\(\)\[\]\"\'\/\\n]',
+        '',
+        text
+    )
+    # Clean up extra spaces left behind
+    cleaned = re.sub(r'  +', ' ', cleaned)
+    cleaned = cleaned.strip()
+    return cleaned if cleaned else text
 # ── LANGUAGE GUARDRAIL ──
 
 
@@ -221,7 +235,6 @@ def groq_chat(system_prompt, history, user_message, temperature=0.6):
     messages = [{"role": "system", "content": system_prompt}]
     messages += history
     messages.append({"role": "user", "content": user_message})
-
     for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
         try:
             response = groq_client.chat.completions.create(
@@ -231,14 +244,12 @@ def groq_chat(system_prompt, history, user_message, temperature=0.6):
                 temperature=temperature,
                 top_p=0.9
             )
-            return response.choices[0].message.content
+            return filter_non_dari(response.choices[0].message.content)
         except Exception as e:
             if "rate_limit" in str(e).lower() or "429" in str(e):
                 continue
             raise e
-
     return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه صبر کنید و دوباره امتحان کنید."
-
 # ── AUTH ROUTES ──
 @app.route("/register")
 def register_page():

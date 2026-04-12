@@ -254,15 +254,18 @@
     }
   }
   checkAdminLink();
-    function formatDate(iso) {
-      const d    = new Date(iso);
-      const now  = new Date();
-      const diff = now - d;
-      if (diff < 60000)    return 'همین لحظه';
-      if (diff < 3600000)  return Math.floor(diff/60000) + ' دقیقه پیش';
-      if (diff < 86400000) return Math.floor(diff/3600000) + ' ساعت پیش';
-      return d.toLocaleDateString('fa-AF');
-    }
+   function formatDate(iso) {
+  // server sends UTC time without timezone info — add Z to tell
+  // JavaScript it is UTC so it converts to local time correctly
+  const utcString = iso.endsWith('Z') ? iso : iso + 'Z';
+  const d    = new Date(utcString);
+  const now  = new Date();
+  const diff = now - d;
+  if (diff < 60000)    return 'همین الان';
+  if (diff < 3600000)  return Math.floor(diff / 60000) + ' دقیقه پیش';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + ' ساعت پیش';
+  return d.toLocaleDateString('fa-AF');
+}
 
     async function loadUser() {
       const res  = await fetch('/api/me');
