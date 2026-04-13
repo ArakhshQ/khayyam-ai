@@ -557,6 +557,7 @@ def delete_example(index):
 
 @app.route("/api/speak", methods=["POST"])
 def speak():
+    import base64
     data = request.get_json()
     text = data.get("text", "")
     if not text:
@@ -566,7 +567,6 @@ def speak():
     if not ELEVENLABS_API_KEY:
         return jsonify({"error": "no api key"}), 500
 
-    # eleven_multilingual_v2 supports Dari/Persian
     voice_id = "EXAVITQu4vr4xnSDxMaL"
 
     response = requests.post(
@@ -586,13 +586,10 @@ def speak():
     )
 
     if response.status_code == 200:
-        from flask import Response
-        return Response(
-            response.content,
-            mimetype="audio/mpeg",
-            headers={"Content-Disposition": "inline"}
-        )
+        audio_base64 = base64.b64encode(response.content).decode('utf-8')
+        return jsonify({"audio": audio_base64})
     else:
+        print("ElevenLabs error:", response.status_code, response.text)
         return jsonify({"error": "voice failed"}), 500
 
 if __name__ == "__main__":
