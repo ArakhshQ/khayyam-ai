@@ -989,29 +989,7 @@ async function sendVoiceMessage(text) {
   document.getElementById('send-btn').disabled = false;
 }
 
-function speakAndListen(text) {
-  return new Promise((resolve) => {
-    if (!text) { resolve(); return; }
-    window.speechSynthesis.cancel();
-    const utterance  = new SpeechSynthesisUtterance(text);
-    utterance.lang   = 'fa-IR';
-    utterance.rate   = 0.9;
-    utterance.pitch  = 1;
-    utterance.onend  = () => { resolve(); if (voiceModeOn) listenAgain(); };
-    utterance.onerror = () => { resolve(); if (voiceModeOn) listenAgain(); };
-    window.speechSynthesis.speak(utterance);
-  });
-}
-// for regular text chat — speak reply without loop
-function speakText(text) {
-  if (!text) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang  = 'fa-IR';
-  utterance.rate  = 0.9;
-  utterance.pitch = 1;
-  window.speechSynthesis.speak(utterance);
-}
+
 // ── START ──
 initVoice();
 init();
