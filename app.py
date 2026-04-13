@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from functools import wraps
+from openai import OpenAI
 from groq import Groq
 from dotenv import load_dotenv
 from database import db, User, Conversation, Message
@@ -24,7 +25,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login_page'
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 KNOWLEDGE_FILE = "knowledge.json"
 EXAMPLES_FILE  = "examples.json"
@@ -189,26 +190,19 @@ def build_tutor_prompt(subject, grade):
 - از کلمات افغانی مثل احسنت، آفرین، عالی استفاده کن"""
 
 # ── GROQ ──
-def groq_chat(system_prompt, history, user_message, temperature=0.6):
+def openai_chat(system_prompt, history, user_message, temperature=0.6):
     messages = [{"role": "system", "content": system_prompt}]
     messages += history
     messages.append({"role": "user", "content": user_message})
-    for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
-        try:
-            response = groq_client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=800,
-                temperature=temperature,
-                top_p=0.9
-            )
-            return filter_non_dari(response.choices[0].message.content)
-        except Exception as e:
-            if "rate_limit" in str(e).lower() or "429" in str(e):
-                continue
-            raise e
-    return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه صبر کنید و دوباره امتحان کنید."
 
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        temperature=temperature,
+        max_tokens=800,
+    )
+
+    return filter_non_dari(response.choices[0].message.content)
 # ── AUTH ROUTES ──
 @app.route("/register")
 def register_page():
@@ -309,7 +303,7 @@ def chat():
     history      = data.get("history", [])
     conv_id      = data.get("conversation_id")
 
-    reply = groq_chat(
+    reply = openai_chat(
         system_prompt=build_system_prompt(),
         history=history[-10:],
         user_message=user_message,
@@ -356,7 +350,7 @@ def tutor_chat():
     subject      = data.get("subject", "عمومی")
     grade        = data.get("grade", "متوسط")
 
-    reply = groq_chat(
+    reply = openai_chat(
         system_prompt=build_tutor_prompt(subject, grade),
         history=history[-12:],
         user_message=user_message,
@@ -372,7 +366,7 @@ def persona_chat():
     history        = data.get("history", [])
     persona_prompt = data.get("persona_prompt", "")
 
-    reply = groq_chat(
+    reply = openai_chat(
         system_prompt=persona_prompt,
         history=history[-10:],
         user_message=user_message,
