@@ -205,7 +205,7 @@ def openai_chat(system_prompt, history, user_message, temperature=0.6):
         max_tokens=800,
     )
 
-    return filter_non_dari(response.choices[0].message.content)
+    return response.choices[0].message.content
 # ── AUTH ROUTES ──
 @app.route("/register")
 def register_page():
