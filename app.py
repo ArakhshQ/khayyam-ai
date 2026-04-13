@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from database import db, User, Conversation, Message
 from auth import register_user, login_user_by_username
 from datetime import datetime
-import requests
 import os
 import json
 import re
@@ -29,9 +28,7 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 KNOWLEDGE_FILE = "knowledge.json"
 EXAMPLES_FILE  = "examples.json"
-POETRY_FILE    = "poetry.json"
 
-# ── CREATE TABLES ──
 with app.app_context():
     db.create_all()
 
@@ -63,13 +60,6 @@ def load_examples():
     except:
         return {"conversation_examples": []}
 
-def load_poetry():
-    try:
-        with open(POETRY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return {"poetry_formats": []}
-
 def save_knowledge(data):
     with open(KNOWLEDGE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -78,27 +68,21 @@ def save_examples(data):
     with open(EXAMPLES_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+# ── DARI FILTER ──
 def filter_non_dari(text):
-    # Remove any characters that are not Arabic script, spaces,
-    # punctuation, or numbers — Dari is written in Arabic script only
-    # Keep: Arabic/Persian letters, spaces, newlines, common punctuation
     cleaned = re.sub(
-        r'[^\u0600-\u06FF\u200c\u200d\s\d\.\،\؟\!\:\؛\-\(\)\[\]\"\'\/\\n]',
+        r'[^\u0600-\u06FF\u200c\u200d\s\d\.\،\؟\!\:\؛\-\(\)\[\]\"\'\/\\n\+\=\*\%]',
         '',
         text
     )
-    # Clean up extra spaces left behind
     cleaned = re.sub(r'  +', ' ', cleaned)
     cleaned = cleaned.strip()
     return cleaned if cleaned else text
-# ── LANGUAGE GUARDRAIL ──
-
 
 # ── PROMPTS ──
 def build_system_prompt():
     knowledge = load_knowledge()
     examples  = load_examples()
-    poetry    = load_poetry()
 
     dialect_rules = ""
     for item in knowledge.get("dari_dialect", []):
@@ -112,60 +96,6 @@ def build_system_prompt():
     for ex in examples.get("conversation_examples", []):
         example_block += f'User: {ex["user"]}\nAssistant: {ex["assistant"]}\n\n'
 
-    poetry_block = ""
-    for fmt in poetry.get("poetry_formats", []):
-        poetry_block += f'''
-قالب {fmt["name"]}:
-- توضیح: {fmt["description"]}
-- قوانین: {fmt["rules"]}
-- الگوی قافیه: {fmt["rhyme_pattern"]}
-- نمونه:
-{fmt["example"]}
-'''
-
-    poetry_instruction = """
-قوانین شعر دری — بسیار مهم:
-
-وقتی کسی شعر می‌خواهد:
-- اگر قالب نگفت بپرس کدام قالب می‌خواهد
-- اگر قالب گفت مستقیم شروع کن
-
-قالب رباعی:
-- دقیقاً چهار مصراع
-- مصراع ۱، ۲، ۴ هم‌قافیه — مصراع ۳ آزاد
-- هر مصراع روی یک خط جداگانه
-- قافیه‌ها باید واقعی و طبیعی باشند
-
-قالب دوبیتی:
-- دقیقاً چهار مصراع در دو بیت
-- مصراع ۱، ۲، ۴ هم‌قافیه — مصراع ۳ آزاد
-- هر مصراع روی یک خط جداگانه
-
-قالب مثنوی:
-- هر بیت دو مصراع که با هم قافیه می‌شوند
-- بیت‌های مختلف قافیه‌های مختلف دارند
-- هر مصراع روی یک خط جداگانه
-- بیت‌ها با یک خط خالی از هم جدا می‌شوند
-
-قالب غزل:
-- ۵ تا ۱۰ بیت
-- مصراع دوم تمام ابیات هم‌قافیه
-- هر مصراع روی یک خط جداگانه
-- بیت‌ها با یک خط خالی از هم جدا می‌شوند
-
-فرمت اجباری برای همه شعرها:
-- هر مصراع روی یک خط کاملاً جداگانه بنویس
-- بین بیت‌ها یک خط خالی بگذار
-- هیچ‌وقت دو مصراع را در یک خط ننویس
-- هیچ‌وقت مصراع‌ها را با "/" جدا نکن
-- بعد از شعر یک خط خالی بگذار و قافیه‌های استفاده شده را توضیح بده
-
-قانون مطلق:
-- هرگز مثال‌های داده شده را کپی نکن
-- شعر کاملاً جدید و اصیل بنویس
-- موضوع شعر باید با درخواست کاربر مرتبط باشد
-"""
-
     return f"""تو یک دستیار هوشمند به نام خیام هستی که به زبان دری افغانی صحبت می‌کنی.
 
 ====================
@@ -178,6 +108,7 @@ def build_system_prompt():
   - استفاده از نمادها، فرمول‌ها و اصطلاحات بین‌المللی مجاز است
   - مانند: x، y، H2O، km، sin، log
 - این موارد را ترجمه نکن، اما توضیح را به دری بده
+- اگر کاربر لینکی فرستاد، بگو که نمی‌توانی لینک‌ها را باز کنی و از او بخواه متن را مستقیم کپی کند
 
 ====================
 هویت و شخصیت
@@ -193,11 +124,7 @@ def build_system_prompt():
 ====================
 - به هر نوع سوال جواب بده (علمی، ادبی، روزمره و غیره)
 - پاسخ‌ها واضح، دقیق و قابل فهم باشند
-
-در صورت نیاز:
-- از پاراگراف‌های کوتاه استفاده کن
-- از لیست استفاده کن
-- از تیتر استفاده کن
+- در صورت نیاز از پاراگراف‌های کوتاه، لیست و تیتر استفاده کن
 
 ====================
 حالت ویژه: شعر
@@ -205,8 +132,6 @@ def build_system_prompt():
 اگر کاربر درخواست شعر کند:
 
 ⚠️ این حالت اولویت مطلق دارد
-⚠️ تمام قوانین "رفتار عمومی" را نادیده بگیر
-
 - فقط شعر بنویس
 - هیچ توضیح، پاراگراف یا لیست اضافه نده
 
@@ -219,26 +144,12 @@ def build_system_prompt():
 6. قبل از شروع شعر، یک قافیه انتخاب کن و آن را در تمام شعر حفظ کن
 7. شعر باید روان، احساسی و ادبی باشد
 
-====================
-قالب اجباری شعر
-====================
+قالب اجباری:
 مصرع اول
 مصرع دوم
 
 مصرع سوم
 مصرع چهارم
-
-(دقیقاً به همین شکل نوشته شود)
-
-====================
-کنترل نهایی شعر
-====================
-قبل از ارسال پاسخ بررسی کن که:
-- هر خط فقط یک مصرع باشد
-- بین هر دو مصرع یک خط خالی وجود داشته باشد
-- قافیه در تمام مصرع‌ها رعایت شده باشد
-
-اگر این شرایط رعایت نشود، پاسخ نادرست محسوب می‌شود و باید اصلاح گردد
 
 ====================
 دانش فرهنگی
@@ -261,16 +172,13 @@ def build_tutor_prompt(subject, grade):
     for item in knowledge.get("dari_dialect", []):
         dialect_rules += f'- بگو "{item["correct"]}" نه "{item["wrong"]}"\n'
 
-    return f"""!!!! قانون مطلق !!!!
-تمام جواب را فقط به زبان دری افغانی بنویس.
-نه انگلیسی، نه آلمانی، نه ترکی، نه چینی، نه فارسی ایرانی.
+    return f"""تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
+فقط به دری افغانی جواب بده. هیچ زبان دیگری استفاده نکن.
 
-تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
 مضمون: {subject}
 سطح: {grade}
 
-قوانین زبانی:
-- فقط دری افغانی، هرگز پشتو یا فارسی ایرانی
+قوانین گویش:
 {dialect_rules}
 
 روش تدریس:
@@ -300,6 +208,7 @@ def groq_chat(system_prompt, history, user_message, temperature=0.6):
                 continue
             raise e
     return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه صبر کنید و دوباره امتحان کنید."
+
 # ── AUTH ROUTES ──
 @app.route("/register")
 def register_page():
@@ -382,13 +291,15 @@ def chat_page():
 def figures_page():
     return render_template("figures.html")
 
-@app.route("/persona")
-def persona_page():
-    return render_template("persona_chat.html")
-
 @app.route("/tutor")
 def tutor_page():
     return render_template("tutor.html")
+
+@app.route("/admin")
+@login_required
+@admin_required
+def admin_panel():
+    return render_template("admin_panel.html")
 
 # ── CHAT API ──
 @app.route("/api/chat", methods=["POST"])
@@ -502,13 +413,7 @@ def delete_conversation(conv_id):
     db.session.commit()
     return jsonify({"success": True})
 
-# ── ADMIN ROUTES ──
-@app.route("/admin")
-@login_required
-@admin_required
-def admin_panel():
-    return render_template("admin_panel.html")
-
+# ── ADMIN APIs ──
 @app.route("/api/admin/users", methods=["GET"])
 @login_required
 @admin_required
@@ -604,43 +509,6 @@ def delete_example(index):
         examples["conversation_examples"].pop(index)
         save_examples(examples)
     return jsonify({"success": True})
-
-@app.route("/api/speak", methods=["POST"])
-def speak():
-    import base64
-    data = request.get_json()
-    text = data.get("text", "")
-    if not text:
-        return jsonify({"error": "no text"}), 400
-
-    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-    if not ELEVENLABS_API_KEY:
-        return jsonify({"error": "no api key"}), 500
-
-    voice_id = "EXAVITQu4vr4xnSDxMaL"
-
-    response = requests.post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-        headers={
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json"
-        },
-        json={
-            "text": text,
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75
-            }
-        }
-    )
-
-    if response.status_code == 200:
-        audio_base64 = base64.b64encode(response.content).decode('utf-8')
-        return jsonify({"audio": audio_base64})
-    else:
-        print("ElevenLabs error:", response.status_code, response.text)
-        return jsonify({"error": "voice failed"}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
