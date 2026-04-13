@@ -860,7 +860,7 @@ function initVoice() {
   }
 
   recognition = new SpeechRecognition();
-  recognition.lang           = 'fa-AF';
+  recognition.lang           = 'fa-IR';
   recognition.continuous     = false;
   recognition.interimResults = false;
 
@@ -990,49 +990,28 @@ async function sendVoiceMessage(text) {
   document.getElementById('send-btn').disabled = false;
 }
 
-async function speakAndListen(text) {
-  setVoiceStatus('خیام در حال صحبت است...');
-  try {
-    const res  = await fetch('/api/speak', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ text })
-    });
-    if (!res.ok) throw new Error('failed');
-    const data = await res.json();
-    if (!data.audio) throw new Error('no audio');
-
-    await new Promise((resolve) => {
-      const audio = new Audio('data:audio/mpeg;base64,' + data.audio);
-      currentAudio = audio;
-      audio.onended = () => { currentAudio = null; resolve(); };
-      audio.onerror = (e) => { console.error('audio error:', e); currentAudio = null; resolve(); };
-      audio.play().catch(e => { console.error('play error:', e); resolve(); });
-    });
-  } catch(err) {
-    console.error('speakAndListen error:', err);
-  }
-  if (voiceModeOn) listenAgain();
+function speakAndListen(text) {
+  return new Promise((resolve) => {
+    if (!text) { resolve(); return; }
+    window.speechSynthesis.cancel();
+    const utterance  = new SpeechSynthesisUtterance(text);
+    utterance.lang   = 'fa-IR';
+    utterance.rate   = 0.9;
+    utterance.pitch  = 1;
+    utterance.onend  = () => { resolve(); if (voiceModeOn) listenAgain(); };
+    utterance.onerror = () => { resolve(); if (voiceModeOn) listenAgain(); };
+    window.speechSynthesis.speak(utterance);
+  });
 }
 // for regular text chat — speak reply without loop
-async function speakText(text) {
+function speakText(text) {
   if (!text) return;
-  try {
-    const res  = await fetch('/api/speak', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ text })
-    });
-    if (!res.ok) { console.error('speak failed:', res.status); return; }
-    const data = await res.json();
-    if (!data.audio) { console.error('no audio in response'); return; }
-    const audio = new Audio('data:audio/mpeg;base64,' + data.audio);
-    currentAudio = audio;
-    audio.onended = () => { currentAudio = null; };
-    await audio.play();
-  } catch(err) {
-    console.error('speakText error:', err);
-  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang  = 'fa-IR';
+  utterance.rate  = 0.9;
+  utterance.pitch = 1;
+  window.speechSynthesis.speak(utterance);
 }
 // ── START ──
 initVoice();
