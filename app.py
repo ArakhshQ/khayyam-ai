@@ -6,7 +6,7 @@ from groq import Groq
 from dotenv import load_dotenv
 from database import db, User, Conversation, Message
 from auth import register_user, login_user_by_username
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import json
 import re
@@ -25,10 +25,16 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login_page'
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+groq_client   = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-KNOWLEDGE_FILE = "knowledge.json"
-EXAMPLES_FILE  = "examples.json"
+KNOWLEDGE_FILE   = "knowledge.json"
+EXAMPLES_FILE    = "examples.json"
+DAILY_LIMIT      = 10
+RESET_HOURS      = 3
+
+# in-memory rate limit store: { identifier: {"count": N, "window_start": datetime} }
+rate_store = {}
 
 with app.app_context():
     db.create_all()
@@ -45,6 +51,45 @@ def admin_required(f):
             return redirect(url_for('home'))
         return f(*args, **kwargs)
     return decorated
+
+# ── RATE LIMITING ──
+def get_identifier():
+    if current_user.is_authenticated:
+        return f"user_{current_user.id}"
+    return f"ip_{request.remote_addr}"
+
+def check_and_increment_limit():
+    """
+    Returns (is_limited, used, reset_time_str)
+    is_limited = True means GPT-4o limit hit, switch to Groq
+    """
+    key = get_identifier()
+    now = datetime.now(timezone.utc)
+
+    if key not in rate_store:
+        rate_store[key] = {"count": 0, "window_start": now}
+
+    entry = rate_store[key]
+    window_start = entry["window_start"]
+
+    # check if window has expired
+    hours_passed = (now - window_start).total_seconds() / 3600
+    if hours_passed >= RESET_HOURS:
+        entry["count"]        = 0
+        entry["window_start"] = now
+
+    # calculate reset time
+    reset_at     = window_start.replace(tzinfo=timezone.utc) if window_start.tzinfo is None else window_start
+    reset_at     = reset_at.timestamp() + (RESET_HOURS * 3600)
+    reset_dt     = datetime.fromtimestamp(reset_at, tz=timezone.utc)
+    reset_str    = reset_dt.strftime("%H:%M") + " UTC"
+
+    is_limited = entry["count"] >= DAILY_LIMIT
+
+    if not is_limited:
+        entry["count"] += 1
+
+    return is_limited, entry["count"], reset_str
 
 # ── KNOWLEDGE ──
 def load_knowledge():
@@ -68,17 +113,6 @@ def save_knowledge(data):
 def save_examples(data):
     with open(EXAMPLES_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-
-# ── DARI FILTER ──
-def filter_non_dari(text):
-    cleaned = re.sub(
-        r'[^\u0600-\u06FF\u200c\u200d\s\d\.\،\؟\!\:\؛\-\(\)\[\]\"\'\/\\n\+\=\*\%]',
-        '',
-        text
-    )
-    cleaned = re.sub(r'  +', ' ', cleaned)
-    cleaned = cleaned.strip()
-    return cleaned if cleaned else text
 
 # ── PROMPTS ──
 def build_system_prompt():
@@ -106,14 +140,10 @@ def build_system_prompt():
 
 اما:
 - اگر موضوع آموزشی زبان (مثل انگلیسی) باشد:
-  - مثال‌ها، جملات و تمرین‌ها را به همان زبان بنویس (مثلاً انگلیسی)
+  - مثال‌ها، جملات و تمرین‌ها را به همان زبان بنویس
   - توضیحات را به دری بده
-- اگر کاربر به زبان دیگری سوال کند، می‌توانی به همان زبان یا ترکیبی پاسخ بدهی
-- در موضوعات علمی:
-  - استفاده از نمادها و اصطلاحات بین‌المللی مجاز است (x, H2O, km, etc)
-
-هدف:
-→ کاربر باید بهتر یاد بگیرد، نه اینکه محدود شود
+- در موضوعات علمی استفاده از نمادها و اصطلاحات بین‌المللی مجاز است (x, H2O, km, etc)
+- اگر کاربر لینکی فرستاد، بگو که نمی‌توانی لینک‌ها را باز کنی
 
 ====================
 هویت و شخصیت
@@ -129,30 +159,33 @@ def build_system_prompt():
 ====================
 - به هر نوع سوال جواب بده
 - پاسخ‌ها واضح، دقیق و قابل فهم باشند
-- در صورت نیاز از پاراگراف‌های کوتاه، لیست و تیتر استفاده کن
 
 ====================
-حالت شعر و ادبیات
+فرمت‌بندی (بسیار مهم)
 ====================
-اگر کاربر درباره شعر سوال کند:
+همیشه از Markdown استفاده کن:
+- **متن مهم** را بولد کن
+- برای لیست از - استفاده کن
+- برای تیتر از ## استفاده کن
+- پاراگراف‌ها را با یک خط خالی جدا کن
+- جواب‌های طولانی را حتماً به بخش‌های جداگانه تقسیم کن
 
-1. اگر درخواست شعر از شاعر مشخص باشد:
-   - اگر شعر را دقیق می‌دانی، آن را بنویس
-   - اگر مطمئن نیستی، بگو: "مطمئن نیستم دقیق باشد، اما این یک نمونه است"
-   - از ساختن شعر جعلی به نام شاعر واقعی خودداری کن
+====================
+حالت ویژه: شعر
+====================
+وقتی شعر می‌نویسی یا می‌آوری:
+- هر مصرع روی یک خط جداگانه
+- بین هر دو بیت یک خط خالی
+- قافیه را در تمام شعر حفظ کن
+- اگر شعر از شاعر واقعی است و مطمئن نیستی، بگو "نمونه‌ای به سبک..."
+- اگر کاربر فقط گفت شعر بنویس — شعر اصیل تولید کن
 
-2. اگر کاربر بگوید "مثل فلان شاعر شعر بساز":
-   - شعر جدید بساز، اما بگو "به سبک..."
+فرمت اجباری شعر:
+مصرع اول بیت اول
+مصرع دوم بیت اول
 
-3. اگر فقط بگوید "یک شعر بنویس":
-   - شعر اصلی تولید کن
-
-قوانین شعر:
-- شعر باید روان، احساسی و ادبی باشد
-- قالب دوبیتی یا آزاد مجاز است
-
-⚠️ مهم:
-- برای شاعران واقعی، ترجیح بده شعر واقعی بیاوری، نه ساختگی
+مصرع اول بیت دوم
+مصرع دوم بیت دوم
 
 ====================
 دانش فرهنگی
@@ -167,8 +200,7 @@ def build_system_prompt():
 ====================
 نمونه‌ها
 ====================
-{example_block}
-"""
+{example_block}"""
 
 def build_tutor_prompt(subject, grade):
     knowledge = load_knowledge()
@@ -177,13 +209,17 @@ def build_tutor_prompt(subject, grade):
         dialect_rules += f'- بگو "{item["correct"]}" نه "{item["wrong"]}"\n'
 
     return f"""تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
-فقط به دری افغانی جواب بده. هیچ زبان دیگری استفاده نکن.
+فقط به دری افغانی جواب بده.
 
 مضمون: {subject}
 سطح: {grade}
 
 قوانین گویش:
 {dialect_rules}
+
+فرمت‌بندی:
+- از Markdown استفاده کن
+- مفاهیم را با **بولد** و لیست واضح کن
 
 روش تدریس:
 - مفاهیم را ساده و با مثال‌های افغانی توضیح بده
@@ -192,20 +228,67 @@ def build_tutor_prompt(subject, grade):
 - اگر جواب غلط بود با مهربانی تصحیح کن
 - از کلمات افغانی مثل احسنت، آفرین، عالی استفاده کن"""
 
-# ── GROQ ──
-def openai_chat(system_prompt, history, user_message, temperature=0.6):
-    messages = [{"role": "system", "content": system_prompt}]
-    messages += history
-    messages.append({"role": "user", "content": user_message})
+# ── MODEL ROUTING ──
+def choose_model(message):
+    poetry_words  = ['شعر', 'رباعی', 'غزل', 'مثنوی', 'دوبیتی', 'قصیده']
+    complex_words = ['توضیح', 'تحلیل', 'مقایسه', 'تاریخ', 'فلسفه', 'علمی',
+                     'ریاضی', 'فزیک', 'کیمیا', 'چرا', 'چطور', 'بنویس', 'بساز']
 
-    response = client.chat.completions.create(
+    if any(w in message for w in poetry_words):
+        return "gpt-4o"
+    if any(w in message for w in complex_words):
+        return "gpt-4o"
+    if len(message) > 80:
+        return "gpt-4o"
+    return "gpt-3.5-turbo"
+
+# ── CHAT FUNCTIONS ──
+def call_openai(system_prompt, messages, temperature=0.7):
+    response = openai_client.chat.completions.create(
         model="gpt-4o",
-        messages=messages,
+        messages=[{"role": "system", "content": system_prompt}] + messages,
         temperature=temperature,
-        max_tokens=800,
+        max_tokens=1000,
     )
-
     return response.choices[0].message.content
+
+def call_groq(system_prompt, messages, temperature=0.7):
+    msgs = [{"role": "system", "content": system_prompt}] + messages
+    for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        try:
+            response = groq_client.chat.completions.create(
+                model=model,
+                messages=msgs,
+                temperature=temperature,
+                max_tokens=800,
+                top_p=0.9
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            if "rate_limit" in str(e).lower() or "429" in str(e):
+                continue
+            raise e
+    return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید."
+
+def smart_chat(system_prompt, history, user_message, temperature=0.7, force_groq=False):
+    """
+    Returns (reply, used_groq, reset_time)
+    used_groq=True means we switched to fallback
+    """
+    messages = history + [{"role": "user", "content": user_message}]
+
+    if force_groq:
+        return call_groq(system_prompt, messages, temperature), True, None
+
+    is_limited, count, reset_str = check_and_increment_limit()
+
+    if is_limited:
+        reply = call_groq(system_prompt, messages, temperature)
+        return reply, True, reset_str
+
+    reply = call_openai(system_prompt, messages, temperature)
+    return reply, False, None
+
 # ── AUTH ROUTES ──
 @app.route("/register")
 def register_page():
@@ -306,12 +389,22 @@ def chat():
     history      = data.get("history", [])
     conv_id      = data.get("conversation_id")
 
-    reply = openai_chat(
+    reply, used_groq, reset_time = smart_chat(
         system_prompt=build_system_prompt(),
         history=history[-10:],
         user_message=user_message,
-        temperature=0.6
+        temperature=0.7
     )
+
+    # build response
+    response_data = {"reply": reply}
+
+    if used_groq and reset_time:
+        response_data["limit_notice"] = (
+            f"⚡ سقف ۱۰ پیام خیام اصلی تمام شد. "
+            f"اکنون با نسخه پایه‌تر صحبت می‌کنید. "
+            f"محدودیت در ساعت {reset_time} بازنشینی می‌شود."
+        )
 
     if current_user.is_authenticated:
         if conv_id:
@@ -340,9 +433,9 @@ def chat():
         ))
         conv.updated_at = datetime.utcnow()
         db.session.commit()
-        return jsonify({"reply": reply, "conversation_id": conv.id})
+        response_data["conversation_id"] = conv.id
 
-    return jsonify({"reply": reply})
+    return jsonify(response_data)
 
 # ── TUTOR API ──
 @app.route("/api/tutor-chat", methods=["POST"])
@@ -353,7 +446,7 @@ def tutor_chat():
     subject      = data.get("subject", "عمومی")
     grade        = data.get("grade", "متوسط")
 
-    reply = openai_chat(
+    reply, used_groq, reset_time = smart_chat(
         system_prompt=build_tutor_prompt(subject, grade),
         history=history[-12:],
         user_message=user_message,
@@ -369,7 +462,7 @@ def persona_chat():
     history        = data.get("history", [])
     persona_prompt = data.get("persona_prompt", "")
 
-    reply = openai_chat(
+    reply, _, _ = smart_chat(
         system_prompt=persona_prompt,
         history=history[-10:],
         user_message=user_message,

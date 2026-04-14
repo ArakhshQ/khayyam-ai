@@ -689,8 +689,23 @@
 
         const data = await res.json();
         removeTyping();
+
+// show limit notice if switched to fallback model
+        if (data.limit_notice) {
+          const notice = document.createElement('div');
+          notice.style.cssText = `
+            text-align: center; font-size: 12px;
+            color: var(--gold); background: rgba(201,168,76,0.08);
+            border: 1px solid var(--gold-dim); border-radius: 8px;
+            padding: 8px 14px; margin: 0 auto; max-width: 500px;
+          `;
+          notice.textContent = data.limit_notice;
+          document.getElementById('messages').appendChild(notice);
+        }
+
         appendBubble('ai', data.reply);
         history.push({ role: 'assistant', content: data.reply });
+
 
         if (currentUser && data.conversation_id) {
           currentConvId = data.conversation_id;
