@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import os
 import json
 import re
+import base64
 
 load_dotenv()
 
@@ -18,6 +19,7 @@ app.secret_key = os.getenv("ADMIN_PASSWORD", "fallback-secret")
 database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB max upload
 
 db.init_app(app)
 
@@ -28,13 +30,13 @@ login_manager.login_view = 'login_page'
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 groq_client   = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-KNOWLEDGE_FILE   = "knowledge.json"
-EXAMPLES_FILE    = "examples.json"
-DAILY_LIMIT      = 10
-RESET_HOURS      = 3
+KNOWLEDGE_FILE = "knowledge.json"
+EXAMPLES_FILE  = "examples.json"
+TOKEN_LIMIT    = 5000   # tokens per window
+RESET_HOURS    = 3
 
-# in-memory rate limit store: { identifier: {"count": N, "window_start": datetime} }
-rate_store = {}
+# token store: { identifier: {"tokens": N, "window_start": timestamp} }
+token_store = {}
 
 with app.app_context():
     db.create_all()
@@ -52,44 +54,45 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# ── RATE LIMITING ──
+# ── TOKEN RATE LIMITING ──
 def get_identifier():
     if current_user.is_authenticated:
         return f"user_{current_user.id}"
     return f"ip_{request.remote_addr}"
 
-def check_and_increment_limit():
+def check_token_limit(tokens_used):
     """
-    Returns (is_limited, used, reset_time_str)
-    is_limited = True means GPT-4o limit hit, switch to Groq
+    Returns (is_limited, tokens_remaining, reset_timestamp_utc)
+    is_limited = True means switch to Groq
+    reset_timestamp_utc is a Unix timestamp the browser can convert to local time
     """
     key = get_identifier()
     now = datetime.now(timezone.utc)
+    now_ts = now.timestamp()
 
-    if key not in rate_store:
-        rate_store[key] = {"count": 0, "window_start": now}
+    if key not in token_store:
+        token_store[key] = {"tokens": 0, "window_start": now_ts}
 
-    entry = rate_store[key]
-    window_start = entry["window_start"]
+    entry = token_store[key]
+    hours_passed = (now_ts - entry["window_start"]) / 3600
 
-    # check if window has expired
-    hours_passed = (now - window_start).total_seconds() / 3600
+    # reset window if expired
     if hours_passed >= RESET_HOURS:
-        entry["count"]        = 0
-        entry["window_start"] = now
+        entry["tokens"]       = 0
+        entry["window_start"] = now_ts
 
-    # calculate reset time
-    reset_at     = window_start.replace(tzinfo=timezone.utc) if window_start.tzinfo is None else window_start
-    reset_at     = reset_at.timestamp() + (RESET_HOURS * 3600)
-    reset_dt     = datetime.fromtimestamp(reset_at, tz=timezone.utc)
-    reset_str    = reset_dt.strftime("%H:%M") + " UTC"
-
-    is_limited = entry["count"] >= DAILY_LIMIT
+    reset_ts = entry["window_start"] + (RESET_HOURS * 3600)
+    remaining = max(0, TOKEN_LIMIT - entry["tokens"])
+    is_limited = entry["tokens"] >= TOKEN_LIMIT
 
     if not is_limited:
-        entry["count"] += 1
+        entry["tokens"] += tokens_used
 
-    return is_limited, entry["count"], reset_str
+    return is_limited, remaining, reset_ts
+
+def estimate_tokens(text):
+    # rough estimate: 1 token ≈ 4 characters
+    return len(text) // 4
 
 # ── KNOWLEDGE ──
 def load_knowledge():
@@ -134,31 +137,22 @@ def build_system_prompt():
     return f"""تو یک دستیار هوشمند به نام خیام هستی که به زبان دری افغانی صحبت می‌کنی.
 
 ====================
-قانون زبان (بسیار مهم)
+قانون زبان
 ====================
 زبان پیش‌فرض: دری افغانی
 
-اما:
-- اگر موضوع آموزشی زبان (مثل انگلیسی) باشد:
-  - مثال‌ها، جملات و تمرین‌ها را به همان زبان بنویس
-  - توضیحات را به دری بده
-- در موضوعات علمی استفاده از نمادها و اصطلاحات بین‌المللی مجاز است (x, H2O, km, etc)
-- اگر کاربر لینکی فرستاد، بگو که نمی‌توانی لینک‌ها را باز کنی
+- اگر موضوع آموزشی زبان باشد، مثال‌ها را به همان زبان بنویس اما توضیحات را به دری بده
+- در موضوعات علمی استفاده از نمادها مجاز است (x, H2O, km)
+- اگر کاربر لینک فرستاد بگو نمی‌توانی باز کنی
+- اگر کاربر تصویر یا فایل فرستاد، آن را به دری توضیح بده
 
 ====================
 هویت و شخصیت
 ====================
 - نام: خیام
 - لحن: گرم، مهربان و صمیمی
-- استفاده از کلمات مانند: برادر، خواهر، تشکر
-- پاسخ‌ها طبیعی و انسانی باشند
+- از کلمات مانند: برادر، خواهر، تشکر استفاده کن
 - هرگز خود را ChatGPT معرفی نکن
-
-====================
-رفتار عمومی
-====================
-- به هر نوع سوال جواب بده
-- پاسخ‌ها واضح، دقیق و قابل فهم باشند
 
 ====================
 فرمت‌بندی (بسیار مهم)
@@ -167,25 +161,24 @@ def build_system_prompt():
 - **متن مهم** را بولد کن
 - برای لیست از - استفاده کن
 - برای تیتر از ## استفاده کن
-- پاراگراف‌ها را با یک خط خالی جدا کن
+- پاراگراف‌ها را با خط خالی جدا کن
 - جواب‌های طولانی را حتماً به بخش‌های جداگانه تقسیم کن
 
 ====================
 حالت ویژه: شعر
 ====================
-وقتی شعر می‌نویسی یا می‌آوری:
+وقتی شعر می‌نویسی:
 - هر مصرع روی یک خط جداگانه
 - بین هر دو بیت یک خط خالی
 - قافیه را در تمام شعر حفظ کن
-- اگر شعر از شاعر واقعی است و مطمئن نیستی، بگو "نمونه‌ای به سبک..."
-- اگر کاربر فقط گفت شعر بنویس — شعر اصیل تولید کن
+- اگر از شاعر واقعی و مطمئن نیستی بگو "به سبک..."
 
-فرمت اجباری شعر:
-مصرع اول بیت اول
-مصرع دوم بیت اول
+فرمت اجباری:
+مصرع اول
+مصرع دوم
 
-مصرع اول بیت دوم
-مصرع دوم بیت دوم
+مصرع سوم
+مصرع چهارم
 
 ====================
 دانش فرهنگی
@@ -217,40 +210,41 @@ def build_tutor_prompt(subject, grade):
 قوانین گویش:
 {dialect_rules}
 
-فرمت‌بندی:
-- از Markdown استفاده کن
-- مفاهیم را با **بولد** و لیست واضح کن
+فرمت: از Markdown استفاده کن. مفاهیم را با **بولد** و لیست واضح کن.
 
 روش تدریس:
 - مفاهیم را ساده و با مثال‌های افغانی توضیح بده
-- بعد از هر توضیح یک سوال کوتاه برای امتحان فهم بپرس
+- بعد از هر توضیح یک سوال کوتاه بپرس
 - اگر جواب درست بود تشویق کن
 - اگر جواب غلط بود با مهربانی تصحیح کن
-- از کلمات افغانی مثل احسنت، آفرین، عالی استفاده کن"""
-
-# ── MODEL ROUTING ──
-def choose_model(message):
-    poetry_words  = ['شعر', 'رباعی', 'غزل', 'مثنوی', 'دوبیتی', 'قصیده']
-    complex_words = ['توضیح', 'تحلیل', 'مقایسه', 'تاریخ', 'فلسفه', 'علمی',
-                     'ریاضی', 'فزیک', 'کیمیا', 'چرا', 'چطور', 'بنویس', 'بساز']
-
-    if any(w in message for w in poetry_words):
-        return "gpt-4o"
-    if any(w in message for w in complex_words):
-        return "gpt-4o"
-    if len(message) > 80:
-        return "gpt-4o"
-    return "gpt-3.5-turbo"
+- از کلمات مثل احسنت، آفرین، عالی استفاده کن"""
 
 # ── CHAT FUNCTIONS ──
-def call_openai(system_prompt, messages, temperature=0.7):
+def call_openai(system_prompt, messages, temperature=0.7, image_b64=None, image_type=None):
+    formatted = []
+    for m in messages:
+        if m["role"] == "user" and image_b64 and m == messages[-1]:
+            formatted.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": m["content"]},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:{image_type};base64,{image_b64}"
+                    }}
+                ]
+            })
+        else:
+            formatted.append(m)
+
     response = openai_client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "system", "content": system_prompt}] + messages,
+        messages=[{"role": "system", "content": system_prompt}] + formatted,
         temperature=temperature,
         max_tokens=1000,
     )
-    return response.choices[0].message.content
+    reply        = response.choices[0].message.content
+    tokens_used  = response.usage.total_tokens
+    return reply, tokens_used
 
 def call_groq(system_prompt, messages, temperature=0.7):
     msgs = [{"role": "system", "content": system_prompt}] + messages
@@ -270,24 +264,65 @@ def call_groq(system_prompt, messages, temperature=0.7):
             raise e
     return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید."
 
-def smart_chat(system_prompt, history, user_message, temperature=0.7, force_groq=False):
+def smart_chat(system_prompt, history, user_message, temperature=0.7,
+               image_b64=None, image_type=None):
     """
-    Returns (reply, used_groq, reset_time)
-    used_groq=True means we switched to fallback
+    Returns (reply, used_groq, reset_timestamp, tokens_remaining)
     """
     messages = history + [{"role": "user", "content": user_message}]
 
-    if force_groq:
-        return call_groq(system_prompt, messages, temperature), True, None
-
-    is_limited, count, reset_str = check_and_increment_limit()
+    # images always need GPT-4o — estimate tokens first
+    estimated = estimate_tokens(user_message) + 500  # +500 for system prompt estimate
+    is_limited, remaining, reset_ts = check_token_limit(estimated)
 
     if is_limited:
         reply = call_groq(system_prompt, messages, temperature)
-        return reply, True, reset_str
+        return reply, True, reset_ts, 0
 
-    reply = call_openai(system_prompt, messages, temperature)
-    return reply, False, None
+    try:
+        reply, actual_tokens = call_openai(
+            system_prompt, messages, temperature, image_b64, image_type
+        )
+        # update with actual token count
+        key = get_identifier()
+        if key in token_store:
+            token_store[key]["tokens"] += (actual_tokens - estimated)
+        remaining = max(0, TOKEN_LIMIT - token_store.get(key, {}).get("tokens", 0))
+        return reply, False, reset_ts, remaining
+    except Exception as e:
+        # fallback to groq on any openai error
+        reply = call_groq(system_prompt, messages, temperature)
+        return reply, True, reset_ts, remaining
+
+# ── DOCUMENT EXTRACTION ──
+def extract_text_from_file(file_bytes, filename):
+    ext = filename.lower().split('.')[-1]
+
+    if ext == 'txt':
+        return file_bytes.decode('utf-8', errors='ignore')
+
+    if ext == 'pdf':
+        try:
+            import fitz  # PyMuPDF
+            doc  = fitz.open(stream=file_bytes, filetype="pdf")
+            text = ""
+            for page in doc:
+                text += page.get_text()
+            return text[:8000]  # limit to 8000 chars
+        except Exception as e:
+            return f"خطا در خواندن PDF: {str(e)}"
+
+    if ext in ['doc', 'docx']:
+        try:
+            import docx
+            import io
+            doc  = docx.Document(io.BytesIO(file_bytes))
+            text = "\n".join([p.text for p in doc.paragraphs])
+            return text[:8000]
+        except Exception as e:
+            return f"خطا در خواندن Word: {str(e)}"
+
+    return "فرمت فایل پشتیبانی نمی‌شود."
 
 # ── AUTH ROUTES ──
 @app.route("/register")
@@ -384,27 +419,56 @@ def admin_panel():
 # ── CHAT API ──
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    data         = request.get_json()
-    user_message = data.get("message", "")
-    history      = data.get("history", [])
-    conv_id      = data.get("conversation_id")
+    # handle both JSON and multipart form data
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        user_message = request.form.get("message", "")
+        history      = json.loads(request.form.get("history", "[]"))
+        conv_id      = request.form.get("conversation_id")
+        conv_id      = int(conv_id) if conv_id else None
 
-    reply, used_groq, reset_time = smart_chat(
+        image_b64  = None
+        image_type = None
+        doc_text   = None
+
+        if 'image' in request.files:
+            img        = request.files['image']
+            img_bytes  = img.read()
+            image_b64  = base64.b64encode(img_bytes).decode('utf-8')
+            image_type = img.content_type or 'image/jpeg'
+            user_message = user_message or "این تصویر را به دری توضیح بده"
+
+        if 'document' in request.files:
+            doc       = request.files['document']
+            doc_bytes = doc.read()
+            doc_text  = extract_text_from_file(doc_bytes, doc.filename)
+            user_message = (user_message or "این سند را خلاصه کن") + \
+                           f"\n\n[محتوای فایل]:\n{doc_text}"
+    else:
+        data         = request.get_json()
+        user_message = data.get("message", "")
+        history      = data.get("history", [])
+        conv_id      = data.get("conversation_id")
+        image_b64    = None
+        image_type   = None
+
+    reply, used_groq, reset_ts, tokens_remaining = smart_chat(
         system_prompt=build_system_prompt(),
         history=history[-10:],
         user_message=user_message,
-        temperature=0.7
+        temperature=0.7,
+        image_b64=image_b64,
+        image_type=image_type
     )
 
-    # build response
-    response_data = {"reply": reply}
+    response_data = {
+        "reply":            reply,
+        "tokens_remaining": tokens_remaining,
+        "reset_timestamp":  reset_ts
+    }
 
-    if used_groq and reset_time:
-        response_data["limit_notice"] = (
-            f"⚡ سقف ۱۰ پیام خیام اصلی تمام شد. "
-            f"اکنون با نسخه پایه‌تر صحبت می‌کنید. "
-            f"محدودیت در ساعت {reset_time} بازنشینی می‌شود."
-        )
+    if used_groq:
+        response_data["limit_notice"] = True
+        response_data["reset_timestamp"] = reset_ts
 
     if current_user.is_authenticated:
         if conv_id:
@@ -446,7 +510,7 @@ def tutor_chat():
     subject      = data.get("subject", "عمومی")
     grade        = data.get("grade", "متوسط")
 
-    reply, used_groq, reset_time = smart_chat(
+    reply, _, _, _ = smart_chat(
         system_prompt=build_tutor_prompt(subject, grade),
         history=history[-12:],
         user_message=user_message,
@@ -462,7 +526,7 @@ def persona_chat():
     history        = data.get("history", [])
     persona_prompt = data.get("persona_prompt", "")
 
-    reply, _, _ = smart_chat(
+    reply, _, _, _ = smart_chat(
         system_prompt=persona_prompt,
         history=history[-10:],
         user_message=user_message,

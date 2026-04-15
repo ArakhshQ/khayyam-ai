@@ -371,6 +371,70 @@
       }
       .chat-wrapper { padding-bottom: 160px; }
     }
+    /* upload button */
+.upload-btn {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s;
+  position: relative;
+}
+.upload-btn:hover { background: var(--surface2); color: var(--text); }
+.upload-btn input[type=file] {
+  position: absolute; inset: 0;
+  opacity: 0; cursor: pointer; width: 100%; height: 100%;
+}
+
+/* file preview */
+.file-preview {
+  max-width: 760px;
+  margin: 0 auto 8px;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.file-preview.visible { display: flex; }
+.file-preview-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-preview-remove {
+  cursor: pointer; color: var(--text-dim);
+  background: none; border: none;
+  font-size: 14px; padding: 0 4px;
+  transition: color 0.2s;
+}
+.file-preview-remove:hover { color: var(--red-lt); }
+
+/* image preview thumbnail */
+.img-preview {
+  width: 36px; height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+/* limit notice */
+.limit-notice {
+  text-align: center;
+  font-size: 12px;
+  color: var(--gold);
+  background: rgba(201,168,76,0.08);
+  border: 1px solid var(--gold-dim);
+  border-radius: 8px;
+  padding: 8px 14px;
+  margin: 0 auto;
+  max-width: 500px;
+}
   </style>
 </head>
 <body>
@@ -427,12 +491,22 @@
       </div>
 
       <div class="input-area">
-        <div class="input-box">
-          <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
-          <button id="send-btn" onclick="sendMessage()">↑</button>
-        </div>
-        <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
-      </div>
+  <div class="file-preview" id="file-preview">
+    <img class="img-preview" id="img-preview" style="display:none"/>
+    <span class="file-preview-name" id="file-preview-name"></span>
+    <button class="file-preview-remove" onclick="clearFile()">✕</button>
+  </div>
+  <div class="input-box">
+    <button class="upload-btn" title="آپلود تصویر یا فایل">
+      📎
+      <input type="file" id="file-input" accept="image/*,.pdf,.doc,.docx,.txt"
+             onchange="handleFileSelect(this)"/>
+    </button>
+    <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
+    <button id="send-btn" onclick="sendMessage()">↑</button>
+  </div>
+  <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
+</div>
     </div>
 
   </div>
@@ -662,65 +736,123 @@
     }
 
     // ── SEND MESSAGE ──
-    async function sendMessage() {
-      const input = document.getElementById('user-input');
-      const text  = input.value.trim();
-      if (!text || isLoading) return;
+    // ── FILE HANDLING ──
+let selectedFile     = null;
+let selectedFileType = null; // 'image' or 'document'
 
-      isLoading = true;
-      document.getElementById('send-btn').disabled = true;
-      input.value = '';
-      input.style.height = 'auto';
+function handleFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
 
-      appendBubble('user', text);
-      showTyping();
-      history.push({ role: 'user', content: text });
+  selectedFile = file;
+  const preview  = document.getElementById('file-preview');
+  const nameEl   = document.getElementById('file-preview-name');
+  const imgEl    = document.getElementById('img-preview');
 
-      try {
-        const res = await fetch('/api/chat', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message:         text,
-            history:         history.slice(-10),
-            conversation_id: currentConvId
-          })
-        });
+  nameEl.textContent = file.name;
+  preview.classList.add('visible');
 
-        const data = await res.json();
-        removeTyping();
+  if (file.type.startsWith('image/')) {
+    selectedFileType = 'image';
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      imgEl.src = e.target.result;
+      imgEl.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+  } else {
+    selectedFileType = 'document';
+    imgEl.style.display = 'none';
+  }
+}
 
-// show limit notice if switched to fallback model
-        if (data.limit_notice) {
-          const notice = document.createElement('div');
-          notice.style.cssText = `
-            text-align: center; font-size: 12px;
-            color: var(--gold); background: rgba(201,168,76,0.08);
-            border: 1px solid var(--gold-dim); border-radius: 8px;
-            padding: 8px 14px; margin: 0 auto; max-width: 500px;
-          `;
-          notice.textContent = data.limit_notice;
-          document.getElementById('messages').appendChild(notice);
-        }
+function clearFile() {
+  selectedFile     = null;
+  selectedFileType = null;
+  document.getElementById('file-input').value   = '';
+  document.getElementById('file-preview').classList.remove('visible');
+  document.getElementById('img-preview').src    = '';
+  document.getElementById('img-preview').style.display = 'none';
+}
 
-        appendBubble('ai', data.reply);
-        history.push({ role: 'assistant', content: data.reply });
+// ── SEND MESSAGE ──
+async function sendMessage() {
+  const input = document.getElementById('user-input');
+  const text  = input.value.trim();
+  if ((!text && !selectedFile) || isLoading) return;
 
+  isLoading = true;
+  document.getElementById('send-btn').disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
 
-        if (currentUser && data.conversation_id) {
-          currentConvId = data.conversation_id;
-          await loadSidebar();
-        }
+  // show user message with file indicator
+  const displayText = text || (selectedFileType === 'image' ? '📷 تصویر' : '📄 فایل');
+  appendBubble('user', displayText);
+  showTyping();
+  history.push({ role: 'user', content: text || displayText });
 
-      } catch (err) {
-        removeTyping();
-        appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+  try {
+    let res;
+
+    if (selectedFile) {
+      // use FormData for file upload
+      const formData = new FormData();
+      formData.append('message', text);
+      formData.append('history', JSON.stringify(history.slice(-10)));
+      if (currentConvId) formData.append('conversation_id', currentConvId);
+
+      if (selectedFileType === 'image') {
+        formData.append('image', selectedFile);
+      } else {
+        formData.append('document', selectedFile);
       }
 
-      isLoading = false;
-      document.getElementById('send-btn').disabled = false;
-      input.focus();
+      res = await fetch('/api/chat', { method: 'POST', body: formData });
+    } else {
+      res = await fetch('/api/chat', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message:         text,
+          history:         history.slice(-10),
+          conversation_id: currentConvId
+        })
+      });
     }
+
+    const data = await res.json();
+    removeTyping();
+
+    // show limit notice if switched to fallback
+    if (data.limit_notice && data.reset_timestamp) {
+      const resetDate   = new Date(data.reset_timestamp * 1000);
+      const localTime   = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const notice      = document.createElement('div');
+      notice.className  = 'limit-notice';
+      notice.textContent = `⚡ حد توکن خیام اصلی تمام شد. اکنون با نسخه ضعیفتر خیام صحبت می‌کنید. محدودیت در ساعت ${localTime} بازنشینی می‌شود.`;
+      document.getElementById('messages').appendChild(notice);
+      scrollToBottom();
+    }
+
+    appendBubble('ai', data.reply);
+    history.push({ role: 'assistant', content: data.reply });
+    clearFile();
+
+    if (currentUser && data.conversation_id) {
+      currentConvId = data.conversation_id;
+      await loadSidebar();
+    }
+
+  } catch (err) {
+    removeTyping();
+    appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+  }
+
+  isLoading = false;
+  document.getElementById('send-btn').disabled = false;
+  input.focus();
+}
 
     // ── INPUT BEHAVIOR ──
     const inputEl = document.getElementById('user-input');
