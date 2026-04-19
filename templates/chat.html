@@ -824,13 +824,16 @@ async function sendMessage() {
     const data = await res.json();
     removeTyping();
 
-    // show limit notice if switched to fallback
-    if (data.limit_notice && data.reset_timestamp) {
-      const resetDate   = new Date(data.reset_timestamp * 1000);
-      const localTime   = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const notice      = document.createElement('div');
-      notice.className  = 'limit-notice';
-      notice.textContent = `⚡ حد توکن خیام اصلی تمام شد. اکنون با نسخه ضعیفتر خیام صحبت می‌کنید. محدودیت در ساعت ${localTime} بازنشینی می‌شود.`;
+    // show neutral switch notice
+    if (data.switch_notice && data.reset_ts) {
+      const resetDate  = new Date(data.reset_ts * 1000);
+      const localTime  = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const notice     = document.createElement('div');
+      notice.style.cssText = `
+        text-align:center; font-size:12px; color:var(--gold);
+        background:rgba(201,168,76,0.08); border:1px solid var(--gold-dim);
+        border-radius:8px; padding:8px 14px; margin:0 auto; max-width:500px;`;
+      notice.textContent = `⚡ خیام در حال تنظیم پاسخ است. بازنشینی در ساعت ${localTime}`;
       document.getElementById('messages').appendChild(notice);
       scrollToBottom();
     }

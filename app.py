@@ -4,9 +4,9 @@ from functools import wraps
 from openai import OpenAI
 from groq import Groq
 from dotenv import load_dotenv
-from database import db, User, Conversation, Message
+from database import db, User, Conversation, Message, Memory, UserTokenUsage
 from auth import register_user, login_user_by_username
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
 import json
 import re
@@ -19,7 +19,7 @@ app.secret_key = os.getenv("ADMIN_PASSWORD", "fallback-secret")
 database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB max upload
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
 
 db.init_app(app)
 
@@ -32,11 +32,42 @@ groq_client   = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 KNOWLEDGE_FILE = "knowledge.json"
 EXAMPLES_FILE  = "examples.json"
-TOKEN_LIMIT    = 5000   # tokens per window
-RESET_HOURS    = 3
 
-# token store: { identifier: {"tokens": N, "window_start": timestamp} }
-token_store = {}
+# ── PLAN CONFIGURATION ──
+# Each plan defines a cascade of (model, limit, reset_period)
+# reset_period: 'daily' or 'monthly'
+# limit: token limit — None means unlimited
+
+PLAN_CONFIG = {
+    'free': [
+        {'model': 'gpt-5.4-mini',           'tier': 1, 'limit': 3000,    'reset': 'daily'},
+        {'model': 'gpt-5.4-nano',           'tier': 2, 'limit': 3000,    'reset': 'daily'},
+        {'model': 'llama-3.3-70b-versatile','tier': 3, 'limit': None,    'reset': None},
+    ],
+    'basic': [
+        {'model': 'gpt-5.4-mini',           'tier': 1, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',           'tier': 2, 'limit': 200000,  'reset': 'monthly'},
+        {'model': 'llama-3.3-70b-versatile','tier': 3, 'limit': None,    'reset': None},
+    ],
+    'pro': [
+        {'model': 'gpt-5.4-mini',           'tier': 1, 'limit': 500000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',           'tier': 2, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'llama-3.3-70b-versatile','tier': 3, 'limit': None,    'reset': None},
+    ],
+    'premium': [
+        {'model': 'gpt-5.4',                'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
+        {'model': 'gpt-5.4-mini',           'tier': 2, 'limit': 500000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',           'tier': 3, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'llama-3.3-70b-versatile','tier': 4, 'limit': None,    'reset': None},
+    ],
+}
+
+PLAN_NAMES = {
+    'free':    'رایگان',
+    'basic':   'پایه — $10',
+    'pro':     'حرفه‌ای — $20',
+    'premium': 'پریمیوم — $40',
+}
 
 with app.app_context():
     db.create_all()
@@ -54,45 +85,116 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# ── TOKEN RATE LIMITING ──
-def get_identifier():
-    if current_user.is_authenticated:
-        return f"user_{current_user.id}"
-    return f"ip_{request.remote_addr}"
+# ── TOKEN USAGE (DATABASE BACKED) ──
+def get_or_create_usage(user_id):
+    usage = UserTokenUsage.query.filter_by(user_id=user_id).first()
+    if not usage:
+        usage = UserTokenUsage(user_id=user_id)
+        db.session.add(usage)
+        db.session.commit()
+    return usage
 
-def check_token_limit(tokens_used):
+def should_reset(reset_at, period):
+    if period is None:
+        return False
+    now = datetime.utcnow()
+    if period == 'daily':
+        return (now - reset_at).total_seconds() >= 86400
+    if period == 'monthly':
+        return (now - reset_at).total_seconds() >= 2592000  # 30 days
+    return False
+
+def get_reset_timestamp(reset_at, period):
+    if period == 'daily':
+        reset_time = reset_at + timedelta(days=1)
+    elif period == 'monthly':
+        reset_time = reset_at + timedelta(days=30)
+    else:
+        return None
+    return reset_time.replace(tzinfo=timezone.utc).timestamp()
+
+def pick_model_and_update(user_id, plan, tokens_to_use):
     """
-    Returns (is_limited, tokens_remaining, reset_timestamp_utc)
-    is_limited = True means switch to Groq
-    reset_timestamp_utc is a Unix timestamp the browser can convert to local time
+    Picks the right model based on plan and current usage.
+    Updates token counts in DB.
+    Returns (model_string, tier_index, reset_timestamp, switched)
+    switched=True means we moved to a fallback tier
     """
-    key = get_identifier()
-    now = datetime.now(timezone.utc)
-    now_ts = now.timestamp()
+    cascade  = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
+    usage    = get_or_create_usage(user_id)
+    switched = False
 
-    if key not in token_store:
-        token_store[key] = {"tokens": 0, "window_start": now_ts}
+    for i, tier in enumerate(cascade):
+        model  = tier['model']
+        limit  = tier['limit']
+        period = tier['reset']
+        t      = tier['tier']
 
-    entry = token_store[key]
-    hours_passed = (now_ts - entry["window_start"]) / 3600
+        # unlimited tier — always use this
+        if limit is None:
+            if i > 0:
+                switched = True
+            return model, t, None, switched
 
-    # reset window if expired
-    if hours_passed >= RESET_HOURS:
-        entry["tokens"]       = 0
-        entry["window_start"] = now_ts
+        # get current usage for this tier
+        tokens_used = getattr(usage, f'tier{t}_tokens', 0)
+        reset_at    = getattr(usage, f'tier{t}_reset', datetime.utcnow())
 
-    reset_ts = entry["window_start"] + (RESET_HOURS * 3600)
-    remaining = max(0, TOKEN_LIMIT - entry["tokens"])
-    is_limited = entry["tokens"] >= TOKEN_LIMIT
+        # check if reset needed
+        if should_reset(reset_at, period):
+            setattr(usage, f'tier{t}_tokens', 0)
+            setattr(usage, f'tier{t}_reset', datetime.utcnow())
+            tokens_used = 0
 
-    if not is_limited:
-        entry["tokens"] += tokens_used
+        # check if within limit
+        if tokens_used + tokens_to_use <= limit:
+            # use this tier
+            setattr(usage, f'tier{t}_tokens', tokens_used + tokens_to_use)
+            usage.updated_at = datetime.utcnow()
+            db.session.commit()
+            reset_ts = get_reset_timestamp(reset_at, period)
+            if i > 0:
+                switched = True
+            return model, t, reset_ts, switched
 
-    return is_limited, remaining, reset_ts
+        # limit exceeded — try next tier
+        if i > 0:
+            switched = True
 
-def estimate_tokens(text):
-    # rough estimate: 1 token ≈ 4 characters
-    return len(text) // 4
+    # all tiers exhausted — use last tier (llama)
+    last = cascade[-1]
+    return last['model'], last['tier'], None, True
+
+def get_usage_summary(user_id, plan):
+    cascade = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
+    usage   = get_or_create_usage(user_id)
+    summary = []
+
+    for tier in cascade:
+        t      = tier['tier']
+        limit  = tier['limit']
+        period = tier['reset']
+
+        if limit is None:
+            continue
+
+        tokens_used = getattr(usage, f'tier{t}_tokens', 0)
+        reset_at    = getattr(usage, f'tier{t}_reset', datetime.utcnow())
+
+        if should_reset(reset_at, period):
+            tokens_used = 0
+
+        reset_ts = get_reset_timestamp(reset_at, period)
+        summary.append({
+            'model':      tier['model'],
+            'used':       tokens_used,
+            'limit':      limit,
+            'reset_ts':   reset_ts,
+            'period':     period,
+            'remaining':  max(0, limit - tokens_used)
+        })
+
+    return summary
 
 # ── KNOWLEDGE ──
 def load_knowledge():
@@ -117,8 +219,56 @@ def save_examples(data):
     with open(EXAMPLES_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+# ── MEMORY ──
+def get_user_memories(user_id):
+    memories = Memory.query.filter_by(user_id=user_id).order_by(Memory.created_at.desc()).all()
+    return [m.content for m in memories]
+
+def extract_and_save_memory(user_id, user_message):
+    trigger_words = [
+        'یادت باشد', 'ذخیره کن', 'به یاد داشته باش', 'فراموش نکن',
+        'remember', 'save this', 'note that', 'keep in mind',
+        'بدان که', 'حفظ کن'
+    ]
+    if not any(word in user_message for word in trigger_words):
+        return
+
+    try:
+        extraction_prompt = f"""کاربر این پیام را فرستاده:
+"{user_message}"
+
+اگر کاربر خواسته چیزی به یاد سپرده شود، آن را یک جمله کوتاه بنویس.
+اگر نه، فقط بنویس: NONE"""
+
+        response = openai_client.chat.completions.create(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": extraction_prompt}],
+            max_tokens=80,
+            temperature=0.1
+        )
+        memory_text = response.choices[0].message.content.strip()
+
+        if memory_text and memory_text != "NONE" and len(memory_text) > 3:
+            existing = Memory.query.filter_by(user_id=user_id, content=memory_text).first()
+            if not existing:
+                db.session.add(Memory(user_id=user_id, content=memory_text))
+                db.session.commit()
+    except Exception as e:
+        print(f"Memory extraction error: {e}")
+
+# ── DARI FILTER ──
+def filter_non_dari(text):
+    cleaned = re.sub(
+        r'[^\u0600-\u06FF\u200c\u200d\s\d\.\،\؟\!\:\؛\-\(\)\[\]\"\'\/\n\+\=\*\%\#]',
+        '',
+        text
+    )
+    cleaned = re.sub(r'  +', ' ', cleaned)
+    cleaned = cleaned.strip()
+    return cleaned if cleaned else text
+
 # ── PROMPTS ──
-def build_system_prompt():
+def build_system_prompt(user_memories=None):
     knowledge = load_knowledge()
     examples  = load_examples()
 
@@ -134,14 +284,21 @@ def build_system_prompt():
     for ex in examples.get("conversation_examples", []):
         example_block += f'User: {ex["user"]}\nAssistant: {ex["assistant"]}\n\n'
 
+    memory_block = ""
+    if user_memories:
+        memory_block = "====================\nحافظه کاربر\n====================\n"
+        for mem in user_memories:
+            memory_block += f"- {mem}\n"
+        memory_block += "\n"
+
     return f"""تو یک دستیار هوشمند به نام خیام هستی که به زبان دری افغانی صحبت می‌کنی.
 
+{memory_block}
 ====================
 قانون زبان
 ====================
 زبان پیش‌فرض: دری افغانی
-
-- اگر موضوع آموزشی زبان باشد، مثال‌ها را به همان زبان بنویس اما توضیحات را به دری بده
+- اگر موضوع آموزش زبان باشد، مثال‌ها را به همان زبان بنویس اما توضیحات را به دری بده
 - در موضوعات علمی استفاده از نمادها مجاز است (x, H2O, km)
 - اگر کاربر لینک فرستاد بگو نمی‌توانی باز کنی
 - اگر کاربر تصویر یا فایل فرستاد، آن را به دری توضیح بده
@@ -162,7 +319,7 @@ def build_system_prompt():
 - برای لیست از - استفاده کن
 - برای تیتر از ## استفاده کن
 - پاراگراف‌ها را با خط خالی جدا کن
-- جواب‌های طولانی را حتماً به بخش‌های جداگانه تقسیم کن
+- جواب‌های طولانی را به بخش‌های جداگانه تقسیم کن
 
 ====================
 حالت ویژه: شعر
@@ -220,7 +377,8 @@ def build_tutor_prompt(subject, grade):
 - از کلمات مثل احسنت، آفرین، عالی استفاده کن"""
 
 # ── CHAT FUNCTIONS ──
-def call_openai(system_prompt, messages, temperature=0.7, image_b64=None, image_type=None):
+def call_openai_model(model, system_prompt, messages, temperature=0.7,
+                      image_b64=None, image_type=None):
     formatted = []
     for m in messages:
         if m["role"] == "user" and image_b64 and m == messages[-1]:
@@ -237,16 +395,16 @@ def call_openai(system_prompt, messages, temperature=0.7, image_b64=None, image_
             formatted.append(m)
 
     response = openai_client.chat.completions.create(
-        model="gpt-4o",
+        model=model,
         messages=[{"role": "system", "content": system_prompt}] + formatted,
         temperature=temperature,
         max_tokens=1000,
     )
-    reply        = response.choices[0].message.content
-    tokens_used  = response.usage.total_tokens
+    reply       = response.choices[0].message.content
+    tokens_used = response.usage.total_tokens
     return reply, tokens_used
 
-def call_groq(system_prompt, messages, temperature=0.7):
+def call_groq_model(system_prompt, messages, temperature=0.7):
     msgs = [{"role": "system", "content": system_prompt}] + messages
     for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
         try:
@@ -257,71 +415,84 @@ def call_groq(system_prompt, messages, temperature=0.7):
                 max_tokens=800,
                 top_p=0.9
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content, 0
         except Exception as e:
             if "rate_limit" in str(e).lower() or "429" in str(e):
                 continue
             raise e
-    return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید."
+    return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", 0
 
-def smart_chat(system_prompt, history, user_message, temperature=0.7,
-               image_b64=None, image_type=None):
+def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
+               temperature=0.7, image_b64=None, image_type=None):
     """
-    Returns (reply, used_groq, reset_timestamp, tokens_remaining)
+    Returns (reply, switched, reset_timestamp, model_used)
+    switched=True means fell back to a lower tier
     """
-    messages = history + [{"role": "user", "content": user_message}]
+    messages       = history + [{"role": "user", "content": user_message}]
+    estimated_tokens = len(user_message) // 4 + 300
 
-    # images always need GPT-4o — estimate tokens first
-    estimated = estimate_tokens(user_message) + 500  # +500 for system prompt estimate
-    is_limited, remaining, reset_ts = check_token_limit(estimated)
+    if user_id is None:
+        # guest — use nano directly, no tracking
+        try:
+            reply, _ = call_openai_model(
+                'gpt-5.4-nano', system_prompt, messages,
+                temperature, image_b64, image_type
+            )
+            return reply, False, None, 'gpt-5.4-nano'
+        except:
+            reply, _ = call_groq_model(system_prompt, messages, temperature)
+            return reply, True, None, 'llama'
 
-    if is_limited:
-        reply = call_groq(system_prompt, messages, temperature)
-        return reply, True, reset_ts, 0
+    model, tier, reset_ts, switched = pick_model_and_update(
+        user_id, plan, estimated_tokens
+    )
 
+    # groq model — free tier
+    if 'llama' in model:
+        reply, _ = call_groq_model(system_prompt, messages, temperature)
+        return reply, switched, reset_ts, model
+
+    # openai model
     try:
-        reply, actual_tokens = call_openai(
-            system_prompt, messages, temperature, image_b64, image_type
+        reply, actual_tokens = call_openai_model(
+            model, system_prompt, messages,
+            temperature, image_b64, image_type
         )
-        # update with actual token count
-        key = get_identifier()
-        if key in token_store:
-            token_store[key]["tokens"] += (actual_tokens - estimated)
-        remaining = max(0, TOKEN_LIMIT - token_store.get(key, {}).get("tokens", 0))
-        return reply, False, reset_ts, remaining
+        # adjust token count with actual usage
+        if actual_tokens > estimated_tokens:
+            diff = actual_tokens - estimated_tokens
+            usage = get_or_create_usage(user_id)
+            current = getattr(usage, f'tier{tier}_tokens', 0)
+            setattr(usage, f'tier{tier}_tokens', current + diff)
+            db.session.commit()
+        return reply, switched, reset_ts, model
     except Exception as e:
-        # fallback to groq on any openai error
-        reply = call_groq(system_prompt, messages, temperature)
-        return reply, True, reset_ts, remaining
+        print(f"OpenAI error: {e}")
+        # fallback to groq
+        reply, _ = call_groq_model(system_prompt, messages, temperature)
+        return reply, True, reset_ts, 'llama'
 
 # ── DOCUMENT EXTRACTION ──
 def extract_text_from_file(file_bytes, filename):
     ext = filename.lower().split('.')[-1]
-
     if ext == 'txt':
         return file_bytes.decode('utf-8', errors='ignore')
-
     if ext == 'pdf':
         try:
-            import fitz  # PyMuPDF
+            import fitz
             doc  = fitz.open(stream=file_bytes, filetype="pdf")
-            text = ""
-            for page in doc:
-                text += page.get_text()
-            return text[:8000]  # limit to 8000 chars
+            text = "".join([page.get_text() for page in doc])
+            return text[:8000]
         except Exception as e:
             return f"خطا در خواندن PDF: {str(e)}"
-
     if ext in ['doc', 'docx']:
         try:
-            import docx
-            import io
+            import docx, io
             doc  = docx.Document(io.BytesIO(file_bytes))
             text = "\n".join([p.text for p in doc.paragraphs])
             return text[:8000]
         except Exception as e:
             return f"خطا در خواندن Word: {str(e)}"
-
     return "فرمت فایل پشتیبانی نمی‌شود."
 
 # ── AUTH ROUTES ──
@@ -347,6 +518,10 @@ def logout():
 @login_required
 def profile_page():
     return render_template("profile.html")
+
+@app.route("/pricing")
+def pricing_page():
+    return render_template("pricing.html")
 
 @app.route("/api/register", methods=["POST"])
 def api_register():
@@ -389,9 +564,19 @@ def api_me():
             "username":  current_user.username,
             "email":     current_user.email,
             "phone":     current_user.phone,
-            "is_admin":  current_user.is_admin
+            "is_admin":  current_user.is_admin,
+            "plan":      current_user.plan
         })
     return jsonify({"logged_in": False})
+
+@app.route("/api/usage")
+@login_required
+def api_usage():
+    summary = get_usage_summary(current_user.id, current_user.plan)
+    return jsonify({
+        "plan":    current_user.plan,
+        "summary": summary
+    })
 
 # ── MAIN ROUTES ──
 @app.route("/")
@@ -419,16 +604,13 @@ def admin_panel():
 # ── CHAT API ──
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    # handle both JSON and multipart form data
     if request.content_type and 'multipart/form-data' in request.content_type:
         user_message = request.form.get("message", "")
         history      = json.loads(request.form.get("history", "[]"))
         conv_id      = request.form.get("conversation_id")
         conv_id      = int(conv_id) if conv_id else None
-
-        image_b64  = None
-        image_type = None
-        doc_text   = None
+        image_b64    = None
+        image_type   = None
 
         if 'image' in request.files:
             img        = request.files['image']
@@ -438,9 +620,9 @@ def chat():
             user_message = user_message or "این تصویر را به دری توضیح بده"
 
         if 'document' in request.files:
-            doc       = request.files['document']
-            doc_bytes = doc.read()
-            doc_text  = extract_text_from_file(doc_bytes, doc.filename)
+            doc          = request.files['document']
+            doc_bytes    = doc.read()
+            doc_text     = extract_text_from_file(doc_bytes, doc.filename)
             user_message = (user_message or "این سند را خلاصه کن") + \
                            f"\n\n[محتوای فایل]:\n{doc_text}"
     else:
@@ -451,49 +633,50 @@ def chat():
         image_b64    = None
         image_type   = None
 
-    reply, used_groq, reset_ts, tokens_remaining = smart_chat(
-        system_prompt=build_system_prompt(),
+    user_id = current_user.id if current_user.is_authenticated else None
+    plan    = current_user.plan if current_user.is_authenticated else 'free'
+
+    user_memories = get_user_memories(user_id) if user_id else None
+
+    reply, switched, reset_ts, model_used = smart_chat(
+        system_prompt=build_system_prompt(user_memories=user_memories),
         history=history[-10:],
         user_message=user_message,
+        user_id=user_id,
+        plan=plan,
         temperature=0.7,
         image_b64=image_b64,
         image_type=image_type
     )
 
-    response_data = {
-        "reply":            reply,
-        "tokens_remaining": tokens_remaining,
-        "reset_timestamp":  reset_ts
-    }
+    if user_id:
+        extract_and_save_memory(user_id, user_message)
 
-    if used_groq:
-        response_data["limit_notice"] = True
-        response_data["reset_timestamp"] = reset_ts
+    response_data = {"reply": reply}
+
+    if switched and reset_ts:
+        response_data["switch_notice"] = True
+        response_data["reset_ts"]      = reset_ts
 
     if current_user.is_authenticated:
         if conv_id:
             conv = Conversation.query.filter_by(
-                id=conv_id,
-                user_id=current_user.id
+                id=conv_id, user_id=current_user.id
             ).first()
         else:
             conv = None
 
         if not conv:
-            title = user_message[:60] if len(user_message) > 0 else "گفتگوی جدید"
+            title = user_message[:60] if user_message else "گفتگوی جدید"
             conv  = Conversation(user_id=current_user.id, title=title)
             db.session.add(conv)
             db.session.flush()
 
         db.session.add(Message(
-            conversation_id=conv.id,
-            role='user',
-            content=user_message
+            conversation_id=conv.id, role='user', content=user_message
         ))
         db.session.add(Message(
-            conversation_id=conv.id,
-            role='assistant',
-            content=reply
+            conversation_id=conv.id, role='assistant', content=reply
         ))
         conv.updated_at = datetime.utcnow()
         db.session.commit()
@@ -510,10 +693,15 @@ def tutor_chat():
     subject      = data.get("subject", "عمومی")
     grade        = data.get("grade", "متوسط")
 
+    user_id = current_user.id if current_user.is_authenticated else None
+    plan    = current_user.plan if current_user.is_authenticated else 'free'
+
     reply, _, _, _ = smart_chat(
         system_prompt=build_tutor_prompt(subject, grade),
         history=history[-12:],
         user_message=user_message,
+        user_id=user_id,
+        plan=plan,
         temperature=0.6
     )
     return jsonify({"reply": reply})
@@ -526,10 +714,15 @@ def persona_chat():
     history        = data.get("history", [])
     persona_prompt = data.get("persona_prompt", "")
 
+    user_id = current_user.id if current_user.is_authenticated else None
+    plan    = current_user.plan if current_user.is_authenticated else 'free'
+
     reply, _, _, _ = smart_chat(
         system_prompt=persona_prompt,
         history=history[-10:],
         user_message=user_message,
+        user_id=user_id,
+        plan=plan,
         temperature=0.9
     )
     return jsonify({"reply": reply})
@@ -551,8 +744,7 @@ def get_conversations():
 @login_required
 def get_conversation(conv_id):
     conv = Conversation.query.filter_by(
-        id=conv_id,
-        user_id=current_user.id
+        id=conv_id, user_id=current_user.id
     ).first_or_404()
     return jsonify(conv.to_dict())
 
@@ -560,10 +752,40 @@ def get_conversation(conv_id):
 @login_required
 def delete_conversation(conv_id):
     conv = Conversation.query.filter_by(
-        id=conv_id,
-        user_id=current_user.id
+        id=conv_id, user_id=current_user.id
     ).first_or_404()
     db.session.delete(conv)
+    db.session.commit()
+    return jsonify({"success": True})
+
+# ── MEMORY APIs ──
+@app.route("/api/memories", methods=["GET"])
+@login_required
+def get_memories():
+    memories = Memory.query.filter_by(
+        user_id=current_user.id
+    ).order_by(Memory.created_at.desc()).all()
+    return jsonify([m.to_dict() for m in memories])
+
+@app.route("/api/memories", methods=["POST"])
+@login_required
+def add_memory():
+    data    = request.get_json()
+    content = data.get("content", "").strip()
+    if not content:
+        return jsonify({"success": False, "error": "محتوا خالی است"})
+    memory = Memory(user_id=current_user.id, content=content)
+    db.session.add(memory)
+    db.session.commit()
+    return jsonify({"success": True, "memory": memory.to_dict()})
+
+@app.route("/api/memories/<int:memory_id>", methods=["DELETE"])
+@login_required
+def delete_memory(memory_id):
+    memory = Memory.query.filter_by(
+        id=memory_id, user_id=current_user.id
+    ).first_or_404()
+    db.session.delete(memory)
     db.session.commit()
     return jsonify({"success": True})
 
@@ -579,8 +801,22 @@ def get_users():
         "email":      u.email,
         "phone":      u.phone,
         "is_admin":   u.is_admin,
+        "plan":       u.plan,
         "created_at": u.created_at.isoformat()
     } for u in users])
+
+@app.route("/api/admin/users/<int:user_id>/plan", methods=["POST"])
+@login_required
+@admin_required
+def update_user_plan(user_id):
+    data = request.get_json()
+    plan = data.get("plan", "free")
+    if plan not in PLAN_CONFIG:
+        return jsonify({"success": False, "error": "پلان نامعتبر"})
+    user = User.query.get_or_404(user_id)
+    user.plan = plan
+    db.session.commit()
+    return jsonify({"success": True})
 
 @app.route("/api/admin/knowledge", methods=["GET"])
 @login_required

@@ -13,8 +13,12 @@ class User(UserMixin, db.Model):
     username      = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin      = db.Column(db.Boolean, default=False)
+    plan          = db.Column(db.String(20), default='free')  # free, basic, pro, premium
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
+
     conversations = db.relationship('Conversation', backref='user', lazy=True, cascade='all, delete-orphan')
+    memories      = db.relationship('Memory', backref='user', lazy=True, cascade='all, delete-orphan')
+    token_usage   = db.relationship('UserTokenUsage', backref='user', lazy=True, cascade='all, delete-orphan')
 
     def __repr__(self):
         return f'<User {self.username}>'
@@ -51,4 +55,45 @@ class Message(db.Model):
         return {
             'role':    self.role,
             'content': self.content
+        }
+
+class Memory(db.Model):
+    __tablename__ = 'memories'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    content    = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id':         self.id,
+            'content':    self.content,
+            'created_at': self.created_at.isoformat()
+        }
+
+class UserTokenUsage(db.Model):
+    __tablename__ = 'user_token_usage'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    user_id       = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
+    # tier 1 tokens (GPT-5.4 for premium, Mini for others)
+    tier1_tokens  = db.Column(db.Integer, default=0)
+    tier1_reset   = db.Column(db.DateTime, default=datetime.utcnow)
+    # tier 2 tokens (Mini for premium, Nano for others)
+    tier2_tokens  = db.Column(db.Integer, default=0)
+    tier2_reset   = db.Column(db.DateTime, default=datetime.utcnow)
+    # tier 3 tokens (Nano for premium only)
+    tier3_tokens  = db.Column(db.Integer, default=0)
+    tier3_reset   = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at    = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'tier1_tokens': self.tier1_tokens,
+            'tier1_reset':  self.tier1_reset.isoformat(),
+            'tier2_tokens': self.tier2_tokens,
+            'tier2_reset':  self.tier2_reset.isoformat(),
+            'tier3_tokens': self.tier3_tokens,
+            'tier3_reset':  self.tier3_reset.isoformat(),
         }
