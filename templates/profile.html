@@ -209,7 +209,15 @@
       </div>
       <span class="user-badge">رایگان</span>
     </div>
-
+    <!-- USAGE BAR -->
+    <div id="usage-section" style="margin-bottom:28px; display:none;">
+      <div class="section-title">مصرف توکن</div>
+      <div id="usage-bars" style="display:flex; flex-direction:column; gap:10px;"></div>
+      <a href="/pricing" style="display:block; text-align:center; margin-top:12px;
+        font-size:13px; color:var(--gold); text-decoration:none;">
+        ارتقا به پلان بالاتر ←
+      </a>
+    </div>
     <!-- conversations -->
     <div class="section-title">گفتگوهای ذخیره شده</div>
     <div class="conv-list" id="conv-list">
@@ -324,7 +332,48 @@
       await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
       loadConversations();
     }
+    async function loadUsage() {
+      try {
+        const res  = await fetch('/api/usage');
+        const data = await res.json();
+        if (!data.summary || data.summary.length === 0) return;
 
+        const section = document.getElementById('usage-section');
+        const bars    = document.getElementById('usage-bars');
+        section.style.display = 'block';
+
+        data.summary.forEach(tier => {
+          const pct  = Math.min(100, Math.round((tier.used / tier.limit) * 100));
+          const reset = tier.reset_ts
+            ? new Date(tier.reset_ts * 1000).toLocaleDateString('fa-AF')
+            : '—';
+
+          const div = document.createElement('div');
+          div.style.cssText = `
+            background:var(--surface); border:1px solid var(--border);
+            border-radius:10px; padding:12px 16px;`;
+          div.innerHTML = `
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+              <span style="font-size:13px;font-weight:500;color:var(--text);">${tier.model}</span>
+              <span style="font-size:12px;color:var(--text-dim);">
+                ${tier.used.toLocaleString()} / ${tier.limit.toLocaleString()} توکن
+              </span>
+            </div>
+            <div style="height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;">
+              <div style="height:100%;width:${pct}%;background:var(--gold);border-radius:3px;
+                transition:width 0.5s ease;"></div>
+            </div>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:5px;text-align:left;">
+              بازنشینی: ${reset}
+            </div>`;
+          bars.appendChild(div);
+        });
+      } catch(e) {
+        console.log('usage load failed', e);
+      }
+    }
+
+    loadUsage();
     loadUser();
     loadConversations();
   </script>
