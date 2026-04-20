@@ -26,23 +26,31 @@
     }
     .nav-btn:hover { background: var(--surface2); color: var(--text); }
 
-    .page { max-width: 860px; margin: 0 auto; padding: 32px 20px 100px; }
+    .page { max-width: 960px; margin: 0 auto; padding: 28px 20px 100px; }
 
-    .stats {
-      display: grid; grid-template-columns: repeat(4, 1fr);
-      gap: 12px; margin-bottom: 28px;
+    /* ── STATS ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 28px;
     }
 
     .stat-card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 12px; padding: 16px; text-align: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
     }
-    .stat-num { font-size: 28px; font-weight: 700; color: var(--gold); }
+
+    .stat-num { font-size: 26px; font-weight: 700; color: var(--gold); }
     .stat-label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
 
+    /* ── TABS ── */
     .tabs {
       display: flex; gap: 6px; margin-bottom: 24px;
-      border-bottom: 1px solid var(--border); padding-bottom: 0;
+      border-bottom: 1px solid var(--border);
       flex-wrap: wrap;
     }
 
@@ -63,10 +71,11 @@
     .tab-content.active { display: block; }
 
     .section-title {
-      font-size: 15px; font-weight: 700;
+      font-size: 14px; font-weight: 700;
       color: var(--text); margin-bottom: 16px;
     }
 
+    /* ── FORMS ── */
     .add-form {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: 12px; padding: 20px; margin-bottom: 20px;
@@ -75,7 +84,7 @@
     .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
     .form-row:last-child { margin-bottom: 0; }
 
-    input[type=text], textarea {
+    input[type=text], textarea, select {
       flex: 1; min-width: 140px;
       padding: 9px 14px;
       background: var(--surface2); border: 1px solid var(--border);
@@ -83,8 +92,9 @@
       font-family: 'Vazirmatn', sans-serif; font-size: 14px; outline: none;
       transition: border-color 0.2s;
     }
-    input[type=text]:focus, textarea:focus { border-color: var(--gold-dim); }
+    input[type=text]:focus, textarea:focus, select:focus { border-color: var(--gold-dim); }
     textarea { resize: vertical; min-height: 72px; width: 100%; }
+    select option { background: var(--surface2); }
 
     .add-btn {
       padding: 9px 20px; background: var(--gold); color: #0f0e0c;
@@ -94,6 +104,7 @@
     }
     .add-btn:hover { background: #e0bb60; }
 
+    /* ── ITEMS ── */
     .items-list { display: flex; flex-direction: column; gap: 8px; }
 
     .item-card {
@@ -112,7 +123,6 @@
     .item-note    { color: var(--text-dim); font-size: 12px; }
     .item-topic   { color: var(--gold); font-weight: 500; margin-bottom: 4px; }
     .item-content { color: var(--text); font-size: 13px; }
-    .item-date    { color: var(--text-dim); font-size: 12px; margin-top: 4px; }
 
     .del-btn {
       width: 28px; height: 28px; flex-shrink: 0;
@@ -129,6 +139,88 @@
       color: var(--text-dim); font-size: 14px;
     }
 
+    /* ── USER TABLE ── */
+    .user-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .user-table th {
+      text-align: right;
+      padding: 10px 14px;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .user-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      vertical-align: middle;
+    }
+
+    .user-table tr:last-child td { border-bottom: none; }
+    .user-table tr:hover td { background: var(--surface2); }
+
+    .plan-badge {
+      display: inline-block;
+      font-size: 10px; font-weight: 700;
+      padding: 3px 8px; border-radius: 6px;
+    }
+
+    .plan-free    { background: var(--surface2); color: var(--text-dim); border: 1px solid var(--border); }
+    .plan-basic   { background: rgba(58,130,200,0.15); color: #6ab0e0; }
+    .plan-pro     { background: rgba(201,168,76,0.15); color: var(--gold); }
+    .plan-premium { background: rgba(160,100,200,0.15); color: #c080e0; }
+
+    .admin-badge {
+      display: inline-block; font-size: 10px;
+      padding: 2px 6px; border-radius: 4px;
+      background: rgba(201,168,76,0.15); color: var(--gold);
+    }
+
+    /* usage mini bar */
+    .usage-bar-wrap {
+      width: 100px;
+    }
+
+    .usage-bar-track {
+      height: 4px;
+      background: var(--surface2);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 3px;
+    }
+
+    .usage-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      background: var(--gold);
+    }
+
+    .usage-bar-label {
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+
+    /* plan select dropdown */
+    .plan-select {
+      padding: 4px 8px;
+      font-size: 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      cursor: pointer;
+      font-family: 'Vazirmatn', sans-serif;
+    }
+
+    /* toast */
     .toast {
       position: fixed; bottom: 24px; left: 50%;
       transform: translateX(-50%) translateY(80px);
@@ -139,17 +231,34 @@
     }
     .toast.show { transform: translateX(-50%) translateY(0); }
 
-    .user-badge {
-      display: inline-block; font-size: 10px; padding: 2px 8px;
-      border-radius: 99px; font-weight: 500; margin-right: 6px;
+    /* overview stats section */
+    .overview-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
     }
-    .badge-admin { background: rgba(201,168,76,0.15); color: var(--gold); border: 1px solid var(--gold-dim); }
-    .badge-user  { background: var(--surface2); color: var(--text-dim); border: 1px solid var(--border); }
+
+    .overview-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .overview-row:last-child { border-bottom: none; }
+    .overview-key { color: var(--text-dim); }
+    .overview-val { color: var(--text); font-weight: 500; }
+    .overview-val.gold { color: var(--gold); }
 
     @media (max-width: 600px) {
-      .stats { grid-template-columns: repeat(2, 1fr); }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
       header { padding: 0 14px; }
       .page { padding: 20px 14px 100px; }
+      .user-table th:nth-child(3),
+      .user-table td:nth-child(3) { display: none; }
     }
   </style>
 </head>
@@ -167,34 +276,81 @@
 
 <div class="page">
 
-  <div class="stats">
+  <!-- STATS -->
+  <div class="stats-grid">
     <div class="stat-card">
-      <div class="stat-num" id="stat-users">0</div>
-      <div class="stat-label">کاربران</div>
+      <div class="stat-num" id="stat-total-users">—</div>
+      <div class="stat-label">کل کاربران</div>
     </div>
     <div class="stat-card">
-      <div class="stat-num" id="stat-dialect">0</div>
+      <div class="stat-num" id="stat-paid-users">—</div>
+      <div class="stat-label">کاربران پولی</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="stat-dialect">—</div>
       <div class="stat-label">کلمات دری</div>
     </div>
     <div class="stat-card">
-      <div class="stat-num" id="stat-culture">0</div>
-      <div class="stat-label">فرهنگ‌ها</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-num" id="stat-examples">0</div>
+      <div class="stat-num" id="stat-examples">—</div>
       <div class="stat-label">نمونه گفتگو</div>
     </div>
   </div>
 
+  <!-- TABS -->
   <div class="tabs">
-    <button class="tab active" onclick="switchTab('dialect', this)">کلمات دری</button>
-    <button class="tab" onclick="switchTab('culture', this)">فرهنگ و سنت</button>
-    <button class="tab" onclick="switchTab('examples', this)">نمونه گفتگو</button>
-    <button class="tab" onclick="switchTab('users', this)">کاربران</button>
+    <button class="tab active" onclick="switchTab('users', this)">👥 کاربران</button>
+    <button class="tab" onclick="switchTab('dialect', this)">🗣️ کلمات دری</button>
+    <button class="tab" onclick="switchTab('culture', this)">🏛️ فرهنگ</button>
+    <button class="tab" onclick="switchTab('examples', this)">💬 نمونه گفتگو</button>
   </div>
 
-  <!-- DIALECT -->
-  <div class="tab-content active" id="tab-dialect">
+  <!-- TAB: USERS -->
+  <div class="tab-content active" id="tab-users">
+
+    <div class="overview-section" id="plan-overview">
+      <div class="section-title">توزیع پلان‌ها</div>
+      <div class="overview-row">
+        <span class="overview-key">رایگان</span>
+        <span class="overview-val" id="count-free">—</span>
+      </div>
+      <div class="overview-row">
+        <span class="overview-key">پایه ($10)</span>
+        <span class="overview-val" id="count-basic">—</span>
+      </div>
+      <div class="overview-row">
+        <span class="overview-key">حرفه‌ای ($20)</span>
+        <span class="overview-val gold" id="count-pro">—</span>
+      </div>
+      <div class="overview-row">
+        <span class="overview-key">پریمیوم ($40)</span>
+        <span class="overview-val gold" id="count-premium">—</span>
+      </div>
+      <div class="overview-row">
+        <span class="overview-key">درآمد تخمینی ماهانه</span>
+        <span class="overview-val gold" id="est-revenue">—</span>
+      </div>
+    </div>
+
+    <div style="overflow-x:auto;">
+      <table class="user-table">
+        <thead>
+          <tr>
+            <th>کاربر</th>
+            <th>پلان</th>
+            <th>ایمیل / تلفن</th>
+            <th>تاریخ عضویت</th>
+            <th>تغییر پلان</th>
+          </tr>
+        </thead>
+        <tbody id="users-tbody">
+          <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-dim);">در حال بارگذاری...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB: DIALECT -->
+  <div class="tab-content" id="tab-dialect">
     <div class="add-form">
       <div class="section-title">+ کلمه دری جدید</div>
       <div class="form-row">
@@ -207,7 +363,7 @@
     <div class="items-list" id="dialect-list"></div>
   </div>
 
-  <!-- CULTURE -->
+  <!-- TAB: CULTURE -->
   <div class="tab-content" id="tab-culture">
     <div class="add-form">
       <div class="section-title">+ فرهنگ یا سنت جدید</div>
@@ -224,7 +380,7 @@
     <div class="items-list" id="culture-list"></div>
   </div>
 
-  <!-- EXAMPLES -->
+  <!-- TAB: EXAMPLES -->
   <div class="tab-content" id="tab-examples">
     <div class="add-form">
       <div class="section-title">+ نمونه گفتگو جدید</div>
@@ -241,13 +397,6 @@
     <div class="items-list" id="examples-list"></div>
   </div>
 
-  <!-- USERS -->
-  <div class="tab-content" id="tab-users">
-    <div class="items-list" id="users-list">
-      <div class="empty-state">در حال بارگذاری...</div>
-    </div>
-  </div>
-
 </div>
 
 <div class="toast" id="toast"></div>
@@ -255,7 +404,12 @@
 <script>
   let knowledge = {};
   let examples  = {};
+  let users     = [];
 
+  const PLAN_PRICES = { free: 0, basic: 10, pro: 20, premium: 40 };
+  const PLAN_LABELS = { free: 'رایگان', basic: 'پایه', pro: 'حرفه‌ای', premium: 'پریمیوم' };
+
+  // ── INIT ──
   async function init() {
     const [k, e, u] = await Promise.all([
       fetch('/api/admin/knowledge').then(r => r.json()),
@@ -264,24 +418,41 @@
     ]);
     knowledge = k;
     examples  = e;
+    users     = u;
     renderAll();
-    renderUsers(u);
-    document.getElementById('stat-users').textContent = u.length;
+    renderUsers();
+    updateStats();
   }
 
   function renderAll() {
     renderDialect();
     renderCulture();
     renderExamples();
-    updateStats();
   }
 
   function updateStats() {
-    document.getElementById('stat-dialect').textContent  = (knowledge.dari_dialect || []).length;
-    document.getElementById('stat-culture').textContent  = (knowledge.cultural_customs || []).length;
-    document.getElementById('stat-examples').textContent = (examples.conversation_examples || []).length;
+    const paid    = users.filter(u => u.plan !== 'free').length;
+    const counts  = { free: 0, basic: 0, pro: 0, premium: 0 };
+    let revenue   = 0;
+
+    users.forEach(u => {
+      counts[u.plan] = (counts[u.plan] || 0) + 1;
+      revenue += PLAN_PRICES[u.plan] || 0;
+    });
+
+    document.getElementById('stat-total-users').textContent = users.length;
+    document.getElementById('stat-paid-users').textContent  = paid;
+    document.getElementById('stat-dialect').textContent     = (knowledge.dari_dialect || []).length;
+    document.getElementById('stat-examples').textContent    = (examples.conversation_examples || []).length;
+
+    document.getElementById('count-free').textContent    = counts.free + ' نفر';
+    document.getElementById('count-basic').textContent   = counts.basic + ' نفر';
+    document.getElementById('count-pro').textContent     = counts.pro + ' نفر';
+    document.getElementById('count-premium').textContent = counts.premium + ' نفر';
+    document.getElementById('est-revenue').textContent   = '$' + revenue + ' / ماه';
   }
 
+  // ── TABS ──
   function switchTab(name, el) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -289,11 +460,64 @@
     document.getElementById('tab-' + name).classList.add('active');
   }
 
+  // ── TOAST ──
   function showToast(msg) {
     const t = document.getElementById('toast');
     t.textContent = msg;
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 2500);
+  }
+
+  // ── USERS ──
+  function renderUsers() {
+    const tbody = document.getElementById('users-tbody');
+    if (!users || users.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-dim);">هنوز کاربری ثبت‌نام نکرده</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    users.forEach(u => {
+      const tr = document.createElement('tr');
+      const joinDate = new Date(u.created_at).toLocaleDateString('fa-AF');
+      const planClass = `plan-${u.plan}`;
+      const planLabel = PLAN_LABELS[u.plan] || u.plan;
+
+      tr.innerHTML = `
+        <td>
+          <div style="font-weight:500;">${u.username}</div>
+          ${u.is_admin ? '<span class="admin-badge">👑 ادمین</span>' : ''}
+        </td>
+        <td><span class="plan-badge ${planClass}">${planLabel}</span></td>
+        <td style="color:var(--text-dim);font-size:12px;">
+          ${u.email || ''} ${u.phone ? '· ' + u.phone : ''}
+        </td>
+        <td style="color:var(--text-dim);font-size:12px;">${joinDate}</td>
+        <td>
+          <select class="plan-select" onchange="changePlan(${u.id}, this.value)">
+            <option value="free"    ${u.plan === 'free'    ? 'selected' : ''}>رایگان</option>
+            <option value="basic"   ${u.plan === 'basic'   ? 'selected' : ''}>پایه $10</option>
+            <option value="pro"     ${u.plan === 'pro'     ? 'selected' : ''}>حرفه‌ای $20</option>
+            <option value="premium" ${u.plan === 'premium' ? 'selected' : ''}>پریمیوم $40</option>
+          </select>
+        </td>`;
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function changePlan(userId, newPlan) {
+    const res  = await fetch(`/api/admin/users/${userId}/plan`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ plan: newPlan })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const u = users.find(u => u.id === userId);
+      if (u) u.plan = newPlan;
+      updateStats();
+      showToast('✓ پلان تغییر یافت');
+    }
   }
 
   // ── DIALECT ──
@@ -383,7 +607,6 @@
     document.getElementById('c-topic').value   = '';
     document.getElementById('c-content').value = '';
     renderCulture();
-    updateStats();
     showToast('✓ فرهنگ اضافه شد');
   }
 
@@ -391,7 +614,6 @@
     await fetch(`/api/admin/culture/${i}`, { method: 'DELETE' });
     knowledge.cultural_customs.splice(i, 1);
     renderCulture();
-    updateStats();
     showToast('حذف شد');
   }
 
@@ -442,33 +664,6 @@
     renderExamples();
     updateStats();
     showToast('حذف شد');
-  }
-
-  // ── USERS ──
-  function renderUsers(users) {
-    const list = document.getElementById('users-list');
-    if (!users || users.length === 0) {
-      list.innerHTML = '<div class="empty-state">هنوز کاربری ثبت‌نام نکرده</div>';
-      return;
-    }
-    list.innerHTML = '';
-    users.forEach(u => {
-      const div = document.createElement('div');
-      div.className = 'item-card';
-      div.innerHTML = `
-        <div class="item-body">
-          <div style="display:flex;align-items:center;margin-bottom:4px">
-            <span class="item-topic" style="margin-left:8px">${u.username}</span>
-            <span class="user-badge ${u.is_admin ? 'badge-admin' : 'badge-user'}">
-              ${u.is_admin ? '👑 ادمین' : 'کاربر'}
-            </span>
-          </div>
-          ${u.email ? `<div class="item-content">📧 ${u.email}</div>` : ''}
-          ${u.phone ? `<div class="item-content">📱 ${u.phone}</div>` : ''}
-          <div class="item-date">${new Date(u.created_at).toLocaleDateString('fa-AF')}</div>
-        </div>`;
-      list.appendChild(div);
-    });
   }
 
   init();
