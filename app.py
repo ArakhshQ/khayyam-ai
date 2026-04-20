@@ -565,7 +565,7 @@ def api_me():
             "email":     current_user.email,
             "phone":     current_user.phone,
             "is_admin":  current_user.is_admin,
-            "plan":      current_user.plan
+            "plan":      getattr(current_user, 'plan', 'free') or 'free'
         })
     return jsonify({"logged_in": False})
 
@@ -634,7 +634,7 @@ def chat():
         image_type   = None
 
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = current_user.plan if current_user.is_authenticated else 'free'
+    plan = getattr(current_user, 'plan', 'free') or 'free' if current_user.is_authenticated else 'free'
 
     user_memories = get_user_memories(user_id) if user_id else None
 
@@ -694,7 +694,7 @@ def tutor_chat():
     grade        = data.get("grade", "متوسط")
 
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = current_user.plan if current_user.is_authenticated else 'free'
+    plan = getattr(current_user, 'plan', 'free') or 'free' if current_user.is_authenticated else 'free'
 
     reply, _, _, _ = smart_chat(
         system_prompt=build_tutor_prompt(subject, grade),
@@ -715,7 +715,7 @@ def persona_chat():
     persona_prompt = data.get("persona_prompt", "")
 
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = current_user.plan if current_user.is_authenticated else 'free'
+    plan = getattr(current_user, 'plan', 'free') or 'free' if current_user.is_authenticated else 'free'
 
     reply, _, _, _ = smart_chat(
         system_prompt=persona_prompt,
