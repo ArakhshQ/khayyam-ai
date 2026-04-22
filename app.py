@@ -394,12 +394,22 @@ def call_openai_model(model, system_prompt, messages, temperature=0.7,
         else:
             formatted.append(m)
 
-    response = openai_client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system_prompt}] + formatted,
-        temperature=temperature,
-        max_tokens=1000,
-    )
+    # gpt-5.4 family uses max_completion_tokens
+    # older models use max_tokens
+    is_new_model = any(x in model for x in ['gpt-5', 'o1', 'o3', 'o4'])
+    token_param  = 'max_completion_tokens' if is_new_model else 'max_tokens'
+
+    kwargs = {
+        'model':       model,
+        'messages':    [{"role": "system", "content": system_prompt}] + formatted,
+        token_param:   1000,
+    }
+
+    # new models dont support temperature with reasoning effort none
+    if not is_new_model:
+        kwargs['temperature'] = temperature
+
+    response = openai_client.chat.completions.create(**kwargs)
     reply       = response.choices[0].message.content
     tokens_used = response.usage.total_tokens
     return reply, tokens_used
