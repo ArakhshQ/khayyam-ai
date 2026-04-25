@@ -40,25 +40,25 @@ EXAMPLES_FILE  = "examples.json"
 
 PLAN_CONFIG = {
     'free': [
-        {'model': 'gpt-5.4-mini',           'tier': 1, 'limit': 3000,    'reset': 'daily'},
-        {'model': 'gpt-5.4-nano',           'tier': 2, 'limit': 3000,    'reset': 'daily'},
-        {'model': 'llama-3.3-70b-versatile','tier': 3, 'limit': None,    'reset': None},
+        {'model': 'gpt-5.4-mini',            'tier': 1, 'limit': 10000,   'reset': 'daily'},
+        {'model': 'gpt-5.4-nano',            'tier': 2, 'limit': 20000,   'reset': 'daily'},
+        {'model': 'llama-3.3-70b-versatile', 'tier': 3, 'limit': None,    'reset': None},
     ],
     'basic': [
-        {'model': 'gpt-5.4-mini',           'tier': 1, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',           'tier': 2, 'limit': 200000,  'reset': 'monthly'},
-        {'model': 'llama-3.3-70b-versatile','tier': 3, 'limit': None,    'reset': None},
+        {'model': 'gpt-5.4-mini',            'tier': 1, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',            'tier': 2, 'limit': 200000,  'reset': 'monthly'},
+        {'model': 'llama-3.3-70b-versatile', 'tier': 3, 'limit': None,    'reset': None},
     ],
     'pro': [
-        {'model': 'gpt-5.4-mini',           'tier': 1, 'limit': 500000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',           'tier': 2, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'llama-3.3-70b-versatile','tier': 3, 'limit': None,    'reset': None},
+        {'model': 'gpt-5.4-mini',            'tier': 1, 'limit': 500000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',            'tier': 2, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'llama-3.3-70b-versatile', 'tier': 3, 'limit': None,    'reset': None},
     ],
     'premium': [
-        {'model': 'gpt-5.4',                'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
-        {'model': 'gpt-5.4-mini',           'tier': 2, 'limit': 500000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',           'tier': 3, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'llama-3.3-70b-versatile','tier': 4, 'limit': None,    'reset': None},
+        {'model': 'gpt-5.4',                 'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
+        {'model': 'gpt-5.4-mini',            'tier': 2, 'limit': 500000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',            'tier': 3, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'llama-3.3-70b-versatile', 'tier': 4, 'limit': None,    'reset': None},
     ],
 }
 
@@ -114,54 +114,49 @@ def get_reset_timestamp(reset_at, period):
     return reset_time.replace(tzinfo=timezone.utc).timestamp()
 
 def pick_model_and_update(user_id, plan, tokens_to_use):
-    """
-    Picks the right model based on plan and current usage.
-    Updates token counts in DB.
-    Returns (model_string, tier_index, reset_timestamp, switched)
-    switched=True means we moved to a fallback tier
-    """
     cascade  = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
     usage    = get_or_create_usage(user_id)
     switched = False
 
-    for i, tier in enumerate(cascade):
-        model  = tier['model']
-        limit  = tier['limit']
-        period = tier['reset']
-        t      = tier['tier']
+    if usage is None:
+        first = cascade[0]
+        return first['model'], first['tier'], None, False
 
-        # unlimited tier — always use this
+    for i, tier_config in enumerate(cascade):
+        model  = tier_config['model']
+        limit  = tier_config['limit']
+        period = tier_config['reset']
+        t      = tier_config['tier']
+
+        # unlimited tier — always use this as final fallback
         if limit is None:
-            if i > 0:
-                switched = True
+            switched = i > 0
             return model, t, None, switched
 
-        # get current usage for this tier
-        tokens_used = getattr(usage, f'tier{t}_tokens', 0)
-        reset_at    = getattr(usage, f'tier{t}_reset', datetime.utcnow())
+        tokens_used = getattr(usage, f'tier{t}_tokens', 0) or 0
+        reset_at    = getattr(usage, f'tier{t}_reset') or datetime.utcnow()
 
-        # check if reset needed
+        # reset if window expired
         if should_reset(reset_at, period):
             setattr(usage, f'tier{t}_tokens', 0)
             setattr(usage, f'tier{t}_reset', datetime.utcnow())
             tokens_used = 0
+            reset_at    = datetime.utcnow()
 
-        # check if within limit
-        if tokens_used + tokens_to_use <= limit:
-            # use this tier
-            setattr(usage, f'tier{t}_tokens', tokens_used + tokens_to_use)
+        # check if this tier has capacity
+        if tokens_used < limit:
+            # use this tier — update tokens
+            new_count = min(tokens_used + tokens_to_use, limit)
+            setattr(usage, f'tier{t}_tokens', new_count)
             usage.updated_at = datetime.utcnow()
             db.session.commit()
             reset_ts = get_reset_timestamp(reset_at, period)
-            if i > 0:
-                switched = True
+            switched = i > 0
             return model, t, reset_ts, switched
 
-        # limit exceeded — try next tier
-        if i > 0:
-            switched = True
+        # this tier is exhausted — try next
 
-    # all tiers exhausted — use last tier (llama)
+    # all paid tiers exhausted — return last (llama)
     last = cascade[-1]
     return last['model'], last['tier'], None, True
 
@@ -434,15 +429,10 @@ def call_groq_model(system_prompt, messages, temperature=0.7):
 
 def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
                temperature=0.7, image_b64=None, image_type=None):
-    """
-    Returns (reply, switched, reset_timestamp, model_used)
-    switched=True means fell back to a lower tier
-    """
-    messages       = history + [{"role": "user", "content": user_message}]
-    estimated_tokens = len(user_message) // 4 + 300
+    messages         = history + [{"role": "user", "content": user_message}]
+    estimated_tokens = len(user_message) // 4 + 400
 
     if user_id is None:
-        # guest — use nano directly, no tracking
         try:
             reply, _ = call_openai_model(
                 'gpt-5.4-nano', system_prompt, messages,
@@ -457,28 +447,18 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
         user_id, plan, estimated_tokens
     )
 
-    # groq model — free tier
     if 'llama' in model:
         reply, _ = call_groq_model(system_prompt, messages, temperature)
         return reply, switched, reset_ts, model
 
-    # openai model
     try:
-        reply, actual_tokens = call_openai_model(
+        reply, _ = call_openai_model(
             model, system_prompt, messages,
             temperature, image_b64, image_type
         )
-        # adjust token count with actual usage
-        if actual_tokens > estimated_tokens:
-            diff = actual_tokens - estimated_tokens
-            usage = get_or_create_usage(user_id)
-            current = getattr(usage, f'tier{tier}_tokens', 0)
-            setattr(usage, f'tier{tier}_tokens', current + diff)
-            db.session.commit()
         return reply, switched, reset_ts, model
     except Exception as e:
         print(f"OpenAI error: {e}")
-        # fallback to groq
         reply, _ = call_groq_model(system_prompt, messages, temperature)
         return reply, True, reset_ts, 'llama'
 
