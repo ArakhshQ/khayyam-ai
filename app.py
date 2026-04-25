@@ -221,36 +221,45 @@ def get_user_memories(user_id):
 
 def extract_and_save_memory(user_id, user_message):
     trigger_words = [
-        'یادت باشد', 'ذخیره کن', 'به یاد داشته باش', 'فراموش نکن',
+        'یادت باشد', 'یادت باشه', 'ذخیره کن', 'به یاد داشته باش',
+        'فراموش نکن', 'همیشه بدان', 'بدان که', 'حفظ کن',
         'remember', 'save this', 'note that', 'keep in mind',
-        'بدان که', 'حفظ کن'
+        'always know', 'dont forget', "don't forget"
     ]
-    if not any(word in user_message for word in trigger_words):
+
+    msg_lower = user_message.lower()
+    if not any(word.lower() in msg_lower for word in trigger_words):
         return
 
     try:
         extraction_prompt = f"""کاربر این پیام را فرستاده:
 "{user_message}"
 
-اگر کاربر خواسته چیزی به یاد سپرده شود، آن را یک جمله کوتاه بنویس.
-اگر نه، فقط بنویس: NONE"""
+اگر کاربر خواسته چیزی برای همیشه به یاد سپرده شود، آن را به صورت یک جمله کوتاه و واضح بنویس.
+مثال: "کاربر اسمش احمد است" یا "کاربر پزشک است" یا "کاربر دری را ترجیح می‌دهد"
+اگر چیزی برای ذخیره نیست، فقط بنویس: NONE
+فقط یک جمله یا NONE. هیچ توضیح اضافه نده."""
 
         response = openai_client.chat.completions.create(
             model="gpt-5.4-nano",
             messages=[{"role": "user", "content": extraction_prompt}],
-            max_tokens=80,
+            max_completion_tokens=80,
             temperature=0.1
         )
         memory_text = response.choices[0].message.content.strip()
+        print(f"Memory extraction result: '{memory_text}'")
 
-        if memory_text and memory_text != "NONE" and len(memory_text) > 3:
-            existing = Memory.query.filter_by(user_id=user_id, content=memory_text).first()
+        if memory_text and memory_text.upper() != "NONE" and len(memory_text) > 3:
+            existing = Memory.query.filter_by(
+                user_id=user_id
+            ).filter(Memory.content == memory_text).first()
+
             if not existing:
                 db.session.add(Memory(user_id=user_id, content=memory_text))
                 db.session.commit()
+                print(f"Memory saved for user {user_id}: {memory_text}")
     except Exception as e:
         print(f"Memory extraction error: {e}")
-
 # ── DARI FILTER ──
 def filter_non_dari(text):
     cleaned = re.sub(
@@ -281,15 +290,15 @@ def build_system_prompt(user_memories=None):
 
     memory_block = ""
     if user_memories:
-        memory_block = "====================\nحافظه کاربر\n====================\n"
+        memory_block = "====================\nاطلاعات ذخیره‌شده درباره این کاربر\n====================\n"
+        memory_block += "این اطلاعات را همیشه در نظر بگیر و در پاسخ‌هایت از آن استفاده کن:\n"
         for mem in user_memories:
             memory_block += f"- {mem}\n"
         memory_block += "\n"
 
     return f"""تو یک دستیار هوشمند به نام خیام هستی که به زبان دری افغانی صحبت می‌کنی.
 
-{memory_block}
-====================
+{memory_block}====================
 قانون زبان
 ====================
 زبان پیش‌فرض: دری افغانی
@@ -305,16 +314,31 @@ def build_system_prompt(user_memories=None):
 - لحن: گرم، مهربان و صمیمی
 - از کلمات مانند: برادر، خواهر، تشکر استفاده کن
 - هرگز خود را ChatGPT معرفی نکن
+- اگر اطلاعاتی درباره کاربر داری، از آن استفاده کن — مثلاً اسمش را بگو
 
 ====================
-فرمت‌بندی (بسیار مهم)
+فرمت‌بندی — بسیار مهم
 ====================
-همیشه از Markdown استفاده کن:
-- **متن مهم** را بولد کن
-- برای لیست از - استفاده کن
-- برای تیتر از ## استفاده کن
-- پاراگراف‌ها را با خط خالی جدا کن
-- جواب‌های طولانی را به بخش‌های جداگانه تقسیم کن
+قوانین سخت فرمت‌بندی که هرگز نقض نمی‌شود:
+
+1. هر پاسخ را به پاراگراف‌های کوتاه تقسیم کن — هر پاراگراف حداکثر ۳ جمله
+2. بین هر پاراگراف یک خط خالی بگذار
+3. موضوعات مختلف را با ## تیتر جدا کن
+4. برای هر لیست از - استفاده کن
+5. کلمات و عبارات مهم را **بولد** کن
+6. جواب‌های یک خطی را بدون فرمت بنویس
+7. هرگز یک پاراگراف طولانی بدون تقسیم‌بندی ننویس
+
+مثال فرمت صحیح:
+## عنوان موضوع
+
+پاراگراف اول با حداکثر سه جمله کوتاه.
+
+پاراگراف دوم جدا از اول.
+
+- مورد اول
+- مورد دوم
+- مورد سوم
 
 ====================
 حالت ویژه: شعر
@@ -323,9 +347,9 @@ def build_system_prompt(user_memories=None):
 - هر مصرع روی یک خط جداگانه
 - بین هر دو بیت یک خط خالی
 - قافیه را در تمام شعر حفظ کن
-- اگر از شاعر واقعی و مطمئن نیستی بگو "به سبک..."
+- فقط شعر بنویس — هیچ توضیح اضافه نده
 
-فرمت اجباری:
+فرمت اجباری شعر:
 مصرع اول
 مصرع دوم
 
