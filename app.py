@@ -33,11 +33,6 @@ groq_client   = Groq(api_key=os.getenv("GROQ_API_KEY"))
 KNOWLEDGE_FILE = "knowledge.json"
 EXAMPLES_FILE  = "examples.json"
 
-# ── PLAN CONFIGURATION ──
-# Each plan defines a cascade of (model, limit, reset_period)
-# reset_period: 'daily' or 'monthly'
-# limit: token limit — None means unlimited
-
 PLAN_CONFIG = {
     'free': [
         {'model': 'gpt-5.4-mini',            'tier': 1, 'limit': 5000,    'reset': 'daily'},
@@ -85,26 +80,38 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# ── TOKEN USAGE (DATABASE BACKED) ──
+# ── TOKEN USAGE ──
 def get_or_create_usage(user_id):
-    usage = UserTokenUsage.query.filter_by(user_id=user_id).first()
-    if not usage:
-        usage = UserTokenUsage(user_id=user_id)
-        db.session.add(usage)
-        db.session.commit()
-    return usage
+    try:
+        usage = UserTokenUsage.query.filter_by(user_id=user_id).first()
+        if not usage:
+            usage = UserTokenUsage(
+                user_id=user_id,
+                tier1_tokens=0, tier1_reset=datetime.utcnow(),
+                tier2_tokens=0, tier2_reset=datetime.utcnow(),
+                tier3_tokens=0, tier3_reset=datetime.utcnow(),
+            )
+            db.session.add(usage)
+            db.session.commit()
+        return usage
+    except Exception as e:
+        print(f"get_or_create_usage error: {e}")
+        db.session.rollback()
+        return None
 
 def should_reset(reset_at, period):
-    if period is None:
+    if period is None or reset_at is None:
         return False
     now = datetime.utcnow()
     if period == 'daily':
         return (now - reset_at).total_seconds() >= 86400
     if period == 'monthly':
-        return (now - reset_at).total_seconds() >= 2592000  # 30 days
+        return (now - reset_at).total_seconds() >= 2592000
     return False
 
 def get_reset_timestamp(reset_at, period):
+    if not reset_at or not period:
+        return None
     if period == 'daily':
         reset_time = reset_at + timedelta(days=1)
     elif period == 'monthly':
@@ -114,9 +121,8 @@ def get_reset_timestamp(reset_at, period):
     return reset_time.replace(tzinfo=timezone.utc).timestamp()
 
 def pick_model_and_update(user_id, plan, tokens_to_use):
-    cascade  = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
-    usage    = get_or_create_usage(user_id)
-    switched = False
+    cascade = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
+    usage   = get_or_create_usage(user_id)
 
     if usage is None:
         first = cascade[0]
@@ -128,35 +134,32 @@ def pick_model_and_update(user_id, plan, tokens_to_use):
         period = tier_config['reset']
         t      = tier_config['tier']
 
-        # unlimited tier — always use this as final fallback
+        # unlimited tier — final fallback
         if limit is None:
-            switched = i > 0
-            return model, t, None, switched
+            return model, t, None, i > 0
 
         tokens_used = getattr(usage, f'tier{t}_tokens', 0) or 0
-        reset_at    = getattr(usage, f'tier{t}_reset') or datetime.utcnow()
+        reset_at    = getattr(usage, f'tier{t}_reset', None) or datetime.utcnow()
 
-        # reset if window expired
+        # reset window if expired
         if should_reset(reset_at, period):
             setattr(usage, f'tier{t}_tokens', 0)
             setattr(usage, f'tier{t}_reset', datetime.utcnow())
             tokens_used = 0
             reset_at    = datetime.utcnow()
 
-        # check if this tier has capacity
+        # this tier has capacity
         if tokens_used < limit:
-            # use this tier — update tokens
             new_count = min(tokens_used + tokens_to_use, limit)
             setattr(usage, f'tier{t}_tokens', new_count)
             usage.updated_at = datetime.utcnow()
             db.session.commit()
             reset_ts = get_reset_timestamp(reset_at, period)
-            switched = i > 0
-            return model, t, reset_ts, switched
+            return model, t, reset_ts, i > 0
 
-        # this tier is exhausted — try next
+        # exhausted — try next tier
 
-    # all paid tiers exhausted — return last (llama)
+    # all tiers exhausted — use last
     last = cascade[-1]
     return last['model'], last['tier'], None, True
 
@@ -164,31 +167,26 @@ def get_usage_summary(user_id, plan):
     cascade = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
     usage   = get_or_create_usage(user_id)
     summary = []
-
+    if not usage:
+        return summary
     for tier in cascade:
         t      = tier['tier']
         limit  = tier['limit']
         period = tier['reset']
-
         if limit is None:
             continue
-
-        tokens_used = getattr(usage, f'tier{t}_tokens', 0)
+        tokens_used = getattr(usage, f'tier{t}_tokens', 0) or 0
         reset_at    = getattr(usage, f'tier{t}_reset', datetime.utcnow())
-
         if should_reset(reset_at, period):
             tokens_used = 0
-
-        reset_ts = get_reset_timestamp(reset_at, period)
         summary.append({
-            'model':      tier['model'],
-            'used':       tokens_used,
-            'limit':      limit,
-            'reset_ts':   reset_ts,
-            'period':     period,
-            'remaining':  max(0, limit - tokens_used)
+            'model':     tier['model'],
+            'used':      tokens_used,
+            'limit':     limit,
+            'reset_ts':  get_reset_timestamp(reset_at, period),
+            'period':    period,
+            'remaining': max(0, limit - tokens_used)
         })
-
     return summary
 
 # ── KNOWLEDGE ──
@@ -216,7 +214,9 @@ def save_examples(data):
 
 # ── MEMORY ──
 def get_user_memories(user_id):
-    memories = Memory.query.filter_by(user_id=user_id).order_by(Memory.created_at.desc()).all()
+    memories = Memory.query.filter_by(
+        user_id=user_id
+    ).order_by(Memory.created_at.desc()).limit(20).all()
     return [m.content for m in memories]
 
 def extract_and_save_memory(user_id, user_message):
@@ -226,50 +226,35 @@ def extract_and_save_memory(user_id, user_message):
         'remember', 'save this', 'note that', 'keep in mind',
         'always know', 'dont forget', "don't forget"
     ]
-
     msg_lower = user_message.lower()
     if not any(word.lower() in msg_lower for word in trigger_words):
         return
-
     try:
-        extraction_prompt = f"""کاربر این پیام را فرستاده:
-"{user_message}"
-
-اگر کاربر خواسته چیزی برای همیشه به یاد سپرده شود، آن را به صورت یک جمله کوتاه و واضح بنویس.
-مثال: "کاربر اسمش احمد است" یا "کاربر پزشک است" یا "کاربر دری را ترجیح می‌دهد"
-اگر چیزی برای ذخیره نیست، فقط بنویس: NONE
-فقط یک جمله یا NONE. هیچ توضیح اضافه نده."""
-
         response = openai_client.chat.completions.create(
             model="gpt-5.4-nano",
-            messages=[{"role": "user", "content": extraction_prompt}],
+            messages=[{"role": "user", "content": f"""کاربر این پیام را فرستاده:
+"{user_message}"
+
+اگر کاربر خواسته چیزی برای همیشه به یاد سپرده شود، آن را یک جمله کوتاه بنویس.
+مثال: "کاربر اسمش احمد است" یا "کاربر پزشک است"
+اگر چیزی برای ذخیره نیست فقط بنویس: NONE
+فقط یک جمله یا NONE."""}],
             max_completion_tokens=80,
             temperature=0.1
         )
         memory_text = response.choices[0].message.content.strip()
-        print(f"Memory extraction result: '{memory_text}'")
+        print(f"Memory extraction: '{memory_text}'")
 
         if memory_text and memory_text.upper() != "NONE" and len(memory_text) > 3:
             existing = Memory.query.filter_by(
-                user_id=user_id
-            ).filter(Memory.content == memory_text).first()
-
+                user_id=user_id, content=memory_text
+            ).first()
             if not existing:
                 db.session.add(Memory(user_id=user_id, content=memory_text))
                 db.session.commit()
-                print(f"Memory saved for user {user_id}: {memory_text}")
+                print(f"Memory saved: {memory_text}")
     except Exception as e:
         print(f"Memory extraction error: {e}")
-# ── DARI FILTER ──
-def filter_non_dari(text):
-    cleaned = re.sub(
-        r'[^\u0600-\u06FF\u200c\u200d\s\d\.\،\؟\!\:\؛\-\(\)\[\]\"\'\/\n\+\=\*\%\#]',
-        '',
-        text
-    )
-    cleaned = re.sub(r'  +', ' ', cleaned)
-    cleaned = cleaned.strip()
-    return cleaned if cleaned else text
 
 # ── PROMPTS ──
 def build_system_prompt(user_memories=None):
@@ -291,7 +276,7 @@ def build_system_prompt(user_memories=None):
     memory_block = ""
     if user_memories:
         memory_block = "====================\nاطلاعات ذخیره‌شده درباره این کاربر\n====================\n"
-        memory_block += "این اطلاعات را همیشه در نظر بگیر و در پاسخ‌هایت از آن استفاده کن:\n"
+        memory_block += "این اطلاعات را همیشه در نظر بگیر و در پاسخ‌هایت استفاده کن:\n"
         for mem in user_memories:
             memory_block += f"- {mem}\n"
         memory_block += "\n"
@@ -305,7 +290,7 @@ def build_system_prompt(user_memories=None):
 - اگر موضوع آموزش زبان باشد، مثال‌ها را به همان زبان بنویس اما توضیحات را به دری بده
 - در موضوعات علمی استفاده از نمادها مجاز است (x, H2O, km)
 - اگر کاربر لینک فرستاد بگو نمی‌توانی باز کنی
-- اگر کاربر تصویر یا فایل فرستاد، آن را به دری توضیح بده
+- اگر کاربر تصویر یا فایل فرستاد آن را به دری توضیح بده
 
 ====================
 هویت و شخصیت
@@ -314,47 +299,26 @@ def build_system_prompt(user_memories=None):
 - لحن: گرم، مهربان و صمیمی
 - از کلمات مانند: برادر، خواهر، تشکر استفاده کن
 - هرگز خود را ChatGPT معرفی نکن
-- اگر اطلاعاتی درباره کاربر داری، از آن استفاده کن — مثلاً اسمش را بگو
+- اگر اطلاعاتی درباره کاربر داری از آن استفاده کن — مثلاً اسمش را بگو
 
 ====================
 فرمت‌بندی — بسیار مهم
 ====================
-قوانین سخت فرمت‌بندی که هرگز نقض نمی‌شود:
-
-1. هر پاسخ را به پاراگراف‌های کوتاه تقسیم کن — هر پاراگراف حداکثر ۳ جمله
-2. بین هر پاراگراف یک خط خالی بگذار
-3. موضوعات مختلف را با ## تیتر جدا کن
-4. برای هر لیست از - استفاده کن
-5. کلمات و عبارات مهم را **بولد** کن
-6. جواب‌های یک خطی را بدون فرمت بنویس
-7. هرگز یک پاراگراف طولانی بدون تقسیم‌بندی ننویس
-
-مثال فرمت صحیح:
-## عنوان موضوع
-
-پاراگراف اول با حداکثر سه جمله کوتاه.
-
-پاراگراف دوم جدا از اول.
-
-- مورد اول
-- مورد دوم
-- مورد سوم
+۱. هر پاسخ را به پاراگراف‌های کوتاه تقسیم کن — هر پاراگراف حداکثر ۳ جمله
+۲. بین هر پاراگراف یک خط خالی بگذار
+۳. موضوعات مختلف را با ## تیتر جدا کن
+۴. برای لیست از - استفاده کن
+۵. کلمات مهم را **بولد** کن
+۶. جواب‌های کوتاه را بدون فرمت بنویس
+۷. هرگز یک بلوک طولانی بدون تقسیم‌بندی ننویس
 
 ====================
 حالت ویژه: شعر
 ====================
-وقتی شعر می‌نویسی:
 - هر مصرع روی یک خط جداگانه
 - بین هر دو بیت یک خط خالی
 - قافیه را در تمام شعر حفظ کن
 - فقط شعر بنویس — هیچ توضیح اضافه نده
-
-فرمت اجباری شعر:
-مصرع اول
-مصرع دوم
-
-مصرع سوم
-مصرع چهارم
 
 ====================
 دانش فرهنگی
@@ -372,12 +336,7 @@ def build_system_prompt(user_memories=None):
 {example_block}"""
 
 def build_tutor_prompt(subject, grade):
-    knowledge = load_knowledge()
-    dialect_rules = ""
-    for item in knowledge.get("dari_dialect", []):
-        dialect_rules += f'- بگو "{item["correct"]}" نه "{item["wrong"]}"\n'
-
-     return f"""تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
+    return f"""تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
 
 مضمون: {subject}
 سطح: {grade}
@@ -391,50 +350,41 @@ def build_tutor_prompt(subject, grade):
 ====================
 قوانین فرمت‌بندی — بسیار مهم
 ====================
-پاسخ‌هایت باید کاملاً ساختارمند و خوانا باشند. این قوانین را همیشه رعایت کن:
+۱. هر موضوع جدید را در یک پاراگراف جداگانه بنویس. بین پاراگراف‌ها خط خالی بگذار.
 
-۱. هر موضوع یا مفهوم جدید را در یک پاراگراف جداگانه بنویس.
-   بین هر پاراگراف یک خط خالی بگذار.
+۲. مثال را همیشه در یک پاراگراف کاملاً جدا بنویس — هرگز در وسط توضیح نگذار.
+   مثال را با **مثال:** شروع کن.
 
-۲. مثال‌ها را همیشه در یک خط یا پاراگراف کاملاً جدا بنویس.
-   هرگز مثال را در وسط توضیح نگذار.
-   مثال را با کلمه "**مثال:**" شروع کن و بعد از آن در خط جدید بنویس.
+۳. سوال را همیشه در آخر و در یک پاراگراف جدا بنویس.
+   سوال را با **سوال:** شروع کن.
 
-۳. سوال‌ها را همیشه در آخر پاسخ و در یک پاراگراف کاملاً جدا بنویس.
-   هرگز سوال را در وسط توضیح نگذار.
-   سوال را با "**سوال:**" شروع کن.
-
-۴. اگر چند نکته داری، آن‌ها را به صورت لیست بنویس:
+۴. برای چند نکته از لیست استفاده کن:
    - نکته اول
    - نکته دوم
-   - نکته سوم
-
-۵. تیتر هر بخش را با ** بولد کن.
 
 نمونه فرمت صحیح:
 
-**تعریف کسر**
+**تعریف**
 
-کسر عددی است که از دو قسمت تشکیل شده است — صورت و مخرج.
-صورت نشان می‌دهد چند قسمت داریم و مخرج نشان می‌دهد کل به چند قسمت تقسیم شده.
+کسر عددی است از دو قسمت — صورت و مخرج. صورت نشان می‌دهد چند قسمت داریم.
 
 **مثال:**
 
-اگر یک نان را به ۴ قسمت تقسیم کنیم و ۱ قسمت را بگیریم، این می‌شود ۱/۴.
+یک نان را به ۴ قسمت تقسیم کردیم و ۱ قسمت گرفتیم — این می‌شود ۱/۴.
 
 **سوال:**
 
-اگر یک نان را به ۸ قسمت تقسیم کنیم و ۳ قسمت را بگیریم، کسر آن چیست؟
+اگر نان را به ۸ قسمت تقسیم کنیم و ۳ قسمت بگیریم، کسر آن چیست؟
 
 ====================
 روش تدریس
 ====================
-- هر بار فقط یک مفهوم توضیح بده — بیشتر از یک موضوع در یک پاسخ نیاور
-- توضیح را ساده و کوتاه بده — حداکثر ۳ جمله
-- بعد از توضیح، یک مثال از زندگی روزمره افغانستان بیاور
-- در آخر یک سوال کوتاه بپرس تا بفهمی کاربر درک کرده
-- اگر جواب درست بود: احسنت، آفرین، عالی — بعد موضوع بعدی
-- اگر جواب غلط بود: با مهربانی توضیح بده کجا اشتباه شد، دوباره توضیح بده"""
+- هر بار فقط یک مفهوم توضیح بده
+- توضیح حداکثر ۳ جمله باشد
+- یک مثال از زندگی روزمره افغانستان بیاور
+- در آخر یک سوال کوتاه بپرس
+- جواب درست: احسنت، آفرین، عالی — بعد موضوع بعدی
+- جواب غلط: با مهربانی تصحیح کن و دوباره توضیح بده"""
 
 # ── CHAT FUNCTIONS ──
 def call_openai_model(model, system_prompt, messages, temperature=0.7,
@@ -454,22 +404,18 @@ def call_openai_model(model, system_prompt, messages, temperature=0.7,
         else:
             formatted.append(m)
 
-    # gpt-5.4 family uses max_completion_tokens
-    # older models use max_tokens
     is_new_model = any(x in model for x in ['gpt-5', 'o1', 'o3', 'o4'])
     token_param  = 'max_completion_tokens' if is_new_model else 'max_tokens'
 
     kwargs = {
-        'model':       model,
-        'messages':    [{"role": "system", "content": system_prompt}] + formatted,
-        token_param:   1000,
+        'model':    model,
+        'messages': [{"role": "system", "content": system_prompt}] + formatted,
+        token_param: 1000,
     }
-
-    # new models dont support temperature with reasoning effort none
     if not is_new_model:
         kwargs['temperature'] = temperature
 
-    response = openai_client.chat.completions.create(**kwargs)
+    response    = openai_client.chat.completions.create(**kwargs)
     reply       = response.choices[0].message.content
     tokens_used = response.usage.total_tokens
     return reply, tokens_used
@@ -497,6 +443,7 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     messages         = history + [{"role": "user", "content": user_message}]
     estimated_tokens = len(user_message) // 4 + 400
 
+    # guest user — use nano directly, no tracking
     if user_id is None:
         try:
             reply, _ = call_openai_model(
@@ -504,13 +451,16 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
                 temperature, image_b64, image_type
             )
             return reply, False, None, 'gpt-5.4-nano'
-        except:
+        except Exception as e:
+            print(f"Guest OpenAI error: {e}")
             reply, _ = call_groq_model(system_prompt, messages, temperature)
             return reply, True, None, 'llama'
 
     model, tier, reset_ts, switched = pick_model_and_update(
         user_id, plan, estimated_tokens
     )
+
+    print(f"DEBUG: user={user_id} plan={plan} model={model} switched={switched}")
 
     if 'llama' in model:
         reply, _ = call_groq_model(system_prompt, messages, temperature)
@@ -523,7 +473,7 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
         )
         return reply, switched, reset_ts, model
     except Exception as e:
-        print(f"OpenAI error: {e}")
+        print(f"OpenAI error with {model}: {e}")
         reply, _ = call_groq_model(system_prompt, messages, temperature)
         return reply, True, reset_ts, 'llama'
 
@@ -668,10 +618,10 @@ def chat():
         image_type   = None
 
         if 'image' in request.files:
-            img        = request.files['image']
-            img_bytes  = img.read()
-            image_b64  = base64.b64encode(img_bytes).decode('utf-8')
-            image_type = img.content_type or 'image/jpeg'
+            img          = request.files['image']
+            img_bytes    = img.read()
+            image_b64    = base64.b64encode(img_bytes).decode('utf-8')
+            image_type   = img.content_type or 'image/jpeg'
             user_message = user_message or "این تصویر را به دری توضیح بده"
 
         if 'document' in request.files:
@@ -688,8 +638,9 @@ def chat():
         image_b64    = None
         image_type   = None
 
-    user_id = current_user.id if current_user.is_authenticated else None
-    plan = getattr(current_user, 'plan', 'free') or 'free' if current_user.is_authenticated else 'free'
+    user_id = current_user.id   if current_user.is_authenticated else None
+    plan    = getattr(current_user, 'plan', 'free') or 'free' \
+              if current_user.is_authenticated else 'free'
 
     user_memories = get_user_memories(user_id) if user_id else None
 
@@ -714,12 +665,11 @@ def chat():
         response_data["reset_ts"]      = reset_ts
 
     if current_user.is_authenticated:
+        conv = None
         if conv_id:
             conv = Conversation.query.filter_by(
                 id=conv_id, user_id=current_user.id
             ).first()
-        else:
-            conv = None
 
         if not conv:
             title = user_message[:60] if user_message else "گفتگوی جدید"
@@ -748,8 +698,9 @@ def tutor_chat():
     subject      = data.get("subject", "عمومی")
     grade        = data.get("grade", "متوسط")
 
-    user_id = current_user.id if current_user.is_authenticated else None
-    plan = getattr(current_user, 'plan', 'free') or 'free' if current_user.is_authenticated else 'free'
+    user_id = current_user.id   if current_user.is_authenticated else None
+    plan    = getattr(current_user, 'plan', 'free') or 'free' \
+              if current_user.is_authenticated else 'free'
 
     reply, _, _, _ = smart_chat(
         system_prompt=build_tutor_prompt(subject, grade),
@@ -769,8 +720,9 @@ def persona_chat():
     history        = data.get("history", [])
     persona_prompt = data.get("persona_prompt", "")
 
-    user_id = current_user.id if current_user.is_authenticated else None
-    plan = getattr(current_user, 'plan', 'free') or 'free' if current_user.is_authenticated else 'free'
+    user_id = current_user.id   if current_user.is_authenticated else None
+    plan    = getattr(current_user, 'plan', 'free') or 'free' \
+              if current_user.is_authenticated else 'free'
 
     reply, _, _, _ = smart_chat(
         system_prompt=persona_prompt,
