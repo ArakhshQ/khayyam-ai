@@ -229,33 +229,55 @@ def extract_and_save_memory(user_id, user_message):
     msg_lower = user_message.lower()
     if not any(word.lower() in msg_lower for word in trigger_words):
         return
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-5.4-nano",
-            messages=[{"role": "user", "content": f"""کاربر این پیام را فرستاده:
+
+    extraction_prompt = f"""کاربر این پیام را فرستاده:
 "{user_message}"
 
 اگر کاربر خواسته چیزی برای همیشه به یاد سپرده شود، آن را یک جمله کوتاه بنویس.
 مثال: "کاربر اسمش احمد است" یا "کاربر پزشک است"
 اگر چیزی برای ذخیره نیست فقط بنویس: NONE
-فقط یک جمله یا NONE."""}],
+فقط یک جمله یا NONE."""
+
+    memory_text = None
+
+    # try OpenAI first
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": extraction_prompt}],
             max_completion_tokens=80,
             temperature=0.1
         )
         memory_text = response.choices[0].message.content.strip()
-        print(f"Memory extraction: '{memory_text}'")
+        print(f"Memory extraction (OpenAI): '{memory_text}'")
+    except Exception as e:
+        print(f"Memory OpenAI failed, trying Groq: {e}")
+        # fallback to Groq
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": extraction_prompt}],
+                max_tokens=80,
+                temperature=0.1
+            )
+            memory_text = response.choices[0].message.content.strip()
+            print(f"Memory extraction (Groq): '{memory_text}'")
+        except Exception as e2:
+            print(f"Memory extraction failed completely: {e2}")
+            return
 
-        if memory_text and memory_text.upper() != "NONE" and len(memory_text) > 3:
+    if memory_text and memory_text.upper() != "NONE" and len(memory_text) > 3:
+        try:
             existing = Memory.query.filter_by(
                 user_id=user_id, content=memory_text
             ).first()
             if not existing:
                 db.session.add(Memory(user_id=user_id, content=memory_text))
                 db.session.commit()
-                print(f"Memory saved: {memory_text}")
-    except Exception as e:
-        print(f"Memory extraction error: {e}")
-
+                print(f"Memory saved for user {user_id}: {memory_text}")
+        except Exception as e:
+            print(f"Memory DB save error: {e}")
+            db.session.rollback()
 # ── PROMPTS ──
 def build_system_prompt(user_memories=None):
     knowledge = load_knowledge()
@@ -300,6 +322,20 @@ def build_system_prompt(user_memories=None):
 - از کلمات مانند: برادر، خواهر، تشکر استفاده کن
 - هرگز خود را ChatGPT معرفی نکن
 - اگر اطلاعاتی درباره کاربر داری از آن استفاده کن — مثلاً اسمش را بگو
+
+====================
+سیستم حافظه — بسیار مهم
+====================
+تو یک سیستم حافظه دائمی داری که اطلاعات کاربران را برای همیشه ذخیره می‌کند.
+
+وقتی کاربر می‌گوید "یادت باشه"، "ذخیره کن"، "remember" یا مشابه:
+- بگو: "بسیار خوب، این را در حافظه‌ام ذخیره کردم و در همه گفتگوهای بعدی به یاد خواهم داشت."
+- هرگز نگو که نمی‌توانی چیزی را به یاد بسپاری
+- هرگز نگو که حافظه‌ات فقط در این چت کار می‌کند
+- اطلاعات ذخیره‌شده در بالای این پرامپت نشان داده شده — از آن‌ها استفاده کن
+
+اگر کاربر اسمش را گفته و در حافظه داری — از اسمش استفاده کن.
+اگر کاربر شغلش را گفته — آن را در نظر بگیر.
 
 ====================
 فرمت‌بندی — بسیار مهم

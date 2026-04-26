@@ -541,7 +541,7 @@
     let history       = [];
     let isLoading     = false;
     let sidebarOpen   = true;
-
+    let switchNoticShown = false;
     // ── INIT ──
     async function init() {
       const res  = await fetch('/api/me');
@@ -647,6 +647,7 @@
     }
 
     function newChat() {
+      switchNoticeShown = false;
       currentConvId = null;
       history       = [];
       document.getElementById('messages').innerHTML = `
@@ -827,29 +828,25 @@ async function sendMessage() {
     removeTyping();
 
     // show neutral switch notice
-    if (data.switch_notice && data.reset_ts) {
+    if (data.switch_notice && data.reset_ts && !switchNoticeShown) {
+      switchNoticeShown = true;
       const resetDate  = new Date(data.reset_ts * 1000);
       const now        = new Date();
-
-      const timeStr = resetDate.toLocaleTimeString([], {
-        hour:   '2-digit',
-        minute: '2-digit'
-      });
-
-      // check if reset is tomorrow or later
-      const isToday    = resetDate.toDateString() === now.toDateString();
+      const timeStr    = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const tomorrow   = new Date(now);
       tomorrow.setDate(tomorrow.getDate() + 1);
       const isTomorrow = resetDate.toDateString() === tomorrow.toDateString();
+      const isToday    = resetDate.toDateString() === now.toDateString();
+      let dayStr = isTomorrow ? 'فردا ساعت ' : isToday ? 'امروز ساعت ' : resetDate.toLocaleDateString('fa-AF') + ' ساعت ';
 
-      let dayStr = '';
-      if (isTomorrow)     dayStr = 'فردا ساعت ';
-      else if (!isToday)  dayStr = resetDate.toLocaleDateString('fa-AF') + ' ساعت ';
-      else                dayStr = 'امروز ساعت ';
-
-      const notice    = document.createElement('div');
-      notice.className = 'limit-notice';
-      notice.textContent = `⚡ خیام در حال تنظیم است. بازنشینی ${dayStr}${timeStr}`;
+      const notice      = document.createElement('div');
+      notice.className  = 'limit-notice';
+      notice.style.cssText = `
+        text-align:center; font-size:12px; color:var(--gold);
+        background:rgba(201,168,76,0.08); border:1px solid var(--gold-dim);
+        border-radius:8px; padding:8px 14px; margin:4px auto;
+        max-width:500px; position:sticky; top:8px; z-index:5;`;
+      notice.textContent = `⚡ خیام در حال تنظیم است — بازنشینی ${dayStr}${timeStr}`;
       document.getElementById('messages').appendChild(notice);
       scrollToBottom();
     }
