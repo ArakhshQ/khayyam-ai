@@ -1,10 +1,10 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig
 from functools import wraps
 from openai import OpenAI
 from groq import Groq
 from dotenv import load_dotenv
-from database import db, User, Conversation, Message, Memory, UserTokenUsage
 from auth import register_user, login_user_by_username
 from datetime import datetime, timezone, timedelta
 import os
@@ -190,28 +190,59 @@ def get_usage_summary(user_id, plan):
     return summary
 
 # ── KNOWLEDGE ──
+# ── KNOWLEDGE (DATABASE BACKED) ──
 def load_knowledge():
     try:
+        row = SiteConfig.query.filter_by(key='knowledge').first()
+        if row:
+            return json.loads(row.value)
+        # fallback to file if db row missing
         with open(KNOWLEDGE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            save_knowledge(data)  # migrate to db
+            return data
     except:
         return {"dari_dialect": [], "cultural_customs": []}
 
 def load_examples():
     try:
+        row = SiteConfig.query.filter_by(key='examples').first()
+        if row:
+            return json.loads(row.value)
         with open(EXAMPLES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            save_examples(data)  # migrate to db
+            return data
     except:
         return {"conversation_examples": []}
 
 def save_knowledge(data):
-    with open(KNOWLEDGE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        row = SiteConfig.query.filter_by(key='knowledge').first()
+        if row:
+            row.value      = json.dumps(data, ensure_ascii=False)
+            row.updated_at = datetime.utcnow()
+        else:
+            row = SiteConfig(key='knowledge', value=json.dumps(data, ensure_ascii=False))
+            db.session.add(row)
+        db.session.commit()
+    except Exception as e:
+        print(f"save_knowledge error: {e}")
+        db.session.rollback()
 
 def save_examples(data):
-    with open(EXAMPLES_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
+    try:
+        row = SiteConfig.query.filter_by(key='examples').first()
+        if row:
+            row.value      = json.dumps(data, ensure_ascii=False)
+            row.updated_at = datetime.utcnow()
+        else:
+            row = SiteConfig(key='examples', value=json.dumps(data, ensure_ascii=False))
+            db.session.add(row)
+        db.session.commit()
+    except Exception as e:
+        print(f"save_examples error: {e}")
+        db.session.rollback()
 # ── MEMORY ──
 def get_user_memories(user_id):
     memories = Memory.query.filter_by(

@@ -97,3 +97,17 @@ class UserTokenUsage(db.Model):
             'tier3_tokens': self.tier3_tokens,
             'tier3_reset':  self.tier3_reset.isoformat(),
         }
+class SiteConfig(db.Model):
+    __tablename__ = 'site_config'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    key        = db.Column(db.String(100), unique=True, nullable=False)
+    value      = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'key':        self.key,
+            'value':      self.value,
+            'updated_at': self.updated_at.isoformat()
+        }

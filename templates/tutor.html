@@ -7,438 +7,368 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <style>
-  body {
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
+    body { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
-  /* ── HEADER ── */
-  header {
-    position: relative;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 20px;
-    height: 56px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
+    header {
+      position: relative; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 20px; height: 56px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
 
-  .nav-links { display: flex; gap: 4px; }
+    .nav-links { display: flex; gap: 4px; }
 
-  .nav-btn {
-    padding: 5px 12px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text-dim);
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 13px;
-    cursor: pointer;
-    text-decoration: none;
-    transition: all 0.2s;
-  }
-  .nav-btn:hover { background: var(--surface2); color: var(--text); }
-  .nav-btn.active { border-color: var(--gold-dim); color: var(--gold); }
+    .nav-btn {
+      padding: 5px 12px; border-radius: 7px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--text-dim); font-family: 'Vazirmatn', sans-serif;
+      font-size: 13px; cursor: pointer; text-decoration: none; transition: all 0.2s;
+    }
+    .nav-btn:hover { background: var(--surface2); color: var(--text); }
+    .nav-btn.active { border-color: var(--gold-dim); color: var(--gold); }
 
-  .reset-btn {
-    padding: 5px 14px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text-dim);
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .reset-btn:hover { border-color: var(--gold-dim); color: var(--gold); }
+    .reset-btn {
+      padding: 5px 14px; border-radius: 7px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--text-dim); font-family: 'Vazirmatn', sans-serif;
+      font-size: 13px; cursor: pointer; transition: all 0.2s;
+    }
+    .reset-btn:hover { border-color: var(--gold-dim); color: var(--gold); }
 
-  /* ── MAIN ── */
-  .main {
-    position: relative;
-    z-index: 1;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
+    .main { position: relative; z-index: 1; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-  /* ── SETUP SCREEN ── */
-  .setup-screen {
-    flex: 1;
-    overflow-y: auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 32px 16px;
-  }
+    /* ── SETUP ── */
+    .setup-screen {
+      flex: 1; overflow-y: auto;
+      display: flex; align-items: center; justify-content: center;
+      padding: 32px 16px;
+    }
 
-  .setup-card {
-    width: 100%;
-    max-width: 580px;
-    animation: fadeUp 0.5s ease both;
-  }
+    .setup-card { width: 100%; max-width: 580px; animation: fadeUp 0.5s ease both; }
 
-  .setup-top { text-align: center; margin-bottom: 36px; }
-  .setup-icon { font-size: 48px; display: block; margin-bottom: 16px; }
-  .setup-top h1 { font-size: 26px; font-weight: 700; color: var(--gold); margin-bottom: 8px; }
-  .setup-top p { font-size: 14px; color: var(--text-dim); line-height: 1.8; }
+    .setup-top { text-align: center; margin-bottom: 36px; }
+    .setup-icon { font-size: 48px; display: block; margin-bottom: 16px; }
+    .setup-top h1 { font-size: 26px; font-weight: 700; color: var(--gold); margin-bottom: 8px; }
+    .setup-top p { font-size: 14px; color: var(--text-dim); line-height: 1.8; }
 
-  .setup-section { margin-bottom: 28px; }
+    .setup-section { margin-bottom: 28px; }
+    .setup-section-label {
+      font-size: 12px; font-weight: 500; color: var(--text-dim);
+      letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 12px;
+    }
 
-  .setup-section-label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-dim);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin-bottom: 12px;
-  }
+    .pill-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pill {
+      padding: 8px 18px; border-radius: 99px;
+      border: 1px solid var(--border); background: var(--surface);
+      color: var(--text-dim); font-family: 'Vazirmatn', sans-serif;
+      font-size: 14px; cursor: pointer; transition: all 0.2s;
+    }
+    .pill:hover { border-color: var(--gold-dim); color: var(--text); background: var(--surface2); }
+    .pill.selected { border-color: var(--gold); background: rgba(201,168,76,0.12); color: var(--gold); font-weight: 500; }
 
-  .pill-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .grade-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .grade-card {
+      padding: 14px 18px; border-radius: 12px;
+      border: 1px solid var(--border); background: var(--surface);
+      cursor: pointer; transition: all 0.2s; text-align: center;
+    }
+    .grade-card:hover { border-color: var(--gold-dim); background: var(--surface2); }
+    .grade-card.selected { border-color: var(--gold); background: rgba(201,168,76,0.1); }
+    .grade-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .grade-card.selected .grade-title { color: var(--gold); }
+    .grade-sub { font-size: 12px; color: var(--text-dim); }
 
-  .pill {
-    padding: 8px 18px;
-    border-radius: 99px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text-dim);
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 14px;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .pill:hover { border-color: var(--gold-dim); color: var(--text); background: var(--surface2); }
-  .pill.selected { border-color: var(--gold); background: rgba(201,168,76,0.12); color: var(--gold); font-weight: 500; }
+    .start-btn {
+      width: 100%; padding: 14px; border-radius: 10px; border: none;
+      background: var(--gold); color: #0f0e0c;
+      font-family: 'Vazirmatn', sans-serif; font-size: 16px; font-weight: 700;
+      cursor: pointer; transition: all 0.2s; margin-top: 8px;
+    }
+    .start-btn:hover { background: #e0bb60; transform: translateY(-1px); }
+    .start-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
 
-  .grade-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    /* ── CHAT SCREEN ── */
+    .chat-screen { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-  .grade-card {
-    padding: 14px 18px;
-    border-radius: 12px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    cursor: pointer;
-    transition: all 0.2s;
-    text-align: center;
-  }
-  .grade-card:hover { border-color: var(--gold-dim); background: var(--surface2); }
-  .grade-card.selected { border-color: var(--gold); background: rgba(201,168,76,0.1); }
+    .session-bar {
+      padding: 8px 20px; background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    }
 
-  .grade-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
-  .grade-card.selected .grade-title { color: var(--gold); }
-  .grade-sub { font-size: 12px; color: var(--text-dim); }
+    .session-tag { padding: 3px 12px; border-radius: 99px; font-size: 12px; font-weight: 500; }
+    .tag-subject { background: rgba(201,168,76,0.15); color: var(--gold); border: 1px solid var(--gold-dim); }
+    .tag-grade { background: rgba(58,92,46,0.25); color: #7abf6a; border: 1px solid #3a5c2e; }
+    .session-bar-hint { font-size: 12px; color: var(--text-dim); margin-right: auto; }
 
-  .start-btn {
-    width: 100%;
-    padding: 14px;
-    border-radius: 10px;
-    border: none;
-    background: var(--gold);
-    color: #0f0e0c;
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 16px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 0.2s;
-    margin-top: 8px;
-  }
-  .start-btn:hover { background: #e0bb60; transform: translateY(-1px); }
-  .start-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
+    .chat-wrapper {
+      flex: 1; overflow-y: auto;
+      padding: 28px 16px; scroll-behavior: smooth;
+    }
+    .chat-wrapper::-webkit-scrollbar { width: 4px; }
+    .chat-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-  /* ── CHAT SCREEN ── */
-  .chat-screen {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
+    .messages {
+      max-width: 700px; margin: 0 auto;
+      display: flex; flex-direction: column; gap: 20px;
+    }
 
-  .session-bar {
-    padding: 8px 20px;
-    background: var(--surface2);
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
-  }
+    .message { display: flex; gap: 10px; animation: fadeUp 0.3s ease both; }
+    .message.user { flex-direction: row-reverse; }
 
-  .session-tag {
-    padding: 3px 12px;
-    border-radius: 99px;
-    font-size: 12px;
-    font-weight: 500;
-  }
+    .avatar {
+      width: 34px; height: 34px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; flex-shrink: 0; margin-top: 2px; font-weight: 700;
+    }
+    .avatar.ai { background: var(--surface2); border: 1px solid var(--gold-dim); color: var(--gold); }
+    .avatar.user { background: var(--user-bg); border: 1px solid var(--user-border); font-size: 15px; }
 
-  .tag-subject { background: rgba(201,168,76,0.15); color: var(--gold); border: 1px solid var(--gold-dim); }
-  .tag-grade { background: rgba(58,92,46,0.25); color: #7abf6a; border: 1px solid #3a5c2e; }
-  .session-bar-hint { font-size: 12px; color: var(--text-dim); margin-right: auto; }
+    .bubble {
+      max-width: 78%; padding: 13px 17px;
+      border-radius: 14px; font-size: 15px; line-height: 1.85;
+    }
+    .message.ai .bubble {
+      background: var(--surface); border: 1px solid var(--border);
+      border-top-right-radius: 4px;
+    }
+    .message.user .bubble {
+      background: var(--user-bg); border: 1px solid var(--user-border);
+      border-top-left-radius: 4px;
+    }
 
-  .chat-wrapper {
-    flex: 1;
-    overflow-y: auto;
-    padding: 28px 16px;
-    scroll-behavior: smooth;
-  }
-  .chat-wrapper::-webkit-scrollbar { width: 4px; }
-  .chat-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    /* ── MARKDOWN STYLES — critical for formatting ── */
+    .bubble p { margin: 0 0 10px 0; }
+    .bubble p:last-child { margin-bottom: 0; }
+    .bubble ul, .bubble ol { padding-right: 20px; margin: 0 0 10px 0; }
+    .bubble li { margin-bottom: 6px; line-height: 1.7; }
+    .bubble h1, .bubble h2, .bubble h3 {
+      font-size: 15px; font-weight: 700;
+      color: var(--gold); margin: 16px 0 8px;
+    }
+    .bubble h1:first-child,
+    .bubble h2:first-child,
+    .bubble h3:first-child { margin-top: 0; }
+    .bubble strong { color: var(--text); font-weight: 700; }
+    .bubble em { color: var(--text-dim); font-style: italic; }
+    .bubble code {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 4px; padding: 2px 6px;
+      font-size: 13px; direction: ltr; display: inline-block;
+      font-family: 'Courier New', monospace;
+    }
+    .bubble pre {
+      background: #0d1117; border: 1px solid var(--border);
+      border-radius: 10px; padding: 16px; overflow-x: auto;
+      margin: 12px 0; direction: ltr; text-align: left;
+    }
+    .bubble pre code {
+      background: none; border: none; padding: 0;
+      font-size: 13px; color: #e6edf3; display: block;
+    }
+    .bubble blockquote {
+      border-right: 3px solid var(--gold-dim);
+      padding: 8px 14px; margin: 10px 0;
+      color: var(--text-dim); font-style: italic;
+    }
+    .bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+    .bubble a { color: var(--gold); }
+    .bubble table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+    .bubble th, .bubble td {
+      padding: 8px 12px; text-align: right;
+      border: 1px solid var(--border); font-size: 13px;
+    }
+    .bubble th { background: var(--surface2); color: var(--gold); font-weight: 600; }
 
-  .messages {
-    max-width: 700px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
+    /* typing */
+    .typing-dots { display: flex; gap: 5px; align-items: center; padding: 4px 0; }
+    .typing-dots span {
+      width: 7px; height: 7px; background: var(--gold-dim);
+      border-radius: 50%; animation: bounce 1.2s infinite;
+    }
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
 
-  .message { display: flex; gap: 10px; animation: fadeUp 0.3s ease both; }
-  .message.user { flex-direction: row-reverse; }
+    @keyframes bounce {
+      0%,60%,100% { transform: translateY(0); opacity: 0.4; }
+      30% { transform: translateY(-6px); opacity: 1; }
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
 
-  .avatar {
-    width: 34px; height: 34px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 15px; flex-shrink: 0; margin-top: 2px;
-  }
-  .avatar.ai { background: var(--surface2); border: 1px solid var(--gold-dim); color: var(--gold); font-weight: 700; font-size: 13px; }
-  .avatar.user { background: var(--user-bg); border: 1px solid var(--user-border); }
+    /* topic chips */
+    .topic-chips {
+      max-width: 700px; margin: 0 auto 12px;
+      display: flex; flex-wrap: wrap; gap: 7px; padding: 0 4px;
+    }
+    .chip {
+      padding: 5px 14px; border-radius: 99px;
+      border: 1px solid var(--border); background: var(--surface);
+      color: var(--text-dim); font-family: 'Vazirmatn', sans-serif;
+      font-size: 12px; cursor: pointer; transition: all 0.2s;
+    }
+    .chip:hover { border-color: var(--gold-dim); color: var(--text); }
 
-  .bubble {
-    max-width: 78%;
-    padding: 13px 17px;
-    border-radius: 14px;
-    font-size: 15px;
-    line-height: 1.85;
-  }
-  .message.ai .bubble { background: var(--surface); border: 1px solid var(--border); border-top-right-radius: 4px; }
-  .message.user .bubble { background: var(--user-bg); border: 1px solid var(--user-border); border-top-left-radius: 4px; }
+    /* input */
+    .input-area {
+      padding: 12px 20px 16px;
+      background: var(--surface); border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .input-box {
+      max-width: 700px; margin: 0 auto;
+      display: flex; align-items: flex-end; gap: 10px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 14px; padding: 10px 12px; transition: border-color 0.2s;
+    }
+    .input-box:focus-within { border-color: var(--gold-dim); }
 
-  .typing-dots { display: flex; gap: 5px; align-items: center; padding: 4px 0; }
-  .typing-dots span {
-    width: 7px; height: 7px;
-    background: var(--gold-dim);
-    border-radius: 50%;
-    animation: bounce 1.2s infinite;
-  }
-  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+    #user-input {
+      flex: 1; background: transparent; border: none; outline: none;
+      color: var(--text); font-family: 'Vazirmatn', sans-serif;
+      font-size: 15px; resize: none; max-height: 140px;
+      line-height: 1.6; direction: rtl;
+    }
+    #user-input::placeholder { color: var(--text-dim); }
 
-  @keyframes bounce {
-    0%,60%,100% { transform: translateY(0); opacity: 0.4; }
-    30% { transform: translateY(-6px); opacity: 1; }
-  }
+    #send-btn {
+      width: 34px; height: 34px; border-radius: 8px; border: none;
+      background: var(--gold); color: #0f0e0c; font-size: 16px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all 0.2s;
+    }
+    #send-btn:hover { background: #e0bb60; transform: scale(1.05); }
+    #send-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
 
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(14px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+    .input-hint { text-align: center; font-size: 11px; color: var(--text-dim); margin-top: 7px; }
 
-  /* topic chips */
-  .topic-chips {
-    max-width: 700px;
-    margin: 0 auto 12px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-    padding: 0 4px;
-  }
+    /* limit notice */
+    .limit-notice {
+      text-align: center; font-size: 12px; color: var(--gold);
+      background: rgba(201,168,76,0.08); border: 1px solid var(--gold-dim);
+      border-radius: 8px; padding: 8px 14px; margin: 0 auto;
+      max-width: 500px;
+    }
 
-  .chip {
-    padding: 5px 14px;
-    border-radius: 99px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text-dim);
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .chip:hover { border-color: var(--gold-dim); color: var(--text); }
-
-  /* input */
-  .input-area {
-    padding: 12px 20px 16px;
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-
-  .input-box {
-    max-width: 700px;
-    margin: 0 auto;
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 10px 12px;
-    transition: border-color 0.2s;
-  }
-  .input-box:focus-within { border-color: var(--gold-dim); }
-
-  #user-input {
-    flex: 1;
-    background: transparent;
-    border: none; outline: none;
-    color: var(--text);
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 15px;
-    resize: none;
-    max-height: 140px;
-    line-height: 1.6;
-    direction: rtl;
-  }
-  #user-input::placeholder { color: var(--text-dim); }
-
-  #send-btn {
-    width: 34px; height: 34px;
-    border-radius: 8px;
-    border: none;
-    background: var(--gold);
-    color: #0f0e0c;
-    font-size: 16px;
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-    transition: all 0.2s;
-  }
-  #send-btn:hover { background: #e0bb60; transform: scale(1.05); }
-  #send-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
-
-  .input-hint { text-align: center; font-size: 11px; color: var(--text-dim); margin-top: 7px; }
-
-  /* ── MOBILE ── */
-  @media (max-width: 600px) {
-    .grade-grid { grid-template-columns: 1fr 1fr; }
-    .bubble { max-width: 88%; font-size: 14px; }
-    .nav-links { display: none; }
-    header { padding: 0 14px; }
-    .setup-screen { padding: 20px 14px; }
-  }
-</style>
+    @media (max-width: 600px) {
+      .grade-grid { grid-template-columns: 1fr 1fr; }
+      .bubble { max-width: 88%; font-size: 14px; }
+      .nav-links { display: none; }
+      header { padding: 0 14px; }
+      .setup-screen { padding: 20px 14px; }
+      .input-area { padding: 10px 12px 14px; }
+    }
+  </style>
 </head>
 <body>
 
-  <header>
-    <a href="/" class="logo">
-      <div class="logo-mark">خ</div>
-      <span class="logo-text">خیام</span>
-    </a>
-    <nav class="nav-links">
-  <a href="/chat" class="nav-btn active">چت</a>
-  <a href="/tutor" class="nav-btn">بیاموز</a>
-</nav>
-<div id="auth-buttons" style="display:flex; gap:6px;">
-  <a href="/login" class="nav-btn">ورود</a>
-  <a href="/register" class="nav-btn" style="border-color:var(--gold-dim);color:var(--gold);">ثبت‌نام</a>
-</div>
-<div id="user-menu" style="display:none; align-items:center; gap:6px;">
-  <a href="/profile" class="nav-btn" id="nav-username">پروفایل</a>
-  <a href="/logout" class="nav-btn">خروج</a>
-</div>
-    <button class="reset-btn" id="reset-btn" onclick="resetSession()" style="display:none">
-      ← تغییر مضمون
-    </button>
-  </header>
-
-  <div class="main">
-
-    <!-- ── SETUP SCREEN ── -->
-    <div class="setup-screen" id="setup-screen">
-      <div class="setup-card">
-
-        <div class="setup-top">
-          <span class="setup-icon">📚</span>
-          <h1>استاد خیام</h1>
-          <p>مضمون و صنف خود را انتخاب کنید<br/>تا درس شروع شود</p>
-        </div>
-
-        <!-- SUBJECT -->
-        <div class="setup-section">
-          <div class="setup-section-label">مضمون را انتخاب کنید</div>
-          <div class="pill-grid" id="subject-grid">
-            <button class="pill" onclick="selectSubject(this, 'ریاضی')">🔢 ریاضی</button>
-            <button class="pill" onclick="selectSubject(this, 'فیزیک')">⚡ فیزیک</button>
-            <button class="pill" onclick="selectSubject(this, 'کیمیا')">🧪 کیمیا</button>
-            <button class="pill" onclick="selectSubject(this, 'بیولوژی')">🌱 بیولوژی</button>
-            <button class="pill" onclick="selectSubject(this, 'تاریخ')">🏛️ تاریخ</button>
-            <button class="pill" onclick="selectSubject(this, 'جغرافیه')">🗺️ جغرافیه</button>
-            <button class="pill" onclick="selectSubject(this, 'زبان دری')">📖 زبان دری</button>
-            <button class="pill" onclick="selectSubject(this, 'انگلیسی')">🇬🇧 انگلیسی</button>
-            <button class="pill" onclick="selectSubject(this, 'دین')">☪️ دین</button>
-            <button class="pill" onclick="selectSubject(this, 'کمپیوتر')">💻 کمپیوتر</button>
-          </div>
-        </div>
-
-        <!-- GRADE -->
-        <div class="setup-section">
-          <div class="setup-section-label">صنف خود را انتخاب کنید</div>
-          <div class="grade-grid">
-            <div class="grade-card" onclick="selectGrade(this, 'صنف ۱ تا ۶ (ابتدایی)', 'ابتدایی')">
-              <div class="grade-title">صنف ۱ – ۶</div>
-              <div class="grade-sub">ابتدایی</div>
-            </div>
-            <div class="grade-card" onclick="selectGrade(this, 'صنف ۷ تا ۹ (متوسطه)', 'متوسطه')">
-              <div class="grade-title">صنف ۷ – ۹</div>
-              <div class="grade-sub">متوسطه</div>
-            </div>
-            <div class="grade-card" onclick="selectGrade(this, 'صنف ۱۰ تا ۱۲ (لیسه)', 'لیسه')">
-              <div class="grade-title">صنف ۱۰ – ۱۲</div>
-              <div class="grade-sub">لیسه</div>
-            </div>
-            <div class="grade-card" onclick="selectGrade(this, 'دانشگاه', 'دانشگاه')">
-              <div class="grade-title">دانشگاه</div>
-              <div class="grade-sub">سطح عالی</div>
-            </div>
-          </div>
-        </div>
-
-        <button class="start-btn" id="start-btn" onclick="startSession()" disabled>
-          شروع درس ←
-        </button>
-
-      </div>
-    </div>
-
-    <!-- ── CHAT SCREEN ── -->
-    <div class="chat-screen" id="chat-screen" style="display:none">
-
-      <div class="session-bar">
-        <span class="session-tag tag-subject" id="tag-subject">—</span>
-        <span class="session-tag tag-grade" id="tag-grade">—</span>
-        <span class="session-bar-hint">هر سوالی دارید بپرسید</span>
-      </div>
-
-      <div class="chat-wrapper" id="chat-wrapper">
-        <div class="messages" id="messages"></div>
-      </div>
-
-      <div class="input-area">
-        <div class="topic-chips" id="topic-chips"></div>
-        <div class="input-box">
-          <textarea id="user-input" rows="1" placeholder="سوال خود را بنویسید..."></textarea>
-          <button id="send-btn" onclick="sendMessage()">↑</button>
-        </div>
-        <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
-      </div>
-
-    </div>
-
+<header>
+  <a href="/" class="logo">
+    <div class="logo-mark">خ</div>
+    <span class="logo-text">خیام</span>
+  </a>
+  <nav class="nav-links">
+    <a href="/chat" class="nav-btn">چت</a>
+    <a href="/tutor" class="nav-btn active">بیاموز</a>
+  </nav>
+  <div id="auth-buttons" style="display:flex; gap:6px;">
+    <a href="/login" class="nav-btn">ورود</a>
+    <a href="/register" class="nav-btn" style="border-color:var(--gold-dim);color:var(--gold);">ثبت‌نام</a>
   </div>
-<!-- BOTTOM NAV — mobile only -->
-<!-- BOTTOM NAV — mobile only -->
+  <div id="user-menu" style="display:none; align-items:center; gap:6px;">
+    <a href="/profile" class="nav-btn" id="nav-username">پروفایل</a>
+    <a href="/logout" class="nav-btn">خروج</a>
+  </div>
+  <button class="reset-btn" id="reset-btn" onclick="resetSession()" style="display:none">
+    ← تغییر مضمون
+  </button>
+</header>
+
+<div class="main">
+
+  <!-- SETUP SCREEN -->
+  <div class="setup-screen" id="setup-screen">
+    <div class="setup-card">
+      <div class="setup-top">
+        <span class="setup-icon">📚</span>
+        <h1>استاد خیام</h1>
+        <p>مضمون و صنف خود را انتخاب کنید تا درس شروع شود</p>
+      </div>
+
+      <div class="setup-section">
+        <div class="setup-section-label">مضمون را انتخاب کنید</div>
+        <div class="pill-grid" id="subject-grid">
+          <button class="pill" onclick="selectSubject(this, 'ریاضی')">🔢 ریاضی</button>
+          <button class="pill" onclick="selectSubject(this, 'فیزیک')">⚡ فیزیک</button>
+          <button class="pill" onclick="selectSubject(this, 'کیمیا')">🧪 کیمیا</button>
+          <button class="pill" onclick="selectSubject(this, 'بیولوژی')">🌱 بیولوژی</button>
+          <button class="pill" onclick="selectSubject(this, 'تاریخ')">🏛️ تاریخ</button>
+          <button class="pill" onclick="selectSubject(this, 'جغرافیه')">🗺️ جغرافیه</button>
+          <button class="pill" onclick="selectSubject(this, 'زبان دری')">📖 زبان دری</button>
+          <button class="pill" onclick="selectSubject(this, 'انگلیسی')">🇬🇧 انگلیسی</button>
+          <button class="pill" onclick="selectSubject(this, 'دین')">☪️ دین</button>
+          <button class="pill" onclick="selectSubject(this, 'کمپیوتر')">💻 کمپیوتر</button>
+        </div>
+      </div>
+
+      <div class="setup-section">
+        <div class="setup-section-label">صنف خود را انتخاب کنید</div>
+        <div class="grade-grid">
+          <div class="grade-card" onclick="selectGrade(this, 'صنف ۱ تا ۶ (ابتدایی)', 'ابتدایی')">
+            <div class="grade-title">صنف ۱ – ۶</div>
+            <div class="grade-sub">ابتدایی</div>
+          </div>
+          <div class="grade-card" onclick="selectGrade(this, 'صنف ۷ تا ۹ (متوسطه)', 'متوسطه')">
+            <div class="grade-title">صنف ۷ – ۹</div>
+            <div class="grade-sub">متوسطه</div>
+          </div>
+          <div class="grade-card" onclick="selectGrade(this, 'صنف ۱۰ تا ۱۲ (لیسه)', 'لیسه')">
+            <div class="grade-title">صنف ۱۰ – ۱۲</div>
+            <div class="grade-sub">لیسه</div>
+          </div>
+          <div class="grade-card" onclick="selectGrade(this, 'دانشگاه', 'دانشگاه')">
+            <div class="grade-title">دانشگاه</div>
+            <div class="grade-sub">سطح عالی</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="start-btn" id="start-btn" onclick="startSession()" disabled>
+        شروع درس ←
+      </button>
+    </div>
+  </div>
+
+  <!-- CHAT SCREEN -->
+  <div class="chat-screen" id="chat-screen" style="display:none">
+    <div class="session-bar">
+      <span class="session-tag tag-subject" id="tag-subject">—</span>
+      <span class="session-tag tag-grade" id="tag-grade">—</span>
+      <span class="session-bar-hint">هر سوالی دارید بپرسید</span>
+    </div>
+
+    <div class="chat-wrapper" id="chat-wrapper">
+      <div class="messages" id="messages"></div>
+    </div>
+
+    <div class="input-area">
+      <div class="topic-chips" id="topic-chips"></div>
+      <div class="input-box">
+        <textarea id="user-input" rows="1" placeholder="سوال خود را بنویسید..."></textarea>
+        <button id="send-btn" onclick="sendMessage()">↑</button>
+      </div>
+      <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
+    </div>
+  </div>
+
+</div>
+
 <nav class="bottom-nav">
   <div class="bottom-nav-inner">
     <a href="/" class="bottom-tab">
@@ -449,7 +379,7 @@
       <span class="tab-icon">💬</span>
       <span class="tab-label">چت</span>
     </a>
-    <a href="/tutor" class="bottom-tab">
+    <a href="/tutor" class="bottom-tab active">
       <span class="tab-icon">📚</span>
       <span class="tab-label">بیاموز</span>
     </a>
@@ -459,203 +389,225 @@
     </a>
   </div>
 </nav>
-  <script>
-    // ── STATE ──
-    let selectedSubject = null;
-    let selectedGrade   = null;
-    let selectedGradeLabel = null;
-    let history = [];
-    let isLoading = false;
 
-    // topic suggestions per subject
-    const topicSuggestions = {
-      'ریاضی':     ['معادله خطی', 'کسرها', 'هندسه', 'ضرب و تقسیم'],
-      'فیزیک':     ['نیرو و حرکت', 'برق', 'موج و صدا', 'انرژی'],
-      'کیمیا':     ['جدول دوری', 'پیوند کیمیاوی', 'اسید و قلعی', 'مول'],
-      'بیولوژی':   ['سلول', 'تکامل', 'وراثت', 'فتوسنتز'],
-      'تاریخ':     ['امپراتوری درانی', 'دوره غزنویان', 'جنگ‌های افغان-انگلیس', 'تاریخ معاصر'],
-      'جغرافیه':   ['ولایات افغانستان', 'رودخانه‌ها', 'آب و هوا', 'کوه‌های هندوکش'],
-      'زبان دری':  ['دستور زبان', 'شعر دری', 'نگارش', 'ادبیات کلاسیک'],
-      'انگلیسی':   ['گرامر پایه', 'فعل‌های کمکی', 'مکالمه روزمره', 'لغات'],
-      'دین':       ['فقه', 'قرآن', 'اخلاق اسلامی', 'تاریخ اسلام'],
-      'کمپیوتر':   ['اساسات کمپیوتر', 'اینترنت', 'برنامه‌نویسی', 'مایکروسافت آفیس'],
-    };
+<script>
+  // ── STATE ──
+  let selectedSubject    = null;
+  let selectedGrade      = null;
+  let selectedGradeLabel = null;
+  let history            = [];
+  let isLoading          = false;
+  let switchNoticeShown  = false;
 
-    // ── SETUP ──
-    function selectSubject(el, value) {
-      document.querySelectorAll('#subject-grid .pill').forEach(p => p.classList.remove('selected'));
-      el.classList.add('selected');
-      selectedSubject = value;
-      checkReady();
+  // configure marked
+  marked.setOptions({ breaks: true, gfm: true });
+
+  const topicSuggestions = {
+    'ریاضی':    ['معادله خطی', 'کسرها', 'هندسه', 'ضرب و تقسیم'],
+    'فیزیک':    ['نیرو و حرکت', 'برق', 'موج و صدا', 'انرژی'],
+    'کیمیا':    ['جدول دوری', 'پیوند کیمیاوی', 'اسید و قلعی', 'مول'],
+    'بیولوژی':  ['سلول', 'تکامل', 'وراثت', 'فتوسنتز'],
+    'تاریخ':    ['امپراتوری درانی', 'دوره غزنویان', 'جنگ‌های افغان-انگلیس', 'تاریخ معاصر'],
+    'جغرافیه':  ['ولایات افغانستان', 'رودخانه‌ها', 'آب و هوا', 'کوه‌های هندوکش'],
+    'زبان دری': ['دستور زبان', 'شعر دری', 'نگارش', 'ادبیات کلاسیک'],
+    'انگلیسی':  ['گرامر پایه', 'فعل‌های کمکی', 'مکالمه روزمره', 'لغات'],
+    'دین':      ['فقه', 'قرآن', 'اخلاق اسلامی', 'تاریخ اسلام'],
+    'کمپیوتر':  ['اساسات کمپیوتر', 'اینترنت', 'برنامه‌نویسی', 'مایکروسافت آفیس'],
+  };
+
+  // ── SETUP ──
+  function selectSubject(el, value) {
+    document.querySelectorAll('#subject-grid .pill').forEach(p => p.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedSubject = value;
+    checkReady();
+  }
+
+  function selectGrade(el, value, label) {
+    document.querySelectorAll('.grade-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedGrade      = value;
+    selectedGradeLabel = label;
+    checkReady();
+  }
+
+  function checkReady() {
+    document.getElementById('start-btn').disabled = !(selectedSubject && selectedGrade);
+  }
+
+  function startSession() {
+    document.getElementById('setup-screen').style.display = 'none';
+    document.getElementById('chat-screen').style.display  = 'flex';
+    document.getElementById('reset-btn').style.display    = 'block';
+    document.getElementById('tag-subject').textContent    = selectedSubject;
+    document.getElementById('tag-grade').textContent      = selectedGradeLabel;
+
+    const chips   = topicSuggestions[selectedSubject] || [];
+    const chipsEl = document.getElementById('topic-chips');
+    chipsEl.innerHTML = '';
+    chips.forEach(topic => {
+      const btn       = document.createElement('button');
+      btn.className   = 'chip';
+      btn.textContent = topic;
+      btn.onclick     = () => useChip(topic);
+      chipsEl.appendChild(btn);
+    });
+
+    const opener = `سلام! من استاد خیام هستم. آماده‌ام تا ${selectedSubject} را برای شما در سطح ${selectedGradeLabel} توضیح بدهم. کدام موضوع را می‌خواهید یاد بگیرید؟`;
+    appendBubble('ai', opener);
+    history.push({ role: 'assistant', content: opener });
+    document.getElementById('user-input').focus();
+  }
+
+  function resetSession() {
+    selectedSubject    = null;
+    selectedGrade      = null;
+    selectedGradeLabel = null;
+    history            = [];
+    switchNoticeShown  = false;
+
+    document.querySelectorAll('.pill').forEach(p => p.classList.remove('selected'));
+    document.querySelectorAll('.grade-card').forEach(c => c.classList.remove('selected'));
+    document.getElementById('start-btn').disabled    = true;
+    document.getElementById('messages').innerHTML    = '';
+    document.getElementById('topic-chips').innerHTML = '';
+    document.getElementById('chat-screen').style.display  = 'none';
+    document.getElementById('setup-screen').style.display = 'flex';
+    document.getElementById('reset-btn').style.display    = 'none';
+  }
+
+  // ── HELPERS ──
+  function scrollToBottom() {
+    const w = document.getElementById('chat-wrapper');
+    w.scrollTop = w.scrollHeight;
+  }
+
+  function appendBubble(role, text) {
+    const messagesEl = document.getElementById('messages');
+    const div        = document.createElement('div');
+    div.className    = `message ${role}`;
+
+    const avatar       = document.createElement('div');
+    avatar.className   = `avatar ${role}`;
+    avatar.textContent = role === 'ai' ? 'استاد' : '👤';
+
+    const bubble     = document.createElement('div');
+    bubble.className = 'bubble';
+
+    // KEY FIX — use marked.parse for AI, textContent for user
+    if (role === 'ai') {
+      bubble.innerHTML = marked.parse(text);
+    } else {
+      bubble.textContent = text;
     }
 
-    function selectGrade(el, value, label) {
-      document.querySelectorAll('.grade-card').forEach(c => c.classList.remove('selected'));
-      el.classList.add('selected');
-      selectedGrade      = value;
-      selectedGradeLabel = label;
-      checkReady();
-    }
+    div.appendChild(avatar);
+    div.appendChild(bubble);
+    messagesEl.appendChild(div);
+    scrollToBottom();
+  }
 
-    function checkReady() {
-      document.getElementById('start-btn').disabled = !(selectedSubject && selectedGrade);
-    }
+  function showTyping() {
+    const messagesEl = document.getElementById('messages');
+    const div        = document.createElement('div');
+    div.className    = 'message ai';
+    div.id           = 'typing-indicator';
 
-    function startSession() {
-      // show chat screen
-      document.getElementById('setup-screen').style.display = 'none';
-      document.getElementById('chat-screen').style.display  = 'flex';
-      document.getElementById('reset-btn').style.display    = 'block';
+    const avatar       = document.createElement('div');
+    avatar.className   = 'avatar ai';
+    avatar.textContent = 'استاد';
 
-      // set tags
-      document.getElementById('tag-subject').textContent = selectedSubject;
-      document.getElementById('tag-grade').textContent   = selectedGradeLabel;
+    const bubble     = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
 
-      // render topic chips
-      const chips    = topicSuggestions[selectedSubject] || [];
-      const chipsEl  = document.getElementById('topic-chips');
-      chipsEl.innerHTML = '';
-      chips.forEach(topic => {
-        const btn = document.createElement('button');
-        btn.className   = 'chip';
-        btn.textContent = topic;
-        btn.onclick     = () => useChip(topic);
-        chipsEl.appendChild(btn);
+    div.appendChild(avatar);
+    div.appendChild(bubble);
+    messagesEl.appendChild(div);
+    scrollToBottom();
+  }
+
+  function removeTyping() {
+    const t = document.getElementById('typing-indicator');
+    if (t) t.remove();
+  }
+
+  function useChip(topic) {
+    document.getElementById('user-input').value = `${topic} را برایم توضیح بده`;
+    sendMessage();
+  }
+
+  // ── SEND MESSAGE ──
+  async function sendMessage() {
+    const input = document.getElementById('user-input');
+    const text  = input.value.trim();
+    if (!text || isLoading) return;
+
+    isLoading = true;
+    document.getElementById('send-btn').disabled = true;
+    input.value = '';
+    input.style.height = 'auto';
+
+    appendBubble('user', text);
+    showTyping();
+    history.push({ role: 'user', content: text });
+
+    try {
+      const res = await fetch('/api/tutor-chat', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          history: history.slice(-12),
+          subject: selectedSubject,
+          grade:   selectedGrade
+        })
       });
 
-      // send opening message from AI
-      const opener = `سلام! من استاد خیام هستم. آماده‌ام تا ${selectedSubject} را برای شما در سطح ${selectedGradeLabel} توضیح بدهم. کدام موضوع را می‌خواهید یاد بگیرید؟`;
-      appendBubble('ai', opener);
-      history.push({ role: 'assistant', content: opener });
+      const data = await res.json();
+      removeTyping();
 
-      document.getElementById('user-input').focus();
-    }
-
-    function resetSession() {
-      selectedSubject    = null;
-      selectedGrade      = null;
-      selectedGradeLabel = null;
-      history            = [];
-
-      document.querySelectorAll('.pill').forEach(p => p.classList.remove('selected'));
-      document.querySelectorAll('.grade-card').forEach(c => c.classList.remove('selected'));
-      document.getElementById('start-btn').disabled = true;
-      document.getElementById('messages').innerHTML  = '';
-      document.getElementById('topic-chips').innerHTML = '';
-
-      document.getElementById('chat-screen').style.display  = 'none';
-      document.getElementById('setup-screen').style.display = 'flex';
-      document.getElementById('reset-btn').style.display    = 'none';
-    }
-
-    // ── CHAT ──
-    function scrollToBottom() {
-      const w = document.getElementById('chat-wrapper');
-      w.scrollTop = w.scrollHeight;
-    }
-
-    function appendBubble(role, text) {
-      const messagesEl = document.getElementById('messages');
-      const div    = document.createElement('div');
-      div.className = `message ${role}`;
-
-      const avatar = document.createElement('div');
-      avatar.className = `avatar ${role}`;
-      avatar.textContent = role === 'ai' ? 'استاد' : '👤';
-      if (role === 'ai') { avatar.style.fontSize = '11px'; }
-
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.textContent = text;
-
-      div.appendChild(avatar);
-      div.appendChild(bubble);
-      messagesEl.appendChild(div);
-      scrollToBottom();
-    }
-
-    function showTyping() {
-      const messagesEl = document.getElementById('messages');
-      const div = document.createElement('div');
-      div.className = 'message ai';
-      div.id = 'typing-indicator';
-
-      const avatar = document.createElement('div');
-      avatar.className = 'avatar ai';
-      avatar.textContent = 'استاد';
-      avatar.style.fontSize = '11px';
-
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-
-      div.appendChild(avatar);
-      div.appendChild(bubble);
-      messagesEl.appendChild(div);
-      scrollToBottom();
-    }
-
-    function removeTyping() {
-      const t = document.getElementById('typing-indicator');
-      if (t) t.remove();
-    }
-
-    function useChip(topic) {
-      document.getElementById('user-input').value = `${topic} را برایم توضیح بده`;
-      sendMessage();
-    }
-
-    async function sendMessage() {
-      const input = document.getElementById('user-input');
-      const text  = input.value.trim();
-      if (!text || isLoading) return;
-
-      isLoading = true;
-      document.getElementById('send-btn').disabled = true;
-      input.value = '';
-      input.style.height = 'auto';
-
-      appendBubble('user', text);
-      showTyping();
-      history.push({ role: 'user', content: text });
-
-      try {
-        const res  = await fetch('/api/tutor-chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: text,
-            history: history.slice(-12),
-            subject: selectedSubject,
-            grade:   selectedGrade
-          })
-        });
-
-        const data = await res.json();
-        removeTyping();
-        appendBubble('ai', data.reply);
-        history.push({ role: 'assistant', content: data.reply });
-
-      } catch (err) {
-        removeTyping();
-        appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+      // show switch notice once
+      if (data.switch_notice && data.reset_ts && !switchNoticeShown) {
+        switchNoticeShown    = true;
+        const resetDate      = new Date(data.reset_ts * 1000);
+        const now            = new Date();
+        const timeStr        = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const tomorrow       = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const isTomorrow     = resetDate.toDateString() === tomorrow.toDateString();
+        const dayStr         = isTomorrow ? 'فردا ساعت ' : 'امروز ساعت ';
+        const notice         = document.createElement('div');
+        notice.className     = 'limit-notice';
+        notice.textContent   = `⚡ خیام در حال تنظیم است — بازنشینی ${dayStr}${timeStr}`;
+        document.getElementById('messages').appendChild(notice);
       }
 
-      isLoading = false;
-      document.getElementById('send-btn').disabled = false;
-      input.focus();
+      appendBubble('ai', data.reply);
+      history.push({ role: 'assistant', content: data.reply });
+
+    } catch (err) {
+      removeTyping();
+      appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
     }
 
-    // input behavior
-    const inputEl = document.getElementById('user-input');
-    inputEl.addEventListener('input', () => {
-      inputEl.style.height = 'auto';
-      inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
-    });
-    inputEl.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-    });
-    async function checkAuth() {
+    isLoading = false;
+    document.getElementById('send-btn').disabled = false;
+    input.focus();
+  }
+
+  // ── INPUT ──
+  const inputEl = document.getElementById('user-input');
+  inputEl.addEventListener('input', () => {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
+  });
+  inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  // ── AUTH ──
+  async function checkAuth() {
     const res  = await fetch('/api/me');
     const data = await res.json();
     if (data.logged_in) {
@@ -663,10 +615,19 @@
       const menu = document.getElementById('user-menu');
       menu.style.display = 'flex';
       document.getElementById('nav-username').textContent = data.username;
+      if (data.is_admin) {
+        const adminLink       = document.createElement('a');
+        adminLink.href        = '/admin';
+        adminLink.className   = 'nav-btn';
+        adminLink.textContent = '⚙️ ادمین';
+        adminLink.style.borderColor = 'var(--gold-dim)';
+        adminLink.style.color       = 'var(--gold)';
+        menu.appendChild(adminLink);
+      }
     }
   }
-  checkAuth();
 
-  </script>
+  checkAuth();
+</script>
 </body>
 </html>
