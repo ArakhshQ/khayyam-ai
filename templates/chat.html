@@ -541,7 +541,8 @@
     let history       = [];
     let isLoading     = false;
     let sidebarOpen   = true;
-    let switchNoticShown = false;
+    
+    let switchNoticeShown = false;
     // ── INIT ──
     async function init() {
       const res  = await fetch('/api/me');
@@ -825,34 +826,42 @@ async function sendMessage() {
     }
 
     const data = await res.json();
-    removeTyping();
+removeTyping();
 
-    // show neutral switch notice
-    if (data.switch_notice && data.reset_ts && !switchNoticeShown) {
-      switchNoticeShown = true;
-      const resetDate  = new Date(data.reset_ts * 1000);
-      const now        = new Date();
-      const timeStr    = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const tomorrow   = new Date(now);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const isTomorrow = resetDate.toDateString() === tomorrow.toDateString();
-      const isToday    = resetDate.toDateString() === now.toDateString();
-      let dayStr = isTomorrow ? 'فردا ساعت ' : isToday ? 'امروز ساعت ' : resetDate.toLocaleDateString('fa-AF') + ' ساعت ';
+// safety check
+if (!data.reply) {
+  appendBubble('ai', 'متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.');
+  isLoading = false;
+  document.getElementById('send-btn').disabled = false;
+  input.focus();
+  return;
+}
 
-      const notice      = document.createElement('div');
-      notice.className  = 'limit-notice';
-      notice.style.cssText = `
-        text-align:center; font-size:12px; color:var(--gold);
-        background:rgba(201,168,76,0.08); border:1px solid var(--gold-dim);
-        border-radius:8px; padding:8px 14px; margin:4px auto;
-        max-width:500px; position:sticky; top:8px; z-index:5;`;
-      notice.textContent = `⚡ خیام در حال تنظیم است — بازنشینی ${dayStr}${timeStr}`;
-      document.getElementById('messages').appendChild(notice);
-      scrollToBottom();
-    }
+// show switch notice exactly once
+if (data.switch_notice && !switchNoticeShown) {
+  switchNoticeShown = true;
+  const notice      = document.createElement('div');
+  notice.className  = 'limit-notice';
 
-    appendBubble('ai', data.reply);
-    history.push({ role: 'assistant', content: data.reply });
+  if (data.reset_ts) {
+    const resetDate  = new Date(data.reset_ts * 1000);
+    const now        = new Date();
+    const timeStr    = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const tomorrow   = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const isTomorrow = resetDate.toDateString() === tomorrow.toDateString();
+    const dayStr     = isTomorrow ? 'فردا ساعت ' : 'امروز ساعت ';
+    notice.textContent = `⚡ خیام در حال تنظیم است — بازنشینی ${dayStr}${timeStr}`;
+  } else {
+    notice.textContent = '⚡ خیام در حال تنظیم است — حالت استاندارد فعال شد';
+  }
+
+  document.getElementById('messages').appendChild(notice);
+  scrollToBottom();
+}
+
+appendBubble('ai', data.reply);
+history.push({ role: 'assistant', content: data.reply });
     clearFile();
 
     if (currentUser && data.conversation_id) {

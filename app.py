@@ -510,7 +510,7 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     messages         = history + [{"role": "user", "content": user_message}]
     estimated_tokens = len(user_message) // 4 + 400
 
-    # guest user — use nano directly, no tracking
+    # guest — use nano, no tracking
     if user_id is None:
         try:
             reply, _ = call_openai_model(
@@ -521,28 +521,39 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
         except Exception as e:
             print(f"Guest OpenAI error: {e}")
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, True, None, 'llama'
+            return reply, False, None, 'llama'
 
     model, tier, reset_ts, switched = pick_model_and_update(
         user_id, plan, estimated_tokens
     )
+    print(f"DEBUG: user={user_id} plan={plan} model={model} switched={switched} reset_ts={reset_ts}")
 
-    print(f"DEBUG: user={user_id} plan={plan} model={model} switched={switched}")
-
+    # groq model
     if 'llama' in model:
-        reply, _ = call_groq_model(system_prompt, messages, temperature)
-        return reply, switched, reset_ts, model
+        try:
+            reply, _ = call_groq_model(system_prompt, messages, temperature)
+            print(f"DEBUG: Groq replied successfully, switched={switched}")
+            return reply, switched, reset_ts, model
+        except Exception as e:
+            print(f"Groq error: {e}")
+            return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", switched, reset_ts, model
 
+    # openai model
     try:
         reply, _ = call_openai_model(
             model, system_prompt, messages,
             temperature, image_b64, image_type
         )
+        print(f"DEBUG: OpenAI replied successfully with {model}")
         return reply, switched, reset_ts, model
     except Exception as e:
-        print(f"OpenAI error with {model}: {e}")
-        reply, _ = call_groq_model(system_prompt, messages, temperature)
-        return reply, True, reset_ts, 'llama'
+        print(f"OpenAI error with {model}: {e} — falling back to Groq")
+        try:
+            reply, _ = call_groq_model(system_prompt, messages, temperature)
+            return reply, switched, reset_ts, 'llama'
+        except Exception as e2:
+            print(f"Groq fallback also failed: {e2}")
+            return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه دیگر امتحان کنید.", switched, reset_ts, 'error'
 
 # ── DOCUMENT EXTRACTION ──
 def extract_text_from_file(file_bytes, filename):
@@ -705,31 +716,40 @@ def chat():
         image_b64    = None
         image_type   = None
 
-    user_id = current_user.id   if current_user.is_authenticated else None
+    user_id = current_user.id if current_user.is_authenticated else None
     plan    = getattr(current_user, 'plan', 'free') or 'free' \
               if current_user.is_authenticated else 'free'
 
     user_memories = get_user_memories(user_id) if user_id else None
 
-    reply, switched, reset_ts, model_used = smart_chat(
-        system_prompt=build_system_prompt(user_memories=user_memories),
-        history=history[-10:],
-        user_message=user_message,
-        user_id=user_id,
-        plan=plan,
-        temperature=0.7,
-        image_b64=image_b64,
-        image_type=image_type
-    )
+    try:
+        reply, switched, reset_ts, model_used = smart_chat(
+            system_prompt=build_system_prompt(user_memories=user_memories),
+            history=history[-10:],
+            user_message=user_message,
+            user_id=user_id,
+            plan=plan,
+            temperature=0.7,
+            image_b64=image_b64,
+            image_type=image_type
+        )
+    except Exception as e:
+        print(f"smart_chat crashed: {e}")
+        return jsonify({"reply": "متأسفم، خطایی رخ داد. لطفاً دوباره امتحان کنید."})
+
+    # safety check — reply must never be None or empty
+    if not reply:
+        reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
 
     if user_id:
         extract_and_save_memory(user_id, user_message)
 
     response_data = {"reply": reply}
 
-    if switched and reset_ts:
+    if switched:
         response_data["switch_notice"] = True
-        response_data["reset_ts"]      = reset_ts
+        if reset_ts:
+            response_data["reset_ts"] = reset_ts
 
     if current_user.is_authenticated:
         conv = None
@@ -755,7 +775,6 @@ def chat():
         response_data["conversation_id"] = conv.id
 
     return jsonify(response_data)
-
 # ── TUTOR API ──
 @app.route("/api/tutor-chat", methods=["POST"])
 def tutor_chat():
