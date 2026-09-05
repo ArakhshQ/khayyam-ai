@@ -510,7 +510,6 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     messages         = history + [{"role": "user", "content": user_message}]
     estimated_tokens = len(user_message) // 4 + 400
 
-    # guest — use nano, no tracking
     if user_id is None:
         try:
             reply, _ = call_openai_model(
@@ -528,23 +527,20 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     )
     print(f"DEBUG: user={user_id} plan={plan} model={model} switched={switched} reset_ts={reset_ts}")
 
-    # groq model
     if 'llama' in model:
         try:
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            print(f"DEBUG: Groq replied successfully, switched={switched}")
             return reply, switched, reset_ts, model
         except Exception as e:
             print(f"Groq error: {e}")
             return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", switched, reset_ts, model
 
-    # openai model
     try:
         reply, _ = call_openai_model(
             model, system_prompt, messages,
             temperature, image_b64, image_type
         )
-        print(f"DEBUG: OpenAI replied successfully with {model}")
+        print(f"DEBUG: OpenAI replied with {model}")
         return reply, switched, reset_ts, model
     except Exception as e:
         print(f"OpenAI error with {model}: {e} — falling back to Groq")
@@ -552,9 +548,8 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
             reply, _ = call_groq_model(system_prompt, messages, temperature)
             return reply, switched, reset_ts, 'llama'
         except Exception as e2:
-            print(f"Groq fallback also failed: {e2}")
+            print(f"Groq fallback failed: {e2}")
             return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه دیگر امتحان کنید.", switched, reset_ts, 'error'
-
 # ── DOCUMENT EXTRACTION ──
 def extract_text_from_file(file_bytes, filename):
     ext = filename.lower().split('.')[-1]
@@ -737,7 +732,6 @@ def chat():
         print(f"smart_chat crashed: {e}")
         return jsonify({"reply": "متأسفم، خطایی رخ داد. لطفاً دوباره امتحان کنید."})
 
-    # safety check — reply must never be None or empty
     if not reply:
         reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
 
