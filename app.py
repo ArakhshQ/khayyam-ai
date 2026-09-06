@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig
+from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge
 from functools import wraps
 from openai import OpenAI
 from groq import Groq
@@ -35,25 +35,25 @@ EXAMPLES_FILE  = "examples.json"
 
 PLAN_CONFIG = {
     'free': [
-        {'model': 'gpt-5.4-mini',                          'tier': 1, 'limit': 5000,    'reset': 'daily'},
-        {'model': 'gpt-5.4-nano',                          'tier': 2, 'limit': 10000,   'reset': 'daily'},
-        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None, 'reset': None},
+        {'model': 'gpt-5.4-mini',                              'tier': 1, 'limit': 5000,    'reset': 'daily'},
+        {'model': 'gpt-5.4-nano',                              'tier': 2, 'limit': 10000,   'reset': 'daily'},
+        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None,    'reset': None},
     ],
     'basic': [
-        {'model': 'gpt-5.4-mini',                          'tier': 1, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',                          'tier': 2, 'limit': 200000,  'reset': 'monthly'},
-        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None, 'reset': None},
+        {'model': 'gpt-5.4-mini',                              'tier': 1, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',                              'tier': 2, 'limit': 200000,  'reset': 'monthly'},
+        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None,    'reset': None},
     ],
     'pro': [
-        {'model': 'gpt-5.4-mini',                          'tier': 1, 'limit': 500000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',                          'tier': 2, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None, 'reset': None},
+        {'model': 'gpt-5.4-mini',                              'tier': 1, 'limit': 500000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',                              'tier': 2, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None,    'reset': None},
     ],
     'premium': [
-        {'model': 'gpt-5.4',                               'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
-        {'model': 'gpt-5.4-mini',                          'tier': 2, 'limit': 500000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',                          'tier': 3, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 4, 'limit': None, 'reset': None},
+        {'model': 'gpt-5.4',                                   'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
+        {'model': 'gpt-5.4-mini',                              'tier': 2, 'limit': 500000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',                              'tier': 3, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 4, 'limit': None,    'reset': None},
     ],
 }
 
@@ -134,21 +134,18 @@ def pick_model_and_update(user_id, plan, tokens_to_use):
         period = tier_config['reset']
         t      = tier_config['tier']
 
-        # unlimited tier — final fallback
         if limit is None:
             return model, t, None, i > 0
 
         tokens_used = getattr(usage, f'tier{t}_tokens', 0) or 0
         reset_at    = getattr(usage, f'tier{t}_reset', None) or datetime.utcnow()
 
-        # reset window if expired
         if should_reset(reset_at, period):
             setattr(usage, f'tier{t}_tokens', 0)
             setattr(usage, f'tier{t}_reset', datetime.utcnow())
             tokens_used = 0
             reset_at    = datetime.utcnow()
 
-        # this tier has capacity
         if tokens_used < limit:
             new_count = min(tokens_used + tokens_to_use, limit)
             setattr(usage, f'tier{t}_tokens', new_count)
@@ -157,9 +154,6 @@ def pick_model_and_update(user_id, plan, tokens_to_use):
             reset_ts = get_reset_timestamp(reset_at, period)
             return model, t, reset_ts, i > 0
 
-        # exhausted — try next tier
-
-    # all tiers exhausted — use last
     last = cascade[-1]
     return last['model'], last['tier'], None, True
 
@@ -189,17 +183,15 @@ def get_usage_summary(user_id, plan):
         })
     return summary
 
-# ── KNOWLEDGE ──
 # ── KNOWLEDGE (DATABASE BACKED) ──
 def load_knowledge():
     try:
         row = SiteConfig.query.filter_by(key='knowledge').first()
         if row:
             return json.loads(row.value)
-        # fallback to file if db row missing
         with open(KNOWLEDGE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            save_knowledge(data)  # migrate to db
+            save_knowledge(data)
             return data
     except:
         return {"dari_dialect": [], "cultural_customs": []}
@@ -211,7 +203,7 @@ def load_examples():
             return json.loads(row.value)
         with open(EXAMPLES_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            save_examples(data)  # migrate to db
+            save_examples(data)
             return data
     except:
         return {"conversation_examples": []}
@@ -243,6 +235,7 @@ def save_examples(data):
     except Exception as e:
         print(f"save_examples error: {e}")
         db.session.rollback()
+
 # ── MEMORY ──
 def get_user_memories(user_id):
     memories = Memory.query.filter_by(
@@ -271,7 +264,6 @@ def extract_and_save_memory(user_id, user_message):
 
     memory_text = None
 
-    # try OpenAI first
     try:
         response = openai_client.chat.completions.create(
             model="gpt-5.4-nano",
@@ -283,10 +275,9 @@ def extract_and_save_memory(user_id, user_message):
         print(f"Memory extraction (OpenAI): '{memory_text}'")
     except Exception as e:
         print(f"Memory OpenAI failed, trying Groq: {e}")
-        # fallback to Groq
         try:
             response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[{"role": "user", "content": extraction_prompt}],
                 max_tokens=80,
                 temperature=0.1
@@ -309,6 +300,7 @@ def extract_and_save_memory(user_id, user_message):
         except Exception as e:
             print(f"Memory DB save error: {e}")
             db.session.rollback()
+
 # ── PROMPTS ──
 def build_system_prompt(user_memories=None):
     knowledge = load_knowledge()
@@ -352,7 +344,7 @@ def build_system_prompt(user_memories=None):
 - لحن: گرم، مهربان و صمیمی
 - از کلمات مانند: برادر، خواهر، تشکر استفاده کن
 - هرگز خود را ChatGPT معرفی نکن
-- اگر اطلاعاتی درباره کاربر داری از آن استفاده کن — مثلاً اسمش را بگو
+- اگر اطلاعاتی درباره کاربر داری از آن استفاده کن
 
 ====================
 سیستم حافظه — بسیار مهم
@@ -363,10 +355,6 @@ def build_system_prompt(user_memories=None):
 - بگو: "بسیار خوب، این را در حافظه‌ام ذخیره کردم و در همه گفتگوهای بعدی به یاد خواهم داشت."
 - هرگز نگو که نمی‌توانی چیزی را به یاد بسپاری
 - هرگز نگو که حافظه‌ات فقط در این چت کار می‌کند
-- اطلاعات ذخیره‌شده در بالای این پرامپت نشان داده شده — از آن‌ها استفاده کن
-
-اگر کاربر اسمش را گفته و در حافظه داری — از اسمش استفاده کن.
-اگر کاربر شغلش را گفته — آن را در نظر بگیر.
 
 ====================
 فرمت‌بندی — بسیار مهم
@@ -491,8 +479,8 @@ def call_groq_model(system_prompt, messages, temperature=0.7):
     msgs = [{"role": "system", "content": system_prompt}] + messages
     for model in [
         "meta-llama/llama-4-scout-17b-16e-instruct",
-        "llama-3.1-8b-instant",
-        "openai/gpt-oss-20b"
+        "openai/gpt-oss-120b",
+        "llama-3.1-8b-instant"
     ]:
         try:
             response = groq_client.chat.completions.create(
@@ -502,12 +490,13 @@ def call_groq_model(system_prompt, messages, temperature=0.7):
                 max_tokens=800,
                 top_p=0.9
             )
-            print(f"Groq replied with {model}")
             return response.choices[0].message.content, 0
         except Exception as e:
-            print(f"Groq model {model} failed: {e}")
-            continue
+            if "rate_limit" in str(e).lower() or "429" in str(e) or "404" in str(e):
+                continue
+            raise e
     return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", 0
+
 def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
                temperature=0.7, image_b64=None, image_type=None):
     messages         = history + [{"role": "user", "content": user_message}]
@@ -523,14 +512,14 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
         except Exception as e:
             print(f"Guest OpenAI error: {e}")
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, False, None, 'llama'
+            return reply, False, None, 'llama-4-scout'
 
     model, tier, reset_ts, switched = pick_model_and_update(
         user_id, plan, estimated_tokens
     )
     print(f"DEBUG: user={user_id} plan={plan} model={model} switched={switched} reset_ts={reset_ts}")
 
-    if 'llama' in model:
+    if 'llama' in model or 'gpt-oss' in model or 'qwen' in model:
         try:
             reply, _ = call_groq_model(system_prompt, messages, temperature)
             return reply, switched, reset_ts, model
@@ -549,10 +538,11 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
         print(f"OpenAI error with {model}: {e} — falling back to Groq")
         try:
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, switched, reset_ts, 'llama'
+            return reply, switched, reset_ts, 'llama-4-scout'
         except Exception as e2:
             print(f"Groq fallback failed: {e2}")
             return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه دیگر امتحان کنید.", switched, reset_ts, 'error'
+
 # ── DOCUMENT EXTRACTION ──
 def extract_text_from_file(file_bytes, filename):
     ext = filename.lower().split('.')[-1]
@@ -772,6 +762,7 @@ def chat():
         response_data["conversation_id"] = conv.id
 
     return jsonify(response_data)
+
 # ── TUTOR API ──
 @app.route("/api/tutor-chat", methods=["POST"])
 def tutor_chat():
@@ -781,18 +772,23 @@ def tutor_chat():
     subject      = data.get("subject", "عمومی")
     grade        = data.get("grade", "متوسط")
 
-    user_id = current_user.id   if current_user.is_authenticated else None
+    user_id = current_user.id if current_user.is_authenticated else None
     plan    = getattr(current_user, 'plan', 'free') or 'free' \
               if current_user.is_authenticated else 'free'
 
-    reply, _, _, _ = smart_chat(
-        system_prompt=build_tutor_prompt(subject, grade),
-        history=history[-12:],
-        user_message=user_message,
-        user_id=user_id,
-        plan=plan,
-        temperature=0.6
-    )
+    try:
+        reply, switched, reset_ts, model_used = smart_chat(
+            system_prompt=build_tutor_prompt(subject, grade),
+            history=history[-12:],
+            user_message=user_message,
+            user_id=user_id,
+            plan=plan,
+            temperature=0.6
+        )
+    except Exception as e:
+        print(f"Tutor chat error: {e}")
+        reply = "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید."
+
     return jsonify({"reply": reply})
 
 # ── PERSONA API ──
@@ -803,18 +799,23 @@ def persona_chat():
     history        = data.get("history", [])
     persona_prompt = data.get("persona_prompt", "")
 
-    user_id = current_user.id   if current_user.is_authenticated else None
+    user_id = current_user.id if current_user.is_authenticated else None
     plan    = getattr(current_user, 'plan', 'free') or 'free' \
               if current_user.is_authenticated else 'free'
 
-    reply, _, _, _ = smart_chat(
-        system_prompt=persona_prompt,
-        history=history[-10:],
-        user_message=user_message,
-        user_id=user_id,
-        plan=plan,
-        temperature=0.9
-    )
+    try:
+        reply, _, _, _ = smart_chat(
+            system_prompt=persona_prompt,
+            history=history[-10:],
+            user_message=user_message,
+            user_id=user_id,
+            plan=plan,
+            temperature=0.9
+        )
+    except Exception as e:
+        print(f"Persona chat error: {e}")
+        reply = "متأسفم، مشکلی پیش آمد."
+
     return jsonify({"reply": reply})
 
 # ── CONVERSATION APIs ──
@@ -989,6 +990,715 @@ def delete_example(index):
         examples["conversation_examples"].pop(index)
         save_examples(examples)
     return jsonify({"success": True})
+
+# ══════════════════════════════════════════
+# ── TUTOR CURRICULUM ──
+# ══════════════════════════════════════════
+
+CURRICULUM = {
+    'math': {
+        'name': 'ریاضی',
+        'emoji': '🔢',
+        'levels': {
+            1: {
+                'title': 'مبتدی',
+                'topics': [
+                    {'key': 'math_1_1', 'title': 'اعداد و شمارش', 'desc': 'آشنایی با اعداد ۱ تا ۱۰۰۰'},
+                    {'key': 'math_1_2', 'title': 'جمع پایه', 'desc': 'جمع اعداد یک و دو رقمی'},
+                    {'key': 'math_1_3', 'title': 'تفریق پایه', 'desc': 'تفریق اعداد یک و دو رقمی'},
+                    {'key': 'math_1_4', 'title': 'اشکال هندسی', 'desc': 'مثلث، مربع، دایره و مستطیل'},
+                    {'key': 'math_1_5', 'title': 'اندازه‌گیری پایه', 'desc': 'طول، وزن و زمان'},
+                ]
+            },
+            2: {
+                'title': 'ابتدایی',
+                'topics': [
+                    {'key': 'math_2_1', 'title': 'ضرب', 'desc': 'جدول ضرب و ضرب اعداد'},
+                    {'key': 'math_2_2', 'title': 'تقسیم', 'desc': 'تقسیم اعداد و باقیمانده'},
+                    {'key': 'math_2_3', 'title': 'کسرها', 'desc': 'کسر معمولی و مقایسه کسرها'},
+                    {'key': 'math_2_4', 'title': 'اعشار', 'desc': 'اعداد اعشاری و عملیات با آن'},
+                    {'key': 'math_2_5', 'title': 'هندسه ابتدایی', 'desc': 'محیط و مساحت اشکال'},
+                    {'key': 'math_2_6', 'title': 'نمودارها', 'desc': 'خواندن و رسم نمودار'},
+                ]
+            },
+            3: {
+                'title': 'متوسط',
+                'topics': [
+                    {'key': 'math_3_1', 'title': 'معادلات خطی', 'desc': 'حل معادلات با یک مجهول'},
+                    {'key': 'math_3_2', 'title': 'نسبت و تناسب', 'desc': 'نسبت، تناسب و کاربرد'},
+                    {'key': 'math_3_3', 'title': 'درصد', 'desc': 'محاسبه درصد و کاربرد'},
+                    {'key': 'math_3_4', 'title': 'آمار پایه', 'desc': 'میانگین، میانه و نما'},
+                    {'key': 'math_3_5', 'title': 'احتمال پایه', 'desc': 'مفهوم احتمال و محاسبه'},
+                    {'key': 'math_3_6', 'title': 'هندسه متوسط', 'desc': 'قضیه فیثاغورس و زوایا'},
+                ]
+            },
+            4: {
+                'title': 'پیشرفته',
+                'topics': [
+                    {'key': 'math_4_1', 'title': 'جبر', 'desc': 'معادلات، نامعادلات و دستگاه'},
+                    {'key': 'math_4_2', 'title': 'توابع', 'desc': 'تابع خطی، درجه دوم و نمودار'},
+                    {'key': 'math_4_3', 'title': 'مثلثات', 'desc': 'sin, cos, tan و کاربرد'},
+                    {'key': 'math_4_4', 'title': 'حساب دیفرانسیل مقدماتی', 'desc': 'مشتق و انتگرال پایه'},
+                    {'key': 'math_4_5', 'title': 'آمار پیشرفته', 'desc': 'انحراف معیار، توزیع نرمال'},
+                ]
+            }
+        }
+    },
+    'science': {
+        'name': 'علوم',
+        'emoji': '🔬',
+        'levels': {
+            1: {
+                'title': 'مبتدی',
+                'topics': [
+                    {'key': 'sci_1_1', 'title': 'موجودات زنده', 'desc': 'حیوانات، گیاهان و تفاوت آن‌ها'},
+                    {'key': 'sci_1_2', 'title': 'بدن انسان پایه', 'desc': 'اعضای اصلی بدن'},
+                    {'key': 'sci_1_3', 'title': 'گیاهان', 'desc': 'رشد گیاه، فتوسنتز ساده'},
+                    {'key': 'sci_1_4', 'title': 'زمین و آسمان', 'desc': 'روز و شب، فصول، ستارگان'},
+                    {'key': 'sci_1_5', 'title': 'مواد', 'desc': 'جامد، مایع و گاز'},
+                ]
+            },
+            2: {
+                'title': 'ابتدایی',
+                'topics': [
+                    {'key': 'sci_2_1', 'title': 'سلول', 'desc': 'واحد اساسی حیات'},
+                    {'key': 'sci_2_2', 'title': 'نیرو و حرکت', 'desc': 'نیرو، سرعت و جاذبه'},
+                    {'key': 'sci_2_3', 'title': 'انرژی', 'desc': 'انواع انرژی و تبدیل'},
+                    {'key': 'sci_2_4', 'title': 'آب و هوا', 'desc': 'چرخه آب، آب و هوا'},
+                    {'key': 'sci_2_5', 'title': 'اکوسیستم', 'desc': 'زنجیره غذایی و محیط زیست'},
+                ]
+            },
+            3: {
+                'title': 'متوسط',
+                'topics': [
+                    {'key': 'sci_3_1', 'title': 'شیمی پایه', 'desc': 'اتم، مولکول، مواد و تغییرات'},
+                    {'key': 'sci_3_2', 'title': 'برق پایه', 'desc': 'مدار، ولت، آمپر'},
+                    {'key': 'sci_3_3', 'title': 'موج و صدا', 'desc': 'موج، فرکانس، صدا و نور'},
+                    {'key': 'sci_3_4', 'title': 'وراثت', 'desc': 'ژن، DNA و وراثت'},
+                    {'key': 'sci_3_5', 'title': 'منظومه شمسی', 'desc': 'سیارات، ماه و ستارگان'},
+                ]
+            },
+            4: {
+                'title': 'پیشرفته',
+                'topics': [
+                    {'key': 'sci_4_1', 'title': 'شیمی پیشرفته', 'desc': 'جدول تناوبی، پیوند کیمیاوی'},
+                    {'key': 'sci_4_2', 'title': 'فزیک پیشرفته', 'desc': 'قوانین نیوتن، ترمودینامیک'},
+                    {'key': 'sci_4_3', 'title': 'بیولوژی پیشرفته', 'desc': 'تکامل، سیستم‌های بدن'},
+                    {'key': 'sci_4_4', 'title': 'تکامل', 'desc': 'نظریه داروین و شواهد'},
+                    {'key': 'sci_4_5', 'title': 'واکنش‌های کیمیاوی', 'desc': 'معادلات و موازنه'},
+                ]
+            }
+        }
+    },
+    'dari': {
+        'name': 'زبان دری',
+        'emoji': '📖',
+        'levels': {
+            1: {
+                'title': 'مبتدی',
+                'topics': [
+                    {'key': 'dari_1_1', 'title': 'الفبا و حروف', 'desc': 'حروف دری و تلفظ'},
+                    {'key': 'dari_1_2', 'title': 'کلمات پایه', 'desc': 'واژگان روزمره'},
+                    {'key': 'dari_1_3', 'title': 'جملات ساده', 'desc': 'ساختار جمله پایه'},
+                    {'key': 'dari_1_4', 'title': 'خواندن متون ساده', 'desc': 'متون کوتاه و درک'},
+                ]
+            },
+            2: {
+                'title': 'ابتدایی',
+                'topics': [
+                    {'key': 'dari_2_1', 'title': 'دستور زبان پایه', 'desc': 'اسم، فعل، صفت'},
+                    {'key': 'dari_2_2', 'title': 'فعل‌ها', 'desc': 'فعل حال، گذشته، آینده'},
+                    {'key': 'dari_2_3', 'title': 'صفت‌ها و قیدها', 'desc': 'توصیف و تعریف'},
+                    {'key': 'dari_2_4', 'title': 'نوشتن پایه', 'desc': 'انشای ساده'},
+                    {'key': 'dari_2_5', 'title': 'درک مطلب', 'desc': 'خواندن و پاسخ سوال'},
+                ]
+            },
+            3: {
+                'title': 'متوسط',
+                'topics': [
+                    {'key': 'dari_3_1', 'title': 'دستور زبان پیشرفته', 'desc': 'جمله مرکب، وابسته'},
+                    {'key': 'dari_3_2', 'title': 'شعر دری مقدماتی', 'desc': 'رباعی، دوبیتی و مثنوی'},
+                    {'key': 'dari_3_3', 'title': 'نوشتن انشا', 'desc': 'انشای توصیفی و روایی'},
+                    {'key': 'dari_3_4', 'title': 'ادبیات کلاسیک', 'desc': 'رودکی، فردوسی، خیام'},
+                    {'key': 'dari_3_5', 'title': 'مکالمه پیشرفته', 'desc': 'مکالمه رسمی و غیررسمی'},
+                ]
+            },
+            4: {
+                'title': 'پیشرفته',
+                'topics': [
+                    {'key': 'dari_4_1', 'title': 'تحلیل ادبی', 'desc': 'تحلیل شعر و نثر'},
+                    {'key': 'dari_4_2', 'title': 'شعر کلاسیک', 'desc': 'خیام، حافظ، مولانا'},
+                    {'key': 'dari_4_3', 'title': 'نوشتن رسمی', 'desc': 'نامه، گزارش، مقاله'},
+                    {'key': 'dari_4_4', 'title': 'ادبیات معاصر', 'desc': 'نویسندگان معاصر افغان'},
+                ]
+            }
+        }
+    },
+    'english': {
+        'name': 'انگلیسی',
+        'emoji': '🇬🇧',
+        'levels': {
+            1: {
+                'title': 'مبتدی',
+                'topics': [
+                    {'key': 'eng_1_1', 'title': 'الفبای انگلیسی', 'desc': 'حروف A-Z و تلفظ'},
+                    {'key': 'eng_1_2', 'title': 'کلمات روزمره', 'desc': 'واژگان پایه انگلیسی'},
+                    {'key': 'eng_1_3', 'title': 'سلام و احوال‌پرسی', 'desc': 'Hello, How are you'},
+                    {'key': 'eng_1_4', 'title': 'اعداد و رنگ‌ها', 'desc': 'Numbers 1-100, Colors'},
+                    {'key': 'eng_1_5', 'title': 'جملات ساده', 'desc': 'I am, You are, This is'},
+                ]
+            },
+            2: {
+                'title': 'ابتدایی',
+                'topics': [
+                    {'key': 'eng_2_1', 'title': 'گرامر پایه', 'desc': 'Nouns, Verbs, Adjectives'},
+                    {'key': 'eng_2_2', 'title': 'فعل‌های اساسی', 'desc': 'To be, To have, To do'},
+                    {'key': 'eng_2_3', 'title': 'زمان حال', 'desc': 'Present Simple and Continuous'},
+                    {'key': 'eng_2_4', 'title': 'زمان گذشته', 'desc': 'Past Simple and Regular verbs'},
+                    {'key': 'eng_2_5', 'title': 'مکالمه روزمره', 'desc': 'Shopping, Directions, Food'},
+                ]
+            },
+            3: {
+                'title': 'متوسط',
+                'topics': [
+                    {'key': 'eng_3_1', 'title': 'زمان آینده', 'desc': 'Will, Going to, Future plans'},
+                    {'key': 'eng_3_2', 'title': 'فعل‌های کمکی', 'desc': 'Can, Could, Should, Must'},
+                    {'key': 'eng_3_3', 'title': 'پرسش و جواب', 'desc': 'WH questions and answers'},
+                    {'key': 'eng_3_4', 'title': 'خواندن متون', 'desc': 'Reading comprehension'},
+                    {'key': 'eng_3_5', 'title': 'نوشتن پایه', 'desc': 'Paragraphs and short essays'},
+                ]
+            },
+            4: {
+                'title': 'پیشرفته',
+                'topics': [
+                    {'key': 'eng_4_1', 'title': 'گرامر پیشرفته', 'desc': 'Conditionals, Passive voice'},
+                    {'key': 'eng_4_2', 'title': 'نوشتن رسمی', 'desc': 'Formal emails and essays'},
+                    {'key': 'eng_4_3', 'title': 'درک مطلب پیشرفته', 'desc': 'Advanced reading skills'},
+                    {'key': 'eng_4_4', 'title': 'مکالمه پیشرفته', 'desc': 'Fluent conversation practice'},
+                    {'key': 'eng_4_5', 'title': 'آمادگی آیلتس', 'desc': 'IELTS basics and tips'},
+                ]
+            }
+        }
+    },
+    'computer': {
+        'name': 'کمپیوتر',
+        'emoji': '💻',
+        'levels': {
+            1: {
+                'title': 'مبتدی',
+                'topics': [
+                    {'key': 'comp_1_1', 'title': 'آشنایی با کمپیوتر', 'desc': 'CPU، RAM، حافظه'},
+                    {'key': 'comp_1_2', 'title': 'اینترنت پایه', 'desc': 'مرورگر، جستجو، ایمیل'},
+                    {'key': 'comp_1_3', 'title': 'تایپ و کیبورد', 'desc': 'تایپ سریع و میانبرها'},
+                    {'key': 'comp_1_4', 'title': 'مایکروسافت ورد', 'desc': 'ایجاد و فرمت‌بندی سند'},
+                    {'key': 'comp_1_5', 'title': 'مایکروسافت اکسل', 'desc': 'جداول و فرمول‌های ساده'},
+                ]
+            },
+            2: {
+                'title': 'ابتدایی',
+                'topics': [
+                    {'key': 'comp_2_1', 'title': 'آفیس پیشرفته', 'desc': 'PowerPoint و مهارت‌های آفیس'},
+                    {'key': 'comp_2_2', 'title': 'امنیت آنلاین', 'desc': 'رمز عبور، فیشینگ، امنیت'},
+                    {'key': 'comp_2_3', 'title': 'مقدمه برنامه‌نویسی', 'desc': 'منطق برنامه‌نویسی با Scratch'},
+                    {'key': 'comp_2_4', 'title': 'مقدمه HTML', 'desc': 'تگ‌های اساسی HTML'},
+                    {'key': 'comp_2_5', 'title': 'مقدمه CSS', 'desc': 'استایل و رنگ‌بندی وب'},
+                ]
+            },
+            3: {
+                'title': 'متوسط',
+                'topics': [
+                    {'key': 'comp_3_1', 'title': 'HTML و CSS کامل', 'desc': 'صفحه وب کامل'},
+                    {'key': 'comp_3_2', 'title': 'Python مقدماتی', 'desc': 'متغیر، حلقه، شرط'},
+                    {'key': 'comp_3_3', 'title': 'منطق برنامه‌نویسی', 'desc': 'الگوریتم و pseudocode'},
+                    {'key': 'comp_3_4', 'title': 'پایگاه داده پایه', 'desc': 'SQL و جداول داده'},
+                    {'key': 'comp_3_5', 'title': 'طراحی وب', 'desc': 'responsive design'},
+                ]
+            },
+            4: {
+                'title': 'پیشرفته',
+                'topics': [
+                    {'key': 'comp_4_1', 'title': 'Python پیشرفته', 'desc': 'تابع، کلاس، کتابخانه'},
+                    {'key': 'comp_4_2', 'title': 'JavaScript پایه', 'desc': 'DOM، رویداد، AJAX'},
+                    {'key': 'comp_4_3', 'title': 'پروژه‌های وب', 'desc': 'ساخت وب‌سایت کامل'},
+                    {'key': 'comp_4_4', 'title': 'هوش مصنوعی مقدماتی', 'desc': 'ML، chatbot، کاربرد AI'},
+                    {'key': 'comp_4_5', 'title': 'امنیت سایبری', 'desc': 'هک اخلاقی، آسیب‌پذیری'},
+                ]
+            }
+        }
+    }
+}
+
+XP_REWARDS = {
+    'topic_complete': 15,
+    'quiz_pass':      50,
+    'quiz_perfect':   100,
+    'level_complete': 200,
+    'subject_complete': 500,
+    'daily_login': 10,
+}
+
+BADGES = {
+    'first_lesson':  {'title': 'اولین درس', 'emoji': '🎯'},
+    'level_complete': {'title': 'یک سطح کامل', 'emoji': '📚'},
+    'quiz_perfect':  {'title': 'نمره کامل', 'emoji': '⭐'},
+    'subject_done':  {'title': 'مضمون کامل', 'emoji': '🏆'},
+    'streak_3':      {'title': 'سه روز متوالی', 'emoji': '🔥'},
+}
+
+def get_or_create_progress(user_id, subject):
+    progress = TutorProgress.query.filter_by(
+        user_id=user_id, subject=subject
+    ).first()
+    if not progress:
+        progress = TutorProgress(user_id=user_id, subject=subject)
+        db.session.add(progress)
+        db.session.commit()
+    return progress
+
+def award_xp(user_id, amount, subject=None):
+    user = User.query.get(user_id)
+    if user:
+        user.total_xp = (user.total_xp or 0) + amount
+        db.session.commit()
+    if subject:
+        progress = get_or_create_progress(user_id, subject)
+        progress.subject_xp = (progress.subject_xp or 0) + amount
+        db.session.commit()
+
+def award_badge(user_id, badge_key, subject=None):
+    existing = StudentBadge.query.filter_by(
+        user_id=user_id, badge_key=badge_key, subject=subject
+    ).first()
+    if not existing and badge_key in BADGES:
+        badge_info = BADGES[badge_key]
+        badge = StudentBadge(
+            user_id=user_id,
+            badge_key=badge_key,
+            badge_title=badge_info['title'],
+            badge_emoji=badge_info['emoji'],
+            subject=subject
+        )
+        db.session.add(badge)
+        db.session.commit()
+        return badge_info
+    return None
+
+def build_tutor_system_prompt(subject, topic_title, topic_desc, chat_history_len):
+    subject_data = CURRICULUM.get(subject, {})
+    subject_name = subject_data.get('name', subject)
+
+    return f"""تو استاد خیام هستی — یک استاد مهربان، باهوش و خلاق که به زبان دری افغانی درس می‌دهی.
+
+مضمون فعلی: {subject_name}
+موضوع فعلی: {topic_title}
+توضیح موضوع: {topic_desc}
+
+====================
+قوانین تدریس
+====================
+تو مثل یک استاد واقعی تدریس می‌کنی — نه یک ربات با فرمت ثابت.
+
+- هر بار که کاربر چیزی می‌پرسد یا جواب می‌دهد، پاسخت را با درک عمیق از سطح او بده
+- گاهی با یک سوال شروع کن تا بفهمی چقدر می‌داند
+- گاهی با یک داستان یا مثال جالب شروع کن
+- گاهی مستقیم توضیح بده
+- همیشه انعطاف داشته باش — اگر کاربر گیج شد، از زاویه دیگری توضیح بده
+- اگر کاربر اشتباه کرد، با مهربانی و بدون قضاوت تصحیح کن
+- وقتی کاربر چیزی را درست فهمید، صادقانه تشویقش کن
+- از مثال‌های زندگی روزمره افغانستان استفاده کن
+
+====================
+قوانین فرمت
+====================
+- پاسخ‌های کوتاه و واضح بنویس
+- بین بخش‌های مختلف خط خالی بگذار
+- اگر مثال داری آن را در یک خط جدا بنویس
+- اگر سوال داری آن را در آخر و جدا بنویس
+- از Markdown برای بولد و لیست استفاده کن
+- در موضوعات علمی و کمپیوتر از نمادها و کد استفاده کن
+
+====================
+وضعیت درس
+====================
+{"این شروع درس است — با یک معرفی جذاب شروع کن" if chat_history_len == 0 else "درس در حال جریان است — ادامه بده"}
+
+فقط درس بده. اگر کاربر از موضوع خارج شد، آرام او را به موضوع برگردان."""
+
+# ══════════════════════════════════════════
+# ── TUTOR API ROUTES ──
+# ══════════════════════════════════════════
+
+@app.route("/api/tutor/curriculum")
+def get_curriculum():
+    """Returns full curriculum structure for the frontend."""
+    result = {}
+    for subj_key, subj_data in CURRICULUM.items():
+        result[subj_key] = {
+            'name':   subj_data['name'],
+            'emoji':  subj_data['emoji'],
+            'levels': {}
+        }
+        for level_num, level_data in subj_data['levels'].items():
+            result[subj_key]['levels'][str(level_num)] = {
+                'title':  level_data['title'],
+                'topics': level_data['topics']
+            }
+    return jsonify(result)
+
+@app.route("/api/tutor/progress/<subject>")
+@login_required
+def get_tutor_progress(subject):
+    """Returns student's progress for a specific subject."""
+    progress = get_or_create_progress(current_user.id, subject)
+    user = User.query.get(current_user.id)
+    badges = StudentBadge.query.filter_by(user_id=current_user.id).all()
+
+    return jsonify({
+        'progress':   progress.to_dict(),
+        'total_xp':   user.total_xp or 0,
+        'badges':     [b.to_dict() for b in badges],
+        'chat_history': json.loads(progress.chat_history or '[]')
+    })
+
+@app.route("/api/tutor/start-topic", methods=["POST"])
+@login_required
+def start_topic():
+    """Student starts or resumes a topic."""
+    data       = request.get_json()
+    subject    = data.get("subject")
+    topic_key  = data.get("topic_key")
+    level      = data.get("level", 1)
+
+    if subject not in CURRICULUM:
+        return jsonify({"error": "مضمون پیدا نشد"}), 400
+
+    progress = get_or_create_progress(current_user.id, subject)
+
+    # find topic info
+    topic_info = None
+    for t in CURRICULUM[subject]['levels'][level]['topics']:
+        if t['key'] == topic_key:
+            topic_info = t
+            break
+
+    if not topic_info:
+        return jsonify({"error": "موضوع پیدا نشد"}), 400
+
+    # update progress
+    progress.current_level     = level
+    progress.last_topic_title  = topic_info['title']
+    progress.last_activity     = datetime.utcnow()
+    db.session.commit()
+
+    # award first lesson badge
+    badge = award_badge(current_user.id, 'first_lesson', subject)
+
+    return jsonify({
+        "topic":   topic_info,
+        "badge":   badge,
+        "history": json.loads(progress.chat_history or '[]')
+    })
+
+@app.route("/api/tutor/chat", methods=["POST"])
+@login_required
+def tutor_chat_new():
+    """Main tutor chat endpoint — saves full history per subject."""
+    data       = request.get_json()
+    subject    = data.get("subject")
+    topic_key  = data.get("topic_key")
+    level      = int(data.get("level", 1))
+    message    = data.get("message", "")
+
+    if subject not in CURRICULUM:
+        return jsonify({"error": "مضمون پیدا نشد"}), 400
+
+    # get topic info
+    topic_info = None
+    for t in CURRICULUM[subject]['levels'].get(level, {}).get('topics', []):
+        if t['key'] == topic_key:
+            topic_info = t
+            break
+
+    if not topic_info:
+        return jsonify({"error": "موضوع پیدا نشد"}), 400
+
+    progress = get_or_create_progress(current_user.id, subject)
+
+    # load saved chat history
+    chat_history = json.loads(progress.chat_history or '[]')
+
+    # build system prompt
+    system_prompt = build_tutor_system_prompt(
+        subject, topic_info['title'],
+        topic_info['desc'], len(chat_history)
+    )
+
+    plan = getattr(current_user, 'plan', 'free') or 'free'
+
+    try:
+        reply, switched, reset_ts, model_used = smart_chat(
+            system_prompt=system_prompt,
+            history=chat_history[-20:],
+            user_message=message,
+            user_id=current_user.id,
+            plan=plan,
+            temperature=0.7
+        )
+    except Exception as e:
+        print(f"Tutor chat error: {e}")
+        return jsonify({"reply": "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید."})
+
+    # save updated chat history
+    chat_history.append({"role": "user", "content": message})
+    chat_history.append({"role": "assistant", "content": reply})
+
+    # keep last 60 messages to avoid DB bloat
+    if len(chat_history) > 60:
+        chat_history = chat_history[-60:]
+
+    progress.chat_history    = json.dumps(chat_history, ensure_ascii=False)
+    progress.last_activity   = datetime.utcnow()
+    progress.last_topic_title = topic_info['title']
+    db.session.commit()
+
+    response = {"reply": reply}
+    if switched:
+        response["switch_notice"] = True
+        if reset_ts:
+            response["reset_ts"] = reset_ts
+
+    return jsonify(response)
+
+@app.route("/api/tutor/complete-topic", methods=["POST"])
+@login_required
+def complete_topic():
+    """Student marks a topic as complete."""
+    data      = request.get_json()
+    subject   = data.get("subject")
+    topic_key = data.get("topic_key")
+    level     = int(data.get("level", 1))
+
+    progress = get_or_create_progress(current_user.id, subject)
+    completed = json.loads(progress.completed_topics or '[]')
+
+    newly_completed = False
+    if topic_key not in completed:
+        completed.append(topic_key)
+        progress.completed_topics = json.dumps(completed)
+        newly_completed = True
+
+        # award XP
+        award_xp(current_user.id, XP_REWARDS['topic_complete'], subject)
+
+        # check if entire level is complete
+        level_topics = [t['key'] for t in CURRICULUM[subject]['levels'].get(level, {}).get('topics', [])]
+        level_done   = all(t in completed for t in level_topics)
+
+        if level_done:
+            award_xp(current_user.id, XP_REWARDS['level_complete'], subject)
+            badge = award_badge(current_user.id, 'level_complete', subject)
+        else:
+            badge = None
+
+        db.session.commit()
+
+    user = User.query.get(current_user.id)
+    return jsonify({
+        "xp_earned":       XP_REWARDS['topic_complete'] if newly_completed else 0,
+        "total_xp":        user.total_xp or 0,
+        "completed_topics": completed,
+        "badge":           None
+    })
+
+@app.route("/api/tutor/generate-quiz", methods=["POST"])
+@login_required
+def generate_quiz():
+    """Generates a fresh quiz for a level using GPT."""
+    data    = request.get_json()
+    subject = data.get("subject")
+    level   = int(data.get("level", 1))
+
+    subject_data = CURRICULUM.get(subject, {})
+    level_data   = subject_data.get('levels', {}).get(level, {})
+    topics       = level_data.get('topics', [])
+    topic_titles = [t['title'] for t in topics]
+    subject_name = subject_data.get('name', subject)
+    level_title  = level_data.get('title', '')
+
+    quiz_prompt = f"""یک کوییز ۸ سوالی برای این مضمون و سطح بساز:
+
+مضمون: {subject_name}
+سطح: {level_title}
+موضوعات پوشش داده شده: {', '.join(topic_titles)}
+
+قوانین کوییز:
+- ۸ سوال چهار گزینه‌ای
+- سوالات متنوع و در سطوح مختلف سختی
+- برای هر سوال یک توضیح کوتاه چرا جواب درست است
+- سوالات باید واقعاً امتحان کنند که دانش‌آموز چقدر یاد گرفته
+
+فرمت خروجی — فقط JSON خالص بدون هیچ متن دیگری:
+{{
+  "questions": [
+    {{
+      "q": "متن سوال به دری",
+      "options": ["گزینه الف", "گزینه ب", "گزینه ج", "گزینه د"],
+      "correct": 0,
+      "explanation": "توضیح چرا این جواب درست است"
+    }}
+  ]
+}}
+
+correct باید index گزینه درست باشد (0، 1، 2 یا 3)."""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-5.4-mini",
+            messages=[{"role": "user", "content": quiz_prompt}],
+            max_completion_tokens=2000,
+            temperature=0.8
+        )
+        raw = response.choices[0].message.content.strip()
+        # clean up any markdown fences
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        quiz_data = json.loads(raw)
+        return jsonify(quiz_data)
+    except Exception as e:
+        print(f"Quiz generation error: {e}")
+        return jsonify({"error": "خطا در ساخت کوییز"}), 500
+
+@app.route("/api/tutor/submit-quiz", methods=["POST"])
+@login_required
+def submit_quiz():
+    """Saves quiz result and awards XP."""
+    data      = request.get_json()
+    subject   = data.get("subject")
+    level     = int(data.get("level", 1))
+    score     = int(data.get("score", 0))
+    passed    = score >= 70
+
+    quiz_key  = f"{subject}_level{level}"
+    xp_earned = 0
+
+    if passed:
+        xp_earned = XP_REWARDS['quiz_perfect'] if score == 100 else XP_REWARDS['quiz_pass']
+        award_xp(current_user.id, xp_earned, subject)
+
+        if score == 100:
+            award_badge(current_user.id, 'quiz_perfect', subject)
+
+        # mark quiz as completed in progress
+        progress = get_or_create_progress(current_user.id, subject)
+        completed_quizzes = json.loads(progress.completed_quizzes or '[]')
+        if quiz_key not in completed_quizzes:
+            completed_quizzes.append(quiz_key)
+            progress.completed_quizzes = json.dumps(completed_quizzes)
+            db.session.commit()
+
+    # save quiz result
+    result = QuizResult(
+        user_id=current_user.id,
+        subject=subject,
+        level=level,
+        quiz_key=quiz_key,
+        score=score,
+        passed=passed,
+        xp_earned=xp_earned
+    )
+    db.session.add(result)
+    db.session.commit()
+
+    user = User.query.get(current_user.id)
+    return jsonify({
+        "passed":    passed,
+        "score":     score,
+        "xp_earned": xp_earned,
+        "total_xp":  user.total_xp or 0,
+        "message":   "احسنت! سطح بعدی باز شد." if passed else "دوباره امتحان کن — می‌توانی بهتر کنی!"
+    })
+
+@app.route("/api/tutor/placement-test", methods=["POST"])
+@login_required
+def placement_test():
+    """Generates a placement test for a subject."""
+    data    = request.get_json()
+    subject = data.get("subject")
+
+    subject_data = CURRICULUM.get(subject, {})
+    subject_name = subject_data.get('name', subject)
+
+    prompt = f"""یک تست سطح‌بندی ۱۰ سوالی برای {subject_name} بساز.
+
+این تست باید:
+- ۲-۳ سوال از سطح ۱ (مبتدی)
+- ۲-۳ سوال از سطح ۲ (ابتدایی)
+- ۲-۳ سوال از سطح ۳ (متوسط)
+- ۲-۳ سوال از سطح ۴ (پیشرفته)
+
+هدف: فهمیدن دانش‌آموز در کدام سطح قرار دارد.
+
+فرمت خروجی — فقط JSON خالص:
+{{
+  "questions": [
+    {{
+      "q": "متن سوال به دری",
+      "options": ["گزینه الف", "گزینه ب", "گزینه ج", "گزینه د"],
+      "correct": 0,
+      "level": 1,
+      "explanation": "توضیح جواب"
+    }}
+  ]
+}}"""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-5.4-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=2000,
+            temperature=0.7
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        return jsonify(json.loads(raw))
+    except Exception as e:
+        print(f"Placement test error: {e}")
+        return jsonify({"error": "خطا در ساخت تست"}), 500
+
+@app.route("/api/tutor/placement-result", methods=["POST"])
+@login_required
+def placement_result():
+    """Calculates recommended level from placement test answers."""
+    data    = request.get_json()
+    subject = data.get("subject")
+    answers = data.get("answers", [])  # list of {correct: bool, level: int}
+
+    level_scores = {1: 0, 2: 0, 3: 0, 4: 0}
+    level_totals = {1: 0, 2: 0, 3: 0, 4: 0}
+
+    for a in answers:
+        lvl = a.get("level", 1)
+        level_totals[lvl] = level_totals.get(lvl, 0) + 1
+        if a.get("correct"):
+            level_scores[lvl] = level_scores.get(lvl, 0) + 1
+
+    # find highest level where student scored 50%+
+    recommended = 1
+    for lvl in [1, 2, 3, 4]:
+        total = level_totals.get(lvl, 0)
+        if total > 0:
+            pct = level_scores.get(lvl, 0) / total
+            if pct >= 0.5:
+                recommended = lvl
+
+    return jsonify({
+        "recommended_level": recommended,
+        "scores": {
+            str(lvl): {
+                "correct": level_scores.get(lvl, 0),
+                "total":   level_totals.get(lvl, 0)
+            } for lvl in [1, 2, 3, 4]
+        }
+    })
 
 if __name__ == "__main__":
     app.run(debug=True)
