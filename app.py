@@ -763,33 +763,7 @@ def chat():
 
     return jsonify(response_data)
 
-# ── TUTOR API ──
-@app.route("/api/tutor-chat", methods=["POST"])
-def tutor_chat():
-    data         = request.get_json()
-    user_message = data.get("message", "")
-    history      = data.get("history", [])
-    subject      = data.get("subject", "عمومی")
-    grade        = data.get("grade", "متوسط")
 
-    user_id = current_user.id if current_user.is_authenticated else None
-    plan    = getattr(current_user, 'plan', 'free') or 'free' \
-              if current_user.is_authenticated else 'free'
-
-    try:
-        reply, switched, reset_ts, model_used = smart_chat(
-            system_prompt=build_tutor_prompt(subject, grade),
-            history=history[-12:],
-            user_message=user_message,
-            user_id=user_id,
-            plan=plan,
-            temperature=0.6
-        )
-    except Exception as e:
-        print(f"Tutor chat error: {e}")
-        reply = "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید."
-
-    return jsonify({"reply": reply})
 
 # ── PERSONA API ──
 @app.route("/api/persona-chat", methods=["POST"])
