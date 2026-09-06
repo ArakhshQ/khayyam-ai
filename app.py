@@ -35,25 +35,25 @@ EXAMPLES_FILE  = "examples.json"
 
 PLAN_CONFIG = {
     'free': [
-        {'model': 'gpt-5.4-mini',            'tier': 1, 'limit': 5000,    'reset': 'daily'},
-        {'model': 'gpt-5.4-nano',            'tier': 2, 'limit': 10000,   'reset': 'daily'},
-        {'model': 'llama-3.3-70b-versatile', 'tier': 3, 'limit': None,    'reset': None},
+        {'model': 'gpt-5.4-mini',                          'tier': 1, 'limit': 5000,    'reset': 'daily'},
+        {'model': 'gpt-5.4-nano',                          'tier': 2, 'limit': 10000,   'reset': 'daily'},
+        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None, 'reset': None},
     ],
     'basic': [
-        {'model': 'gpt-5.4-mini',            'tier': 1, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',            'tier': 2, 'limit': 200000,  'reset': 'monthly'},
-        {'model': 'llama-3.3-70b-versatile', 'tier': 3, 'limit': None,    'reset': None},
+        {'model': 'gpt-5.4-mini',                          'tier': 1, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',                          'tier': 2, 'limit': 200000,  'reset': 'monthly'},
+        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None, 'reset': None},
     ],
     'pro': [
-        {'model': 'gpt-5.4-mini',            'tier': 1, 'limit': 500000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',            'tier': 2, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'llama-3.3-70b-versatile', 'tier': 3, 'limit': None,    'reset': None},
+        {'model': 'gpt-5.4-mini',                          'tier': 1, 'limit': 500000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',                          'tier': 2, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None, 'reset': None},
     ],
     'premium': [
-        {'model': 'gpt-5.4',                 'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
-        {'model': 'gpt-5.4-mini',            'tier': 2, 'limit': 500000,  'reset': 'monthly'},
-        {'model': 'gpt-5.4-nano',            'tier': 3, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'llama-3.3-70b-versatile', 'tier': 4, 'limit': None,    'reset': None},
+        {'model': 'gpt-5.4',                               'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
+        {'model': 'gpt-5.4-mini',                          'tier': 2, 'limit': 500000,  'reset': 'monthly'},
+        {'model': 'gpt-5.4-nano',                          'tier': 3, 'limit': 300000,  'reset': 'monthly'},
+        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 4, 'limit': None, 'reset': None},
     ],
 }
 
@@ -489,7 +489,11 @@ def call_openai_model(model, system_prompt, messages, temperature=0.7,
 
 def call_groq_model(system_prompt, messages, temperature=0.7):
     msgs = [{"role": "system", "content": system_prompt}] + messages
-    for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+    for model in [
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "llama-3.1-8b-instant",
+        "openai/gpt-oss-20b"
+    ]:
         try:
             response = groq_client.chat.completions.create(
                 model=model,
@@ -498,13 +502,12 @@ def call_groq_model(system_prompt, messages, temperature=0.7):
                 max_tokens=800,
                 top_p=0.9
             )
+            print(f"Groq replied with {model}")
             return response.choices[0].message.content, 0
         except Exception as e:
-            if "rate_limit" in str(e).lower() or "429" in str(e):
-                continue
-            raise e
+            print(f"Groq model {model} failed: {e}")
+            continue
     return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", 0
-
 def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
                temperature=0.7, image_b64=None, image_type=None):
     messages         = history + [{"role": "user", "content": user_message}]
