@@ -182,7 +182,94 @@ def get_usage_summary(user_id, plan):
             'remaining': max(0, limit - tokens_used)
         })
     return summary
+# ── TUTOR TOKEN TRACKING (SEPARATE POOL) ──
+TUTOR_PLAN_CONFIG = {
+    'free': [
+        {'model': 'gpt-5.4-mini', 'limit': 5000,    'reset': 'daily',   'col': 'tutor_tier1'},
+    ],
+    'basic': [
+        {'model': 'gpt-5.4-mini', 'limit': 150000,  'reset': 'monthly', 'col': 'tutor_tier1'},
+    ],
+    'pro': [
+        {'model': 'gpt-5.4-mini', 'limit': 300000,  'reset': 'monthly', 'col': 'tutor_tier1'},
+    ],
+    'premium': [
+        {'model': 'gpt-5.4-mini', 'limit': 500000,  'reset': 'monthly', 'col': 'tutor_tier1'},
+        {'model': 'gpt-5.4-nano', 'limit': 300000,  'reset': 'monthly', 'col': 'tutor_tier2'},
+    ],
+    'tutor_pro': [
+        {'model': 'gpt-5.4',      'limit': 3000000, 'reset': 'monthly', 'col': 'tutor_tier1'},
+    ],
+}
 
+def pick_tutor_model(user_id, plan, tokens_to_use):
+    """
+    Returns (model, reset_ts, is_limited)
+    is_limited=True means hard stop — no fallback, show upgrade message
+    """
+    cascade = TUTOR_PLAN_CONFIG.get(plan, TUTOR_PLAN_CONFIG['free'])
+    usage   = get_or_create_usage(user_id)
+    if not usage:
+        return cascade[0]['model'], None, False
+
+    for tier in cascade:
+        model  = tier['model']
+        limit  = tier['limit']
+        period = tier['reset']
+        col    = tier['col']
+
+        tokens_attr = f'{col}_tokens'
+        reset_attr  = f'{col}_reset'
+        tokens_used = getattr(usage, tokens_attr, 0) or 0
+        reset_at    = getattr(usage, reset_attr, None) or datetime.utcnow()
+
+        if should_reset(reset_at, period):
+            setattr(usage, tokens_attr, 0)
+            setattr(usage, reset_attr, datetime.utcnow())
+            tokens_used = 0
+            reset_at    = datetime.utcnow()
+
+        if tokens_used < limit:
+            setattr(usage, tokens_attr, min(tokens_used + tokens_to_use, limit))
+            usage.updated_at = datetime.utcnow()
+            db.session.commit()
+            reset_ts = get_reset_timestamp(reset_at, period)
+            return model, reset_ts, False
+
+        # this tier is exhausted — hard stop
+        reset_ts = get_reset_timestamp(reset_at, period)
+        return None, reset_ts, True
+
+    return None, None, True
+def smart_tutor_chat(system_prompt, history, user_message, user_id=None, plan='free', temperature=0.7):
+    """
+    Returns (reply, is_limited, reset_ts)
+    is_limited=True means token limit hit — frontend shows upgrade message
+    """
+    messages         = history + [{"role": "user", "content": user_message}]
+    estimated_tokens = len(user_message) // 4 + 400
+
+    if user_id is None:
+        # guest — use nano with no tracking, limited responses
+        try:
+            reply, _ = call_openai_model('gpt-5.4-nano', system_prompt, messages, temperature)
+            return reply, False, None
+        except Exception as e:
+            print(f"Tutor guest error: {e}")
+            return "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید.", False, None
+
+    model, reset_ts, is_limited = pick_tutor_model(user_id, plan, estimated_tokens)
+    print(f"TUTOR: user={user_id} plan={plan} model={model} limited={is_limited}")
+
+    if is_limited:
+        return None, True, reset_ts
+
+    try:
+        reply, _ = call_openai_model(model, system_prompt, messages, temperature)
+        return reply, False, reset_ts
+    except Exception as e:
+        print(f"Tutor OpenAI error with {model}: {e}")
+        return "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید.", False, reset_ts
 # ── KNOWLEDGE (DATABASE BACKED) ──
 def load_knowledge():
     try:
@@ -1372,21 +1459,18 @@ def start_topic():
         "badge":   badge,
         "history": json.loads(progress.chat_history or '[]')
     })
-
 @app.route("/api/tutor/chat", methods=["POST"])
 @login_required
 def tutor_chat_new():
-    """Main tutor chat endpoint — saves full history per subject."""
-    data       = request.get_json()
-    subject    = data.get("subject")
-    topic_key  = data.get("topic_key")
-    level      = int(data.get("level", 1))
-    message    = data.get("message", "")
+    data      = request.get_json()
+    subject   = data.get("subject")
+    topic_key = data.get("topic_key")
+    level     = int(data.get("level", 1))
+    message   = data.get("message", "")
 
     if subject not in CURRICULUM:
         return jsonify({"error": "مضمون پیدا نشد"}), 400
 
-    # get topic info
     topic_info = None
     for t in CURRICULUM[subject]['levels'].get(level, {}).get('topics', []):
         if t['key'] == topic_key:
@@ -1396,21 +1480,15 @@ def tutor_chat_new():
     if not topic_info:
         return jsonify({"error": "موضوع پیدا نشد"}), 400
 
-    progress = get_or_create_progress(current_user.id, subject)
-
-    # load saved chat history
+    progress     = get_or_create_progress(current_user.id, subject)
     chat_history = json.loads(progress.chat_history or '[]')
-
-    # build system prompt
     system_prompt = build_tutor_system_prompt(
-        subject, topic_info['title'],
-        topic_info['desc'], len(chat_history)
+        subject, topic_info['title'], topic_info['desc'], len(chat_history)
     )
-
     plan = getattr(current_user, 'plan', 'free') or 'free'
 
     try:
-        reply, switched, reset_ts, model_used = smart_chat(
+        reply, is_limited, reset_ts = smart_tutor_chat(
             system_prompt=system_prompt,
             history=chat_history[-20:],
             user_message=message,
@@ -1422,27 +1500,25 @@ def tutor_chat_new():
         print(f"Tutor chat error: {e}")
         return jsonify({"reply": "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید."})
 
-    # save updated chat history
+    # hard limit hit — return limit notice, no reply
+    if is_limited:
+        return jsonify({
+            "limited": True,
+            "reset_ts": reset_ts
+        })
+
+    # save history
     chat_history.append({"role": "user", "content": message})
     chat_history.append({"role": "assistant", "content": reply})
-
-    # keep last 60 messages to avoid DB bloat
     if len(chat_history) > 60:
         chat_history = chat_history[-60:]
 
-    progress.chat_history    = json.dumps(chat_history, ensure_ascii=False)
-    progress.last_activity   = datetime.utcnow()
+    progress.chat_history     = json.dumps(chat_history, ensure_ascii=False)
+    progress.last_activity    = datetime.utcnow()
     progress.last_topic_title = topic_info['title']
     db.session.commit()
 
-    response = {"reply": reply}
-    if switched:
-        response["switch_notice"] = True
-        if reset_ts:
-            response["reset_ts"] = reset_ts
-
-    return jsonify(response)
-
+    return jsonify({"reply": reply})
 @app.route("/api/tutor/complete-topic", methods=["POST"])
 @login_required
 def complete_topic():

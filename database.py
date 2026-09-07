@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from datetime import datetime
+import json
 
 db = SQLAlchemy()
 
@@ -68,15 +69,21 @@ class Memory(db.Model):
 
 class UserTokenUsage(db.Model):
     __tablename__ = 'user_token_usage'
-    id           = db.Column(db.Integer, primary_key=True)
-    user_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
-    tier1_tokens = db.Column(db.Integer, default=0)
-    tier1_reset  = db.Column(db.DateTime, default=datetime.utcnow)
-    tier2_tokens = db.Column(db.Integer, default=0)
-    tier2_reset  = db.Column(db.DateTime, default=datetime.utcnow)
-    tier3_tokens = db.Column(db.Integer, default=0)
-    tier3_reset  = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at   = db.Column(db.DateTime, default=datetime.utcnow)
+    id                 = db.Column(db.Integer, primary_key=True)
+    user_id            = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
+    # general chat tokens
+    tier1_tokens       = db.Column(db.Integer, default=0)
+    tier1_reset        = db.Column(db.DateTime, default=datetime.utcnow)
+    tier2_tokens       = db.Column(db.Integer, default=0)
+    tier2_reset        = db.Column(db.DateTime, default=datetime.utcnow)
+    tier3_tokens       = db.Column(db.Integer, default=0)
+    tier3_reset        = db.Column(db.DateTime, default=datetime.utcnow)
+    # tutor-specific tokens (separate pool)
+    tutor_tier1_tokens = db.Column(db.Integer, default=0)
+    tutor_tier1_reset  = db.Column(db.DateTime, default=datetime.utcnow)
+    tutor_tier2_tokens = db.Column(db.Integer, default=0)
+    tutor_tier2_reset  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at         = db.Column(db.DateTime, default=datetime.utcnow)
 
 class SiteConfig(db.Model):
     __tablename__ = 'site_config'
@@ -85,21 +92,18 @@ class SiteConfig(db.Model):
     value      = db.Column(db.Text, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-# ── TUTOR TABLES ──
-
 class TutorProgress(db.Model):
-    """Tracks exactly where each student is in each subject."""
     __tablename__ = 'tutor_progress'
     id                = db.Column(db.Integer, primary_key=True)
     user_id           = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    subject           = db.Column(db.String(50), nullable=False)   # 'math', 'science', 'dari', 'english', 'computer'
-    current_level     = db.Column(db.Integer, default=1)           # 1-4
-    current_topic_idx = db.Column(db.Integer, default=0)           # index in curriculum
-    completed_topics  = db.Column(db.Text, default='[]')           # JSON array of completed topic keys
-    completed_quizzes = db.Column(db.Text, default='[]')           # JSON array of completed quiz keys
+    subject           = db.Column(db.String(50), nullable=False)
+    current_level     = db.Column(db.Integer, default=1)
+    current_topic_idx = db.Column(db.Integer, default=0)
+    completed_topics  = db.Column(db.Text, default='[]')
+    completed_quizzes = db.Column(db.Text, default='[]')
     subject_xp        = db.Column(db.Integer, default=0)
-    chat_history      = db.Column(db.Text, default='[]')           # JSON — full chat for this subject
-    last_topic_title  = db.Column(db.String(200), default='')      # last topic they were on
+    chat_history      = db.Column(db.Text, default='[]')
+    last_topic_title  = db.Column(db.String(200), default='')
     last_activity     = db.Column(db.DateTime, default=datetime.utcnow)
     started_at        = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -118,14 +122,13 @@ class TutorProgress(db.Model):
         }
 
 class QuizResult(db.Model):
-    """Every quiz attempt ever made."""
     __tablename__ = 'quiz_results'
     id           = db.Column(db.Integer, primary_key=True)
     user_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     subject      = db.Column(db.String(50), nullable=False)
     level        = db.Column(db.Integer, nullable=False)
-    quiz_key     = db.Column(db.String(100), nullable=False)  # e.g. "math_level1"
-    score        = db.Column(db.Integer, nullable=False)       # percentage 0-100
+    quiz_key     = db.Column(db.String(100), nullable=False)
+    score        = db.Column(db.Integer, nullable=False)
     passed       = db.Column(db.Boolean, nullable=False)
     xp_earned    = db.Column(db.Integer, default=0)
     attempted_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -134,7 +137,6 @@ class QuizResult(db.Model):
         return {
             'subject':      self.subject,
             'level':        self.level,
-            'quiz_key':     self.quiz_key,
             'score':        self.score,
             'passed':       self.passed,
             'xp_earned':    self.xp_earned,
@@ -142,7 +144,6 @@ class QuizResult(db.Model):
         }
 
 class StudentBadge(db.Model):
-    """Achievements and rewards."""
     __tablename__ = 'student_badges'
     id          = db.Column(db.Integer, primary_key=True)
     user_id     = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
@@ -163,7 +164,6 @@ class StudentBadge(db.Model):
 
 def json_loads_safe(val):
     try:
-        import json
         return json.loads(val) if val else []
     except:
         return []
