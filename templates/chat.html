@@ -714,7 +714,12 @@
   function clearFile() {
     selectedFile     = null;
     selectedFileType = null;
-    document.getElementById('file-input').value  = '';
+    const imageInput  = document.getElementById('image-input');
+    const docInput    = document.getElementById('doc-input');
+    const cameraInput = document.getElementById('camera-input');
+    if (imageInput)  imageInput.value  = '';
+    if (docInput)    docInput.value    = '';
+    if (cameraInput) cameraInput.value = '';
     document.getElementById('file-preview').classList.remove('visible');
     document.getElementById('img-preview').src   = '';
     document.getElementById('img-preview').style.display = 'none';
