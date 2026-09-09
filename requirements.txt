@@ -5,6 +5,7 @@ openai
 groq
 flask-sqlalchemy
 flask-login
+flask-limiter
 bcrypt
 psycopg2-binary
 PyMuPDF

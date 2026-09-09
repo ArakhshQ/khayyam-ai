@@ -733,7 +733,8 @@
           subject:   currentSubject,
           topic_key: currentTopic?.key,
           level:     currentLevel,
-          message:   message
+          message:   message,
+          history:   currentUser ? undefined : chatHistory.slice(-20)
         })
       });
       const data = await res.json();

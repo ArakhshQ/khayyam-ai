@@ -789,6 +789,44 @@
       const data = await res.json();
       removeTyping();
 
+      // guest daily quota exhausted — show signup/limit notice, no reply
+      if (data.limited) {
+        const resetDate = data.reset_ts ? new Date(data.reset_ts * 1000) : null;
+        let timeStr = '';
+        if (resetDate) {
+          const time     = resetDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+          timeStr = ` بازنشینی فردا ساعت ${time}.`;
+        }
+        const notice = document.createElement('div');
+        notice.style.cssText = `
+          background:var(--surface); border:1px solid var(--gold);
+          border-radius:14px; padding:20px; margin:8px auto;
+          max-width:500px; text-align:center; direction:rtl;`;
+        notice.innerHTML = `
+          <div style="font-size:28px;margin-bottom:10px;">⏰</div>
+          <div style="font-size:15px;font-weight:700;color:var(--gold);margin-bottom:8px;">
+            سقف روزانه مهمان تمام شد
+          </div>
+          <div style="font-size:13px;color:var(--text-dim);line-height:1.8;margin-bottom:16px;">
+            برای امروز به سقف رایگان رسیدی.${timeStr}
+            <br/>برای ادامه بدون محدودیت، ثبت‌نام کن — رایگان است.
+          </div>
+          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+            <a href="/register" style="
+              padding:8px 20px; border-radius:99px; background:var(--gold);
+              color:#0f0e0c; font-family:'Vazirmatn',sans-serif;
+              font-size:13px; font-weight:700; text-decoration:none;">
+              ثبت‌نام رایگان ↗
+            </a>
+          </div>`;
+        document.getElementById('messages').appendChild(notice);
+        scrollToBottom();
+        isLoading = false;
+        document.getElementById('send-btn').disabled = false;
+        input.focus();
+        return;
+      }
+
       // safety check
       if (!data.reply) {
         appendBubble('ai', 'متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.');

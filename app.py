@@ -1,21 +1,28 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge
+from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge, GuestUsage, GuestGlobalUsage
 from functools import wraps
 from openai import OpenAI
 from groq import Groq
 from dotenv import load_dotenv
 from auth import register_user, login_user_by_username
 from datetime import datetime, timezone, timedelta
+from sqlalchemy import update as sa_update
+from flask_limiter import Limiter
 import os
 import json
 import re
 import base64
+import hashlib
 
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("ADMIN_PASSWORD", "fallback-secret")
+# ADMIN_PASSWORD is an admin login credential, not a session-signing key -
+# these are different secrets and shouldn't share a value. Set a real
+# SECRET_KEY in your environment; the random fallback still works but will
+# invalidate sessions on every restart, so set it explicitly in production.
+app.secret_key = os.getenv("SECRET_KEY") or os.getenv("ADMIN_PASSWORD", "fallback-secret")
 database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -27,11 +34,166 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login_page'
 
+@login_manager.unauthorized_handler
+def unauthorized():
+    # API routes should get a JSON 401, not an HTML redirect to /login
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "login_required"}), 401
+    return redirect(url_for('login_page'))
+
+def get_client_ip():
+    """
+    Render (like most PaaS hosts) puts the app behind a reverse proxy, so
+    request.remote_addr is the proxy's IP, not the visitor's. The real
+    client IP is the first entry in X-Forwarded-For.
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+limiter = Limiter(
+    app=app,
+    key_func=get_client_ip,
+    default_limits=[],
+    storage_uri="memory://"
+    # NOTE: in-memory storage only works correctly with a single web
+    # process/dyno. If you scale Render to more than one instance, switch
+    # this to a Redis storage_uri or the per-IP limits below become
+    # per-instance instead of global.
+)
+
+@app.errorhandler(429)
+def rate_limit_exceeded(e):
+    if request.path.startswith('/api/'):
+        return jsonify({
+            "error": "too_many_requests",
+            "reply": "لطفاً کمی آهسته‌تر پیام بفرست — تعداد درخواست‌ها زیاد است."
+        }), 429
+    return e
+
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 groq_client   = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 KNOWLEDGE_FILE = "knowledge.json"
 EXAMPLES_FILE  = "examples.json"
+
+# ── GUEST QUOTA CONFIG ──
+GUEST_DAILY_TOKEN_LIMIT = int(os.getenv("GUEST_DAILY_TOKEN_LIMIT", 5000))
+# Sitewide ceiling across ALL guests combined, per day - the real defense
+# against someone rotating IPs to dodge the per-IP limit above.
+GUEST_GLOBAL_DAILY_CAP  = int(os.getenv("GUEST_GLOBAL_DAILY_CAP", 200000))
+GUEST_MODEL             = "gpt-5.4-mini"
+_IP_SALT                = os.getenv("SECRET_KEY") or app.secret_key
+
+def hash_ip(ip):
+    """Store a salted hash instead of the raw IP - enough to rate-limit by, not enough to be a PII log of visitor IPs."""
+    return hashlib.sha256(f"{_IP_SALT}:{ip}".encode()).hexdigest()
+
+def today_key():
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+def next_utc_midnight_ts():
+    now      = datetime.utcnow()
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return tomorrow.replace(tzinfo=timezone.utc).timestamp()
+
+def _get_or_create_guest_row(model, **filters):
+    """
+    get_or_create that's safe against two concurrent first-ever requests
+    both trying to INSERT the same row at once — a plain "query, then
+    insert if missing" isn't atomic, so under load two threads can both
+    see "missing" and both attempt the insert. Only one insert wins (the
+    unique constraint rejects the other with an IntegrityError); on that
+    error we just roll back and re-fetch the row the winner created.
+    """
+    row = model.query.filter_by(**filters).first()
+    if row:
+        return row
+    try:
+        row = model(tokens_used=0, **filters)
+        db.session.add(row)
+        db.session.commit()
+        return row
+    except Exception:
+        db.session.rollback()
+        return model.query.filter_by(**filters).first()
+
+def reserve_guest_tokens(estimate):
+    """
+    Atomically reserves `estimate` tokens against the per-IP daily cap AND
+    the sitewide daily cap, BEFORE we spend money calling the model.
+    Returns (allowed, ip_hash, date_key).
+
+    Uses conditional UPDATE...WHERE statements (not read-then-write) so two
+    concurrent requests from the same guest can't both pass the check before
+    either one commits - the DB evaluates the WHERE clause against the
+    latest row value at update time, so this is race-safe under both
+    SQLite and Postgres without needing explicit locks.
+    """
+    ip_hash  = hash_ip(get_client_ip())
+    date_key = today_key()
+
+    try:
+        row  = _get_or_create_guest_row(GuestUsage, ip_hash=ip_hash, date_key=date_key)
+        grow = _get_or_create_guest_row(GuestGlobalUsage, date_key=date_key)
+
+        result_ip = db.session.execute(
+            sa_update(GuestUsage)
+              .where(GuestUsage.id == row.id,
+                     GuestUsage.tokens_used + estimate <= GUEST_DAILY_TOKEN_LIMIT)
+              .values(tokens_used=GuestUsage.tokens_used + estimate, updated_at=datetime.utcnow())
+        )
+        if result_ip.rowcount == 0:
+            db.session.rollback()
+            return False, ip_hash, date_key
+
+        result_global = db.session.execute(
+            sa_update(GuestGlobalUsage)
+              .where(GuestGlobalUsage.id == grow.id,
+                     GuestGlobalUsage.tokens_used + estimate <= GUEST_GLOBAL_DAILY_CAP)
+              .values(tokens_used=GuestGlobalUsage.tokens_used + estimate, updated_at=datetime.utcnow())
+        )
+        if result_global.rowcount == 0:
+            # global cap hit - undo the per-IP reservation we just made
+            db.session.execute(
+                sa_update(GuestUsage).where(GuestUsage.id == row.id)
+                  .values(tokens_used=GuestUsage.tokens_used - estimate)
+            )
+            db.session.commit()
+            return False, ip_hash, date_key
+
+        db.session.commit()
+        return True, ip_hash, date_key
+    except Exception as e:
+        print(f"reserve_guest_tokens error: {e}")
+        db.session.rollback()
+        # fail CLOSED: if the quota system itself breaks, block the guest
+        # request rather than silently allow unlimited spend
+        return False, None, None
+
+def true_up_guest_tokens(ip_hash, date_key, estimate, actual):
+    """Corrects the reservation once the API tells us the real token count."""
+    if not ip_hash or actual is None:
+        return
+    delta = actual - estimate
+    if delta == 0:
+        return
+    try:
+        db.session.execute(
+            sa_update(GuestUsage)
+              .where(GuestUsage.ip_hash == ip_hash, GuestUsage.date_key == date_key)
+              .values(tokens_used=GuestUsage.tokens_used + delta)
+        )
+        db.session.execute(
+            sa_update(GuestGlobalUsage)
+              .where(GuestGlobalUsage.date_key == date_key)
+              .values(tokens_used=GuestGlobalUsage.tokens_used + delta)
+        )
+        db.session.commit()
+    except Exception as e:
+        print(f"true_up_guest_tokens error: {e}")
+        db.session.rollback()
 
 PLAN_CONFIG = {
     'free': [
@@ -157,6 +319,47 @@ def pick_model_and_update(user_id, plan, tokens_to_use):
     last = cascade[-1]
     return last['model'], last['tier'], None, True
 
+def true_up_registered_tokens(user_id, tier, estimate, actual):
+    """
+    Corrects a registered user's tier-N counter once we know the real token
+    count from the API response, instead of leaving it at the pre-call
+    estimate. Mirrors true_up_guest_tokens but for the tiered plan pools.
+    """
+    if user_id is None or actual is None or tier is None:
+        return
+    delta = actual - estimate
+    if delta == 0:
+        return
+    try:
+        usage = get_or_create_usage(user_id)
+        if not usage:
+            return
+        col = f'tier{tier}_tokens'
+        setattr(usage, col, max(0, (getattr(usage, col, 0) or 0) + delta))
+        usage.updated_at = datetime.utcnow()
+        db.session.commit()
+    except Exception as e:
+        print(f"true_up_registered_tokens error: {e}")
+        db.session.rollback()
+
+def true_up_registered_tutor_tokens(user_id, col, estimate, actual):
+    if user_id is None or actual is None or col is None:
+        return
+    delta = actual - estimate
+    if delta == 0:
+        return
+    try:
+        usage = get_or_create_usage(user_id)
+        if not usage:
+            return
+        tokens_col = f'{col}_tokens'
+        setattr(usage, tokens_col, max(0, (getattr(usage, tokens_col, 0) or 0) + delta))
+        usage.updated_at = datetime.utcnow()
+        db.session.commit()
+    except Exception as e:
+        print(f"true_up_registered_tutor_tokens error: {e}")
+        db.session.rollback()
+
 def get_usage_summary(user_id, plan):
     cascade = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
     usage   = get_or_create_usage(user_id)
@@ -204,13 +407,15 @@ TUTOR_PLAN_CONFIG = {
 
 def pick_tutor_model(user_id, plan, tokens_to_use):
     """
-    Returns (model, reset_ts, is_limited)
+    Returns (model, reset_ts, is_limited, col)
     is_limited=True means hard stop — no fallback, show upgrade message
+    col is the usage column that was charged, needed later to true it up
+    with the real token count once the API responds.
     """
     cascade = TUTOR_PLAN_CONFIG.get(plan, TUTOR_PLAN_CONFIG['free'])
     usage   = get_or_create_usage(user_id)
     if not usage:
-        return cascade[0]['model'], None, False
+        return cascade[0]['model'], None, False, None
 
     for tier in cascade:
         model  = tier['model']
@@ -234,38 +439,45 @@ def pick_tutor_model(user_id, plan, tokens_to_use):
             usage.updated_at = datetime.utcnow()
             db.session.commit()
             reset_ts = get_reset_timestamp(reset_at, period)
-            return model, reset_ts, False
+            return model, reset_ts, False, col
 
         # this tier is exhausted — hard stop
         reset_ts = get_reset_timestamp(reset_at, period)
-        return None, reset_ts, True
+        return None, reset_ts, True, None
 
-    return None, None, True
+    return None, None, True, None
+
 def smart_tutor_chat(system_prompt, history, user_message, user_id=None, plan='free', temperature=0.7):
     """
     Returns (reply, is_limited, reset_ts)
     is_limited=True means token limit hit — frontend shows upgrade message
+    (used for both the registered-plan cascade and the guest daily quota)
     """
     messages         = history + [{"role": "user", "content": user_message}]
     estimated_tokens = len(user_message) // 4 + 400
 
     if user_id is None:
-        # guest — use nano with no tracking, limited responses
+        # guest — capped daily quota, shared with general chat, same as smart_chat
+        allowed, ip_hash, date_key = reserve_guest_tokens(estimated_tokens)
+        if not allowed:
+            return None, True, next_utc_midnight_ts()
         try:
-            reply, _ = call_openai_model('gpt-5.4-nano', system_prompt, messages, temperature)
+            reply, actual = call_openai_model(GUEST_MODEL, system_prompt, messages, temperature)
+            true_up_guest_tokens(ip_hash, date_key, estimated_tokens, actual)
             return reply, False, None
         except Exception as e:
             print(f"Tutor guest error: {e}")
             return "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید.", False, None
 
-    model, reset_ts, is_limited = pick_tutor_model(user_id, plan, estimated_tokens)
+    model, reset_ts, is_limited, col = pick_tutor_model(user_id, plan, estimated_tokens)
     print(f"TUTOR: user={user_id} plan={plan} model={model} limited={is_limited}")
 
     if is_limited:
         return None, True, reset_ts
 
     try:
-        reply, _ = call_openai_model(model, system_prompt, messages, temperature)
+        reply, actual = call_openai_model(model, system_prompt, messages, temperature)
+        true_up_registered_tutor_tokens(user_id, col, estimated_tokens, actual)
         return reply, False, reset_ts
     except Exception as e:
         print(f"Tutor OpenAI error with {model}: {e}")
@@ -590,16 +802,20 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     estimated_tokens = len(user_message) // 4 + 400
 
     if user_id is None:
+        allowed, ip_hash, date_key = reserve_guest_tokens(estimated_tokens)
+        if not allowed:
+            return None, False, next_utc_midnight_ts(), None, True
         try:
-            reply, _ = call_openai_model(
-                'gpt-5.4-nano', system_prompt, messages,
+            reply, actual = call_openai_model(
+                GUEST_MODEL, system_prompt, messages,
                 temperature, image_b64, image_type
             )
-            return reply, False, None, 'gpt-5.4-nano'
+            true_up_guest_tokens(ip_hash, date_key, estimated_tokens, actual)
+            return reply, False, None, GUEST_MODEL, False
         except Exception as e:
             print(f"Guest OpenAI error: {e}")
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, False, None, 'llama-4-scout'
+            return reply, False, None, 'llama-4-scout', False
 
     model, tier, reset_ts, switched = pick_model_and_update(
         user_id, plan, estimated_tokens
@@ -609,26 +825,27 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     if 'llama' in model or 'gpt-oss' in model or 'qwen' in model:
         try:
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, switched, reset_ts, model
+            return reply, switched, reset_ts, model, False
         except Exception as e:
             print(f"Groq error: {e}")
-            return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", switched, reset_ts, model
+            return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", switched, reset_ts, model, False
 
     try:
-        reply, _ = call_openai_model(
+        reply, actual = call_openai_model(
             model, system_prompt, messages,
             temperature, image_b64, image_type
         )
+        true_up_registered_tokens(user_id, tier, estimated_tokens, actual)
         print(f"DEBUG: OpenAI replied with {model}")
-        return reply, switched, reset_ts, model
+        return reply, switched, reset_ts, model, False
     except Exception as e:
         print(f"OpenAI error with {model}: {e} — falling back to Groq")
         try:
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, switched, reset_ts, 'llama-4-scout'
+            return reply, switched, reset_ts, 'llama-4-scout', False
         except Exception as e2:
             print(f"Groq fallback failed: {e2}")
-            return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه دیگر امتحان کنید.", switched, reset_ts, 'error'
+            return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه دیگر امتحان کنید.", switched, reset_ts, 'error', False
 
 # ── DOCUMENT EXTRACTION ──
 def extract_text_from_file(file_bytes, filename):
@@ -682,6 +899,7 @@ def pricing_page():
     return render_template("pricing.html")
 
 @app.route("/api/register", methods=["POST"])
+@limiter.limit("10 per hour")
 def api_register():
     data     = request.get_json()
     username = data.get("username", "").strip()
@@ -702,6 +920,7 @@ def api_register():
     return jsonify({"success": True})
 
 @app.route("/api/login", methods=["POST"])
+@limiter.limit("20 per hour")
 def api_login():
     data       = request.get_json()
     identifier = data.get("identifier", "").strip()
@@ -761,6 +980,7 @@ def admin_panel():
 
 # ── CHAT API ──
 @app.route("/api/chat", methods=["POST"])
+@limiter.limit("15 per minute")
 def chat():
     if request.content_type and 'multipart/form-data' in request.content_type:
         user_message = request.form.get("message", "")
@@ -798,7 +1018,7 @@ def chat():
     user_memories = get_user_memories(user_id) if user_id else None
 
     try:
-        reply, switched, reset_ts, model_used = smart_chat(
+        reply, switched, reset_ts, model_used, is_limited = smart_chat(
             system_prompt=build_system_prompt(user_memories=user_memories),
             history=history[-10:],
             user_message=user_message,
@@ -811,6 +1031,10 @@ def chat():
     except Exception as e:
         print(f"smart_chat crashed: {e}")
         return jsonify({"reply": "متأسفم، خطایی رخ داد. لطفاً دوباره امتحان کنید."})
+
+    # guest daily quota exhausted — no reply, frontend shows signup/limit notice
+    if is_limited:
+        return jsonify({"limited": True, "reset_ts": reset_ts, "guest": True})
 
     if not reply:
         reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
@@ -854,6 +1078,7 @@ def chat():
 
 # ── PERSONA API ──
 @app.route("/api/persona-chat", methods=["POST"])
+@limiter.limit("15 per minute")
 def persona_chat():
     data           = request.get_json()
     user_message   = data.get("message", "")
@@ -865,7 +1090,7 @@ def persona_chat():
               if current_user.is_authenticated else 'free'
 
     try:
-        reply, _, _, _ = smart_chat(
+        reply, _, reset_ts, _, is_limited = smart_chat(
             system_prompt=persona_prompt,
             history=history[-10:],
             user_message=user_message,
@@ -875,7 +1100,10 @@ def persona_chat():
         )
     except Exception as e:
         print(f"Persona chat error: {e}")
-        reply = "متأسفم، مشکلی پیش آمد."
+        return jsonify({"reply": "متأسفم، مشکلی پیش آمد."})
+
+    if is_limited:
+        return jsonify({"limited": True, "reset_ts": reset_ts, "guest": True})
 
     return jsonify({"reply": reply})
 
@@ -1407,6 +1635,7 @@ def get_curriculum():
     return jsonify(result)
 
 @app.route("/api/tutor/progress/<subject>")
+@login_required
 def get_tutor_progress(subject):
     """Returns student's progress for a specific subject."""
     progress = get_or_create_progress(current_user.id, subject)
@@ -1421,6 +1650,7 @@ def get_tutor_progress(subject):
     })
 
 @app.route("/api/tutor/start-topic", methods=["POST"])
+@login_required
 def start_topic():
     """Student starts or resumes a topic."""
     data       = request.get_json()
@@ -1458,6 +1688,7 @@ def start_topic():
         "history": json.loads(progress.chat_history or '[]')
     })
 @app.route("/api/tutor/chat", methods=["POST"])
+@limiter.limit("15 per minute")
 def tutor_chat_new():
     data      = request.get_json()
     subject   = data.get("subject")
@@ -1476,6 +1707,32 @@ def tutor_chat_new():
 
     if not topic_info:
         return jsonify({"error": "موضوع پیدا نشد"}), 400
+
+    if not current_user.is_authenticated:
+        # guest "taste" mode — no persisted progress (nothing to save it
+        # against), so the frontend keeps history client-side and resends
+        # it each turn, capped at the shared guest daily quota.
+        guest_history = data.get("history", [])[-20:]
+        system_prompt = build_tutor_system_prompt(
+            subject, topic_info['title'], topic_info['desc'], len(guest_history)
+        )
+        try:
+            reply, is_limited, reset_ts = smart_tutor_chat(
+                system_prompt=system_prompt,
+                history=guest_history,
+                user_message=message,
+                user_id=None,
+                plan='free',
+                temperature=0.7
+            )
+        except Exception as e:
+            print(f"Tutor guest chat error: {e}")
+            return jsonify({"reply": "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید."})
+
+        if is_limited:
+            return jsonify({"limited": True, "reset_ts": reset_ts, "guest": True})
+
+        return jsonify({"reply": reply})
 
     progress     = get_or_create_progress(current_user.id, subject)
     chat_history = json.loads(progress.chat_history or '[]')
@@ -1517,6 +1774,7 @@ def tutor_chat_new():
 
     return jsonify({"reply": reply})
 @app.route("/api/tutor/complete-topic", methods=["POST"])
+@login_required
 def complete_topic():
     """Student marks a topic as complete."""
     data      = request.get_json()
@@ -1556,8 +1814,49 @@ def complete_topic():
         "badge":           None
     })
 
-@app.route("/api/tutor/generate-quiz", methods=["POST"])
+def run_gated_completion(prompt, max_tokens=2000, temperature=0.8):
+    """
+    Shared gate for one-shot generation calls (quiz + placement test) that
+    used to hit OpenAI directly with NO auth check and NO token tracking —
+    meaning anyone, logged in or not, could call them for free all day.
+    Now: guests spend from the shared guest daily quota, registered users
+    spend from their plan's tutor pool (same tracking smart_tutor_chat uses).
+    Returns (raw_text_or_None, is_limited, reset_ts).
+    """
+    estimated_tokens = max_tokens + len(prompt) // 4
 
+    if not current_user.is_authenticated:
+        allowed, ip_hash, date_key = reserve_guest_tokens(estimated_tokens)
+        if not allowed:
+            return None, True, next_utc_midnight_ts()
+        model = GUEST_MODEL
+    else:
+        plan = getattr(current_user, 'plan', 'free') or 'free'
+        model, reset_ts, is_limited, col = pick_tutor_model(current_user.id, plan, estimated_tokens)
+        if is_limited:
+            return None, True, reset_ts
+
+    try:
+        response = openai_client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=max_tokens,
+            temperature=temperature
+        )
+        raw    = response.choices[0].message.content.strip()
+        actual = response.usage.total_tokens
+        if not current_user.is_authenticated:
+            true_up_guest_tokens(ip_hash, date_key, estimated_tokens, actual)
+        else:
+            true_up_registered_tutor_tokens(current_user.id, col, estimated_tokens, actual)
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        return raw, False, None
+    except Exception as e:
+        print(f"run_gated_completion error: {e}")
+        return None, False, None
+
+@app.route("/api/tutor/generate-quiz", methods=["POST"])
+@limiter.limit("10 per minute")
 def generate_quiz():
     """Generates a fresh quiz for a level using GPT."""
     data    = request.get_json()
@@ -1597,23 +1896,21 @@ def generate_quiz():
 
 correct باید index گزینه درست باشد (0، 1، 2 یا 3)."""
 
+    raw, is_limited, reset_ts = run_gated_completion(quiz_prompt, max_tokens=2000, temperature=0.8)
+
+    if is_limited:
+        return jsonify({"limited": True, "reset_ts": reset_ts})
+    if raw is None:
+        return jsonify({"error": "خطا در ساخت کوییز"}), 500
+
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-5.4-mini",
-            messages=[{"role": "user", "content": quiz_prompt}],
-            max_completion_tokens=2000,
-            temperature=0.8
-        )
-        raw = response.choices[0].message.content.strip()
-        # clean up any markdown fences
-        raw = raw.replace('```json', '').replace('```', '').strip()
-        quiz_data = json.loads(raw)
-        return jsonify(quiz_data)
+        return jsonify(json.loads(raw))
     except Exception as e:
-        print(f"Quiz generation error: {e}")
+        print(f"Quiz JSON parse error: {e}")
         return jsonify({"error": "خطا در ساخت کوییز"}), 500
 
 @app.route("/api/tutor/submit-quiz", methods=["POST"])
+@login_required
 def submit_quiz():
     """Saves quiz result and awards XP."""
     data      = request.get_json()
@@ -1663,7 +1960,7 @@ def submit_quiz():
     })
 
 @app.route("/api/tutor/placement-test", methods=["POST"])
-
+@limiter.limit("10 per minute")
 def placement_test():
     """Generates a placement test for a subject."""
     data    = request.get_json()
@@ -1695,18 +1992,17 @@ def placement_test():
   ]
 }}"""
 
+    raw, is_limited, reset_ts = run_gated_completion(prompt, max_tokens=2000, temperature=0.7)
+
+    if is_limited:
+        return jsonify({"limited": True, "reset_ts": reset_ts})
+    if raw is None:
+        return jsonify({"error": "خطا در ساخت تست"}), 500
+
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-5.4-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=2000,
-            temperature=0.7
-        )
-        raw = response.choices[0].message.content.strip()
-        raw = raw.replace('```json', '').replace('```', '').strip()
         return jsonify(json.loads(raw))
     except Exception as e:
-        print(f"Placement test error: {e}")
+        print(f"Placement test JSON parse error: {e}")
         return jsonify({"error": "خطا در ساخت تست"}), 500
 
 @app.route("/api/tutor/placement-result", methods=["POST"])

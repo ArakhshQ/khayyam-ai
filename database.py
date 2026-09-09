@@ -162,6 +162,30 @@ class StudentBadge(db.Model):
             'earned_at':   self.earned_at.isoformat(),
         }
 
+class GuestUsage(db.Model):
+    """Per-IP daily token usage for anonymous (not logged in) visitors."""
+    __tablename__ = 'guest_usage'
+    id          = db.Column(db.Integer, primary_key=True)
+    ip_hash     = db.Column(db.String(64), nullable=False, index=True)
+    date_key    = db.Column(db.String(10), nullable=False)  # 'YYYY-MM-DD' (UTC)
+    tokens_used = db.Column(db.Integer, default=0)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint('ip_hash', 'date_key', name='_guest_ip_date_uc'),)
+
+class GuestGlobalUsage(db.Model):
+    """
+    Sitewide daily token usage across ALL guests combined.
+    This is the circuit breaker: per-IP limits alone can be bypassed by
+    rotating IPs/VPNs, but a determined abuser still can't blow past this
+    sitewide ceiling before guest access shuts off for the day.
+    """
+    __tablename__ = 'guest_global_usage'
+    id          = db.Column(db.Integer, primary_key=True)
+    date_key    = db.Column(db.String(10), unique=True, nullable=False)
+    tokens_used = db.Column(db.Integer, default=0)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
 def json_loads_safe(val):
     try:
         return json.loads(val) if val else []
