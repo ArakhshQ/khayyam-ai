@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge, GuestUsage, GuestGlobalUsage
+from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge, GuestUsage, GuestGlobalUsage, AccountToken
 from functools import wraps
 from openai import OpenAI
 from groq import Groq
@@ -14,6 +14,10 @@ import json
 import re
 import base64
 import hashlib
+import secrets
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
@@ -194,6 +198,109 @@ def true_up_guest_tokens(ip_hash, date_key, estimate, actual):
     except Exception as e:
         print(f"true_up_guest_tokens error: {e}")
         db.session.rollback()
+
+# ── EMAIL (verification + password reset) ──
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+SMTP_FROM = os.getenv("SMTP_FROM") or SMTP_USER
+SITE_URL  = os.getenv("SITE_URL", "http://127.0.0.1:5000")  # e.g. https://khayyam.ai in production
+
+def send_email(to_email, subject, html_body):
+    """
+    Sends a transactional email over SMTP. Works with any SMTP provider
+    (SendGrid, Mailgun, Postmark, Resend, Amazon SES, or even Gmail for
+    testing) - just set SMTP_HOST/PORT/USER/PASSWORD/FROM as env vars.
+    Never raises: a broken email config should not break registration or
+    password reset, it should just log and let the caller continue.
+    """
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
+        print(f"send_email skipped (SMTP not configured) - would have sent '{subject}' to {to_email}")
+        return False
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From']    = SMTP_FROM
+        msg['To']      = to_email
+        msg.attach(MIMEText(html_body, 'html', 'utf-8'))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+        return True
+    except Exception as e:
+        print(f"send_email error sending to {to_email}: {e}")
+        return False
+
+def create_account_token(user_id, purpose, ttl_minutes=60):
+    """
+    Creates a one-time token for the given purpose ('verify_email' or
+    'reset_password'), invalidating any earlier unused tokens of the same
+    purpose for this user first so old links stop working once a new one
+    is requested. Returns the RAW token - only this return value should
+    ever be emailed; the database only ever sees its hash.
+    """
+    raw_token  = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+
+    db.session.execute(
+        sa_update(AccountToken)
+          .where(AccountToken.user_id == user_id, AccountToken.purpose == purpose,
+                 AccountToken.used_at.is_(None))
+          .values(used_at=datetime.utcnow())
+    )
+    db.session.add(AccountToken(
+        user_id=user_id, token_hash=token_hash, purpose=purpose,
+        expires_at=datetime.utcnow() + timedelta(minutes=ttl_minutes)
+    ))
+    db.session.commit()
+    return raw_token
+
+def consume_account_token(raw_token, purpose):
+    """
+    Validates and burns a token in one step. Returns the user_id on
+    success, or None if the token is missing, wrong purpose, expired, or
+    already used. A token can only ever be consumed once.
+    """
+    if not raw_token:
+        return None
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    row = AccountToken.query.filter_by(token_hash=token_hash, purpose=purpose).first()
+    if not row or row.used_at is not None or row.expires_at < datetime.utcnow():
+        return None
+    row.used_at = datetime.utcnow()
+    db.session.commit()
+    return row.user_id
+
+def send_verification_email(user):
+    if not user.email:
+        return
+    token = create_account_token(user.id, 'verify_email', ttl_minutes=60 * 24)
+    link  = f"{SITE_URL}/verify-email?token={token}"
+    html  = f"""
+    <div dir="rtl" style="font-family:Tahoma,sans-serif;background:#0f0e0c;color:#e8e4da;padding:32px;">
+      <h2 style="color:#c9a84c;">تایید ایمیل خیام</h2>
+      <p>سلام {user.username}،</p>
+      <p>برای تایید ایمیل خود روی لینک زیر کلیک کنید. این لینک تا ۲۴ ساعت معتبر است.</p>
+      <p><a href="{link}" style="color:#c9a84c;">تایید ایمیل</a></p>
+      <p style="color:#9a9488;font-size:12px;">اگر این حساب را نساخته‌اید، این ایمیل را نادیده بگیرید.</p>
+    </div>"""
+    send_email(user.email, "تایید ایمیل — خیام", html)
+
+def send_password_reset_email(user):
+    token = create_account_token(user.id, 'reset_password', ttl_minutes=30)
+    link  = f"{SITE_URL}/reset-password?token={token}"
+    html  = f"""
+    <div dir="rtl" style="font-family:Tahoma,sans-serif;background:#0f0e0c;color:#e8e4da;padding:32px;">
+      <h2 style="color:#c9a84c;">بازیابی رمز عبور — خیام</h2>
+      <p>سلام {user.username}،</p>
+      <p>برای تعیین رمز عبور جدید روی لینک زیر کلیک کنید. این لینک تا ۳۰ دقیقه معتبر است.</p>
+      <p><a href="{link}" style="color:#c9a84c;">تعیین رمز عبور جدید</a></p>
+      <p style="color:#9a9488;font-size:12px;">اگر این درخواست را شما نفرستاده‌اید، این ایمیل را نادیده بگیرید — رمز عبور شما تغییر نخواهد کرد.</p>
+    </div>"""
+    send_email(user.email, "بازیابی رمز عبور — خیام", html)
 
 PLAN_CONFIG = {
     'free': [
@@ -916,6 +1023,13 @@ def api_register():
     if error:
         return jsonify({"success": False, "error": error})
 
+    if user.email:
+        try:
+            send_verification_email(user)
+        except Exception as e:
+            print(f"verification email failed for user {user.id}: {e}")
+            # registration still succeeds - verification is not required to use the app
+
     login_user(user)
     return jsonify({"success": True})
 
@@ -933,6 +1047,93 @@ def api_login():
     login_user(user)
     return jsonify({"success": True})
 
+# ── EMAIL VERIFICATION ──
+@app.route("/verify-email")
+def verify_email_page():
+    token   = request.args.get("token", "")
+    user_id = consume_account_token(token, "verify_email")
+    if not user_id:
+        return render_template("verify-email.html", success=False)
+    user = User.query.get(user_id)
+    if user:
+        user.is_verified = True
+        db.session.commit()
+    return render_template("verify-email.html", success=True)
+
+@app.route("/api/resend-verification", methods=["POST"])
+@login_required
+@limiter.limit("3 per hour")
+def resend_verification():
+    if current_user.is_verified:
+        return jsonify({"success": False, "error": "ایمیل شما قبلاً تایید شده"})
+    if not current_user.email:
+        return jsonify({"success": False, "error": "برای این حساب ایمیلی ثبت نشده"})
+    try:
+        send_verification_email(current_user)
+    except Exception as e:
+        print(f"resend_verification error: {e}")
+        return jsonify({"success": False, "error": "ارسال ایمیل ناموفق بود. دوباره امتحان کنید."})
+    return jsonify({"success": True})
+
+# ── PASSWORD RESET ──
+@app.route("/forgot-password")
+def forgot_password_page():
+    return render_template("forgot-password.html")
+
+@app.route("/api/forgot-password", methods=["POST"])
+@limiter.limit("5 per hour")
+def api_forgot_password():
+    data  = request.get_json()
+    email = (data.get("email") or "").strip()
+
+    # Always return the same response whether or not the email exists -
+    # confirming/denying an account's existence here is a user-enumeration
+    # leak, so the UI can't tell the difference either way.
+    generic_response = {"success": True, "message": "اگر این ایمیل در سیستم ثبت باشد، لینک بازیابی برایتان ارسال شد."}
+
+    if not email:
+        return jsonify(generic_response)
+
+    user = User.query.filter_by(email=email).first()
+    if user:
+        try:
+            send_password_reset_email(user)
+        except Exception as e:
+            print(f"forgot_password email error: {e}")
+
+    return jsonify(generic_response)
+
+@app.route("/reset-password")
+def reset_password_page():
+    token = request.args.get("token", "")
+    return render_template("reset-password.html", token=token)
+
+@app.route("/api/reset-password", methods=["POST"])
+@limiter.limit("10 per hour")
+def api_reset_password():
+    data     = request.get_json()
+    token    = data.get("token", "")
+    password = (data.get("password") or "").strip()
+
+    if len(password) < 6:
+        return jsonify({"success": False, "error": "رمز عبور باید حداقل ۶ حرف باشد"})
+
+    user_id = consume_account_token(token, "reset_password")
+    if not user_id:
+        return jsonify({"success": False, "error": "لینک نامعتبر یا منقضی شده. یک لینک جدید درخواست کنید."})
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"success": False, "error": "حساب کاربری یافت نشد"})
+
+    from auth import hash_password
+    user.password_hash = hash_password(password)
+    user.is_verified    = True  # proving control of the inbox is as good as clicking the verify link
+    db.session.commit()
+
+    login_user(user)
+    return jsonify({"success": True})
+
 @app.route("/api/me")
 def api_me():
     if current_user.is_authenticated:
@@ -942,6 +1143,7 @@ def api_me():
             "email":     current_user.email,
             "phone":     current_user.phone,
             "is_admin":  current_user.is_admin,
+            "is_verified": bool(current_user.is_verified),
             "plan":      getattr(current_user, 'plan', 'free') or 'free'
         })
     return jsonify({"logged_in": False})

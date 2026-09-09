@@ -211,6 +211,14 @@
       </div>
       <span class="user-badge">رایگان</span>
     </div>
+
+    <div id="verify-banner" style="display:none; background:var(--surface); border:1px solid var(--gold-dim); border-radius:12px; padding:14px 16px; margin-bottom:20px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+      <span style="font-size:13px; color:var(--text-dim);">ایمیل شما هنوز تایید نشده</span>
+      <button id="resend-btn" onclick="resendVerification()" style="padding:7px 16px; border-radius:8px; border:1px solid var(--gold-dim); background:rgba(201,168,76,0.1); color:var(--gold); font-family:'Vazirmatn',sans-serif; font-size:13px; font-weight:600; cursor:pointer;">
+        ارسال دوباره لینک تایید
+      </button>
+    </div>
+
     <!-- conversations -->
     <div class="section-title">گفتگوهای ذخیره شده</div>
     <div class="conv-list" id="conv-list">
@@ -279,9 +287,33 @@
       document.getElementById('user-avatar').textContent = initial;
       document.getElementById('user-name').textContent   = data.username;
       const detail = [];
-      if (data.email) detail.push('📧 ' + data.email);
-      if (data.phone) detail.push('📱 ' + data.phone);
+      if (data.email) detail.push(data.email);
+      if (data.phone) detail.push(data.phone);
       document.getElementById('user-detail').textContent = detail.join(' · ');
+
+      if (data.email && !data.is_verified) {
+        document.getElementById('verify-banner').style.display = 'flex';
+      }
+    }
+
+    async function resendVerification() {
+      const btn = document.getElementById('resend-btn');
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = 'در حال ارسال...';
+      try {
+        const res  = await fetch('/api/resend-verification', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          btn.textContent = 'ارسال شد — ایمیل خود را بررسی کنید';
+        } else {
+          btn.textContent = data.error || 'ارسال ناموفق بود';
+          btn.disabled = false;
+        }
+      } catch (err) {
+        btn.textContent = original;
+        btn.disabled = false;
+      }
     }
 
     async function loadConversations() {

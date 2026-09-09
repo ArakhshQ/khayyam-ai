@@ -13,6 +13,7 @@ class User(UserMixin, db.Model):
     username      = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin      = db.Column(db.Boolean, default=False)
+    is_verified   = db.Column(db.Boolean, default=False)
     plan          = db.Column(db.String(20), default='free')
     total_xp      = db.Column(db.Integer, default=0)
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
@@ -23,6 +24,24 @@ class User(UserMixin, db.Model):
     tutor_progress = db.relationship('TutorProgress', backref='user', lazy=True, cascade='all, delete-orphan')
     quiz_results   = db.relationship('QuizResult', backref='user', lazy=True, cascade='all, delete-orphan')
     badges         = db.relationship('StudentBadge', backref='user', lazy=True, cascade='all, delete-orphan')
+    account_tokens = db.relationship('AccountToken', backref='user', lazy=True, cascade='all, delete-orphan')
+
+class AccountToken(db.Model):
+    """
+    One-time tokens for email verification and password reset. We only ever
+    store a hash of the token (same principle as passwords) - the raw token
+    goes out in the email and is never written to the database, so a DB
+    leak alone can't be used to verify emails or reset passwords.
+    """
+    __tablename__ = 'account_tokens'
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    token_hash = db.Column(db.String(64), nullable=False, index=True)
+    purpose    = db.Column(db.String(20), nullable=False)  # 'verify_email' | 'reset_password'
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at    = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 
 class Conversation(db.Model):
     __tablename__ = 'conversations'

@@ -63,34 +63,33 @@
   }
 
   .card-top { text-align: center; margin-bottom: 28px; }
-  .card-icon { font-size: 36px; display: block; margin-bottom: 12px; }
   .card-top h1 { font-size: 22px; font-weight: 700; color: var(--gold); margin-bottom: 6px; }
   .card-top p  { font-size: 13px; color: var(--text-dim); line-height: 1.7; }
 
-  .form-group { margin-bottom: 16px; }
+  .form-group { margin-bottom: 18px; }
   .form-label {
     display: block;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-dim);
-    margin-bottom: 7px;
-    letter-spacing: 0.05em;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
   }
 
   .form-input {
     width: 100%;
-    padding: 11px 14px;
+    padding: 12px 14px;
     background: var(--surface2);
     border: 1px solid var(--border);
     border-radius: 9px;
     color: var(--text);
     font-family: 'Vazirmatn', sans-serif;
     font-size: 14px;
+    font-weight: 500;
     outline: none;
     transition: border-color 0.2s;
   }
   .form-input:focus { border-color: var(--gold-dim); }
-  .form-input::placeholder { color: var(--text-dim); }
+  .form-input::placeholder { color: var(--text-dim); font-weight: 400; opacity: 0.75; }
 
   .method-toggle {
     display: flex;
@@ -100,13 +99,14 @@
 
   .method-btn {
     flex: 1;
-    padding: 8px;
+    padding: 9px;
     border-radius: 8px;
     border: 1px solid var(--border);
     background: transparent;
     color: var(--text-dim);
     font-family: 'Vazirmatn', sans-serif;
     font-size: 13px;
+    font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
   }
@@ -114,14 +114,13 @@
     border-color: var(--gold);
     background: rgba(201,168,76,0.1);
     color: var(--gold);
-    font-weight: 500;
+    font-weight: 700;
   }
 
   .password-hint {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-dim);
-    margin-top: 5px;
-    padding-right: 4px;
+    margin-top: 6px;
   }
 
   .submit-btn {
@@ -136,7 +135,7 @@
     font-weight: 700;
     cursor: pointer;
     transition: all 0.2s;
-    margin-top: 4px;
+    margin-top: 6px;
   }
   .submit-btn:hover { background: #e0bb60; transform: translateY(-1px); }
   .submit-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
@@ -190,7 +189,6 @@
   <div class="page">
     <div class="card">
       <div class="card-top">
-        <span class="card-icon">✨</span>
         <h1>ثبت‌نام در خیام</h1>
         <p>حساب رایگان بسازید و گفتگوهای خود را ذخیره کنید</p>
       </div>
@@ -200,34 +198,33 @@
 
       <div class="form-group">
         <label class="form-label">نام کاربری</label>
-        <input class="form-input" type="text" id="username" placeholder="مثال: ahmad123"/>
+        <input class="form-input" type="text" id="username" placeholder="ahmad123" autocomplete="username"/>
       </div>
 
-      <!-- method toggle -->
       <div class="form-group">
         <label class="form-label">روش ثبت‌نام</label>
         <div class="method-toggle">
-          <button class="method-btn active" onclick="setMethod('email', this)">📧 ایمیل</button>
-          <button class="method-btn" onclick="setMethod('phone', this)">📱 شماره تلفن</button>
+          <button class="method-btn active" onclick="setMethod('email', this)" type="button">ایمیل</button>
+          <button class="method-btn" onclick="setMethod('phone', this)" type="button">شماره تلفن</button>
         </div>
 
         <div id="email-field">
-          <input class="form-input" type="email" id="email" placeholder="example@gmail.com" style="direction:ltr"/>
+          <input class="form-input" type="email" id="email" placeholder="name@example.com" style="direction:ltr" autocomplete="email"/>
         </div>
         <div id="phone-field" style="display:none">
-          <input class="form-input" type="tel" id="phone" placeholder="+93 700 000 000" style="direction:ltr"/>
+          <input class="form-input" type="tel" id="phone" placeholder="+93 700 000 000" style="direction:ltr" autocomplete="tel"/>
         </div>
       </div>
 
       <div class="form-group">
         <label class="form-label">رمز عبور</label>
-        <input class="form-input" type="password" id="password" placeholder="حداقل ۶ حرف"/>
-        <div class="password-hint">رمز عبور باید حداقل ۶ حرف داشته باشد</div>
+        <input class="form-input" type="password" id="password" placeholder="رمز عبور تازه بسازید" autocomplete="new-password"/>
+        <div class="password-hint">حداقل ۶ حرف</div>
       </div>
 
       <div class="form-group">
         <label class="form-label">تکرار رمز عبور</label>
-        <input class="form-input" type="password" id="password2" placeholder="رمز عبور را دوباره وارد کنید"/>
+        <input class="form-input" type="password" id="password2" placeholder="رمز عبور را دوباره بنویسید" autocomplete="new-password"/>
       </div>
 
       <button class="submit-btn" id="submit-btn" onclick="register()">
@@ -243,19 +240,15 @@
 <nav class="bottom-nav">
   <div class="bottom-nav-inner">
     <a href="/" class="bottom-tab">
-      <span class="tab-icon">🏠</span>
       <span class="tab-label">خانه</span>
     </a>
     <a href="/chat" class="bottom-tab">
-      <span class="tab-icon">💬</span>
       <span class="tab-label">چت</span>
     </a>
     <a href="/tutor" class="bottom-tab">
-      <span class="tab-icon">📚</span>
       <span class="tab-label">بیاموز</span>
     </a>
     <a href="/profile" class="bottom-tab">
-      <span class="tab-icon">👤</span>
       <span class="tab-label">پروفایل</span>
     </a>
   </div>
