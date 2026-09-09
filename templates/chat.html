@@ -36,7 +36,7 @@
     .sidebar-toggle:hover { background: var(--surface2); color: var(--text); }
 
     .nav-links { display: flex; gap: 4px; }
-
+    #upload-menu div:hover { background:var(--surface2); }
     .nav-btn {
       padding: 5px 12px; border-radius: 7px;
       border: 1px solid var(--border); background: transparent;
@@ -220,6 +220,7 @@
 
     /* ── INPUT ── */
     .input-area {
+      position: relative; 
       padding: 14px 20px 18px;
       background: var(--surface); border-top: 1px solid var(--border);
       flex-shrink: 0;
@@ -371,12 +372,43 @@
         <button class="file-preview-remove" onclick="clearFile()">✕</button>
       </div>
       <div class="input-box">
-        <button class="upload-btn" title="آپلود تصویر یا فایل">
-          📎
-          <input type="file" id="file-input"
-                 accept="image/*,.pdf,.doc,.docx,.txt"
-                 onchange="handleFileSelect(this)"/>
-        </button>
+        <button class="upload-btn" id="upload-trigger" title="آپلود" onclick="showUploadMenu()">
+  📎
+</button>
+
+<!-- upload menu -->
+<div id="upload-menu" style="
+  display:none; position:absolute; bottom:70px; right:20px;
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; padding:8px; z-index:50;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4); min-width:180px;">
+  <div onclick="triggerFileInput('image-input')" style="
+    display:flex; align-items:center; gap:10px;
+    padding:10px 12px; border-radius:8px; cursor:pointer;
+    font-size:13px; color:var(--text); transition:background 0.15s;">
+    🖼️ <span>انتخاب تصویر</span>
+  </div>
+  <div onclick="triggerFileInput('doc-input')" style="
+    display:flex; align-items:center; gap:10px;
+    padding:10px 12px; border-radius:8px; cursor:pointer;
+    font-size:13px; color:var(--text); transition:background 0.15s;">
+    📄 <span>انتخاب سند (PDF، Word)</span>
+  </div>
+  <div onclick="triggerCamera()" style="
+    display:flex; align-items:center; gap:10px;
+    padding:10px 12px; border-radius:8px; cursor:pointer;
+    font-size:13px; color:var(--text); transition:background 0.15s;">
+    📷 <span>عکس با دوربین</span>
+  </div>
+</div>
+
+<!-- hidden inputs -->
+<input type="file" id="image-input" accept="image/*"
+  style="display:none" onchange="handleFileSelect(this, 'image')"/>
+<input type="file" id="doc-input" accept=".pdf,.doc,.docx,.txt"
+  style="display:none" onchange="handleFileSelect(this, 'document')"/>
+<input type="file" id="camera-input" accept="image/*" capture="environment"
+  style="display:none" onchange="handleFileSelect(this, 'image')"/>
         <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
         <button id="send-btn" onclick="sendMessage()">↑</button>
       </div>
@@ -653,11 +685,13 @@
   }
 
   // ── FILE HANDLING ──
-  function handleFileSelect(input) {
+  function handleFileSelect(input, type) {
     const file = input.files[0];
     if (!file) return;
 
-    selectedFile = file;
+    selectedFile     = file;
+    selectedFileType = type;
+
     const preview = document.getElementById('file-preview');
     const nameEl  = document.getElementById('file-preview-name');
     const imgEl   = document.getElementById('img-preview');
@@ -665,8 +699,7 @@
     nameEl.textContent = file.name;
     preview.classList.add('visible');
 
-    if (file.type.startsWith('image/')) {
-      selectedFileType = 'image';
+    if (type === 'image') {
       const reader = new FileReader();
       reader.onload = (e) => {
         imgEl.src = e.target.result;
@@ -674,7 +707,6 @@
       };
       reader.readAsDataURL(file);
     } else {
-      selectedFileType = 'document';
       imgEl.style.display = 'none';
     }
   }
@@ -689,6 +721,30 @@
   }
 
   // ── SEND MESSAGE ──
+  function showUploadMenu() {
+    const menu = document.getElementById('upload-menu');
+    const isVisible = menu.style.display === 'block';
+    menu.style.display = isVisible ? 'none' : 'block';
+  }
+
+  function triggerFileInput(id) {
+    document.getElementById('upload-menu').style.display = 'none';
+    document.getElementById(id).click();
+  }
+
+  function triggerCamera() {
+    document.getElementById('upload-menu').style.display = 'none';
+    document.getElementById('camera-input').click();
+  }
+
+  // close menu when clicking outside
+  document.addEventListener('click', (e) => {
+    const menu    = document.getElementById('upload-menu');
+    const trigger = document.getElementById('upload-trigger');
+    if (menu && !menu.contains(e.target) && e.target !== trigger) {
+      menu.style.display = 'none';
+    }
+  });
   async function sendMessage() {
     const input = document.getElementById('user-input');
     const text  = input.value.trim();

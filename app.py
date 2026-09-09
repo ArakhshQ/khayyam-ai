@@ -1407,7 +1407,6 @@ def get_curriculum():
     return jsonify(result)
 
 @app.route("/api/tutor/progress/<subject>")
-@login_required
 def get_tutor_progress(subject):
     """Returns student's progress for a specific subject."""
     progress = get_or_create_progress(current_user.id, subject)
@@ -1422,7 +1421,6 @@ def get_tutor_progress(subject):
     })
 
 @app.route("/api/tutor/start-topic", methods=["POST"])
-@login_required
 def start_topic():
     """Student starts or resumes a topic."""
     data       = request.get_json()
@@ -1460,7 +1458,6 @@ def start_topic():
         "history": json.loads(progress.chat_history or '[]')
     })
 @app.route("/api/tutor/chat", methods=["POST"])
-@login_required
 def tutor_chat_new():
     data      = request.get_json()
     subject   = data.get("subject")
@@ -1520,7 +1517,6 @@ def tutor_chat_new():
 
     return jsonify({"reply": reply})
 @app.route("/api/tutor/complete-topic", methods=["POST"])
-@login_required
 def complete_topic():
     """Student marks a topic as complete."""
     data      = request.get_json()
@@ -1561,7 +1557,7 @@ def complete_topic():
     })
 
 @app.route("/api/tutor/generate-quiz", methods=["POST"])
-@login_required
+
 def generate_quiz():
     """Generates a fresh quiz for a level using GPT."""
     data    = request.get_json()
@@ -1618,7 +1614,6 @@ correct باید index گزینه درست باشد (0، 1، 2 یا 3)."""
         return jsonify({"error": "خطا در ساخت کوییز"}), 500
 
 @app.route("/api/tutor/submit-quiz", methods=["POST"])
-@login_required
 def submit_quiz():
     """Saves quiz result and awards XP."""
     data      = request.get_json()
@@ -1668,7 +1663,7 @@ def submit_quiz():
     })
 
 @app.route("/api/tutor/placement-test", methods=["POST"])
-@login_required
+
 def placement_test():
     """Generates a placement test for a subject."""
     data    = request.get_json()
@@ -1715,7 +1710,7 @@ def placement_test():
         return jsonify({"error": "خطا در ساخت تست"}), 500
 
 @app.route("/api/tutor/placement-result", methods=["POST"])
-@login_required
+
 def placement_result():
     """Calculates recommended level from placement test answers."""
     data    = request.get_json()
