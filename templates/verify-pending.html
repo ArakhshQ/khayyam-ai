@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>تایید ایمیل — خیام</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  {{ csrf_meta_tag() }}
+  <script src="/static/main.js"></script>
+  <style>
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: 'Vazirmatn', sans-serif;
+      min-height: 100vh; display: flex; flex-direction: column;
+    }
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; height: 56px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+    .logo-mark {
+      width: 30px; height: 30px; border: 1.5px solid var(--gold);
+      border-radius: 7px; display: flex; align-items: center;
+      justify-content: center; font-size: 14px; font-weight: 700; color: var(--gold);
+    }
+    .logo-text { font-size: 16px; font-weight: 700; color: var(--gold); }
+    .nav-link {
+      color: var(--text-dim); text-decoration: none; font-size: 13px;
+      padding: 5px 12px; border-radius: 7px; border: 1px solid var(--border);
+      transition: all 0.2s; background: none; cursor: pointer; font-family: 'Vazirmatn', sans-serif;
+    }
+    .nav-link:hover { color: var(--text); background: var(--surface2); }
+    .page {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      padding: 40px 16px;
+    }
+    .card {
+      width: 100%; max-width: 440px; text-align: center;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 40px 32px;
+      animation: fadeUp 0.5s ease both;
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    h1 { font-size: 20px; font-weight: 700; color: var(--gold); margin-bottom: 14px; }
+    p { font-size: 14px; color: var(--text-dim); line-height: 1.9; margin-bottom: 8px; }
+    .email-line { color: var(--text); font-weight: 600; direction: ltr; display: inline-block; }
+    .actions { margin-top: 28px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+    .btn {
+      display: inline-block; padding: 11px 28px; border-radius: 9px;
+      background: var(--gold); color: #0f0e0c; text-decoration: none;
+      font-size: 14px; font-weight: 700; border: none; cursor: pointer;
+      font-family: 'Vazirmatn', sans-serif;
+    }
+    .btn:hover { background: #e0bb60; }
+    .btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+    .link-btn {
+      background: none; border: none; color: var(--text-dim);
+      font-size: 13px; text-decoration: underline; cursor: pointer;
+      font-family: 'Vazirmatn', sans-serif;
+    }
+    .link-btn:hover { color: var(--text); }
+    .status-msg { font-size: 13px; margin-top: 14px; min-height: 18px; }
+    .status-msg.success { color: var(--green-lt); }
+    .status-msg.error   { color: var(--red-lt); }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/" class="logo">
+      <div class="logo-mark">خ</div>
+      <span class="logo-text">خیام</span>
+    </a>
+    <button class="nav-link" onclick="location.href='/logout'">خروج</button>
+  </nav>
+
+  <div class="page">
+    <div class="card">
+      <h1>ایمیل خود را تایید کنید</h1>
+      <p>
+        یک لینک تایید به آدرس زیر ارسال شد:<br/>
+        <span class="email-line">{{ email }}</span>
+      </p>
+      <p>برای دسترسی به خیام، لطفاً روی لینک داخل ایمیل کلیک کنید.</p>
+
+      <div class="actions">
+        <button class="btn" id="resend-btn" onclick="resend()">ارسال دوباره ایمیل تایید</button>
+        <button class="link-btn" onclick="location.reload()">قبلاً تایید کردم — بارگذاری دوباره</button>
+      </div>
+      <div id="status-msg" class="status-msg"></div>
+    </div>
+  </div>
+
+  <script>
+    async function resend() {
+      const btn = document.getElementById('resend-btn');
+      const msg = document.getElementById('status-msg');
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = 'در حال ارسال...';
+      try {
+        const res  = await fetch('/api/resend-verification', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          msg.textContent = 'ایمیل تایید دوباره ارسال شد.';
+          msg.className = 'status-msg success';
+        } else {
+          msg.textContent = data.error || 'ارسال ناموفق بود.';
+          msg.className = 'status-msg error';
+        }
+      } catch (err) {
+        msg.textContent = 'خطای اتصال. دوباره امتحان کنید.';
+        msg.className = 'status-msg error';
+      }
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+
+    // if the user verifies in another tab, pick it up here automatically
+    // instead of making them come back and manually reload
+    setInterval(async () => {
+      try {
+        const res  = await fetch('/api/me');
+        const data = await res.json();
+        if (data.logged_in && data.is_verified) {
+          window.location.href = '/chat';
+        }
+      } catch (err) { /* ignore - next poll will retry */ }
+    }, 4000);
+  </script>
+</body>
+</html>
