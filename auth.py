@@ -30,7 +30,7 @@ def register_user(username, password, email=None, phone=None):
 
     # must have either email or phone
     if not email and not phone:
-        return None, "ایمیل یا شماره تلفن الزامی است"
+        return None, "ایمیل الزامی است"
 
     user = User(
         username=username,

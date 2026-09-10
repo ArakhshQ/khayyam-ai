@@ -76,6 +76,34 @@ def unauthorized():
         return jsonify({"error": "login_required"}), 401
     return redirect(url_for('login_page'))
 
+# Paths a logged-in, not-yet-verified user may still reach. Everything else
+# (chat, tutor, profile, pricing, the homepage, every other /api/ route)
+# is blocked until they verify - this re-checks on every single request,
+# not just once at registration, so closing the tab and coming back later
+# still enforces it. Guests (current_user not authenticated at all) are
+# completely unaffected - this only ever applies to a logged-in session.
+VERIFY_EXEMPT_PATHS = {
+    '/verify-pending', '/verify-email', '/logout',
+    '/api/resend-verification', '/api/me',
+}
+
+@app.before_request
+def enforce_email_verification():
+    if not current_user.is_authenticated:
+        return  # guests are never gated - they have their own quota system
+    if current_user.is_admin:
+        return  # never let this policy lock out the site's own admin account
+    if current_user.is_verified:
+        return
+    if request.path.startswith('/static/'):
+        return
+    if request.path in VERIFY_EXEMPT_PATHS:
+        return
+
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "verify_required", "message": "لطفاً ابتدا ایمیل خود را تایید کنید"}), 403
+    return redirect(url_for('verify_pending_page'))
+
 def get_client_ip():
     """
     Render (like most PaaS hosts) puts the app behind a reverse proxy, so
@@ -1098,23 +1126,23 @@ def api_register():
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     email    = (data.get("email") or "").strip() or None
-    phone    = (data.get("phone") or "").strip() or None
 
     if len(username) < 3:
         return jsonify({"success": False, "error": "نام کاربری باید حداقل ۳ حرف باشد"})
     if len(password) < 6:
         return jsonify({"success": False, "error": "رمز عبور باید حداقل ۶ حرف باشد"})
+    if not email:
+        return jsonify({"success": False, "error": "ایمیل الزامی است"})
 
-    user, error = register_user(username, password, email, phone)
+    user, error = register_user(username, password, email, phone=None)
     if error:
         return jsonify({"success": False, "error": error})
 
-    if user.email:
-        try:
-            send_verification_email(user)
-        except Exception as e:
-            print(f"verification email failed for user {user.id}: {e}")
-            # registration still succeeds - verification is not required to use the app
+    try:
+        send_verification_email(user)
+    except Exception as e:
+        print(f"verification email failed for user {user.id}: {e}")
+        # registration still succeeds - they can resend from the verify-pending page
 
     login_user(user)
     return jsonify({"success": True})
@@ -1134,6 +1162,13 @@ def api_login():
     return jsonify({"success": True})
 
 # ── EMAIL VERIFICATION ──
+@app.route("/verify-pending")
+@login_required
+def verify_pending_page():
+    if current_user.is_verified:
+        return redirect(url_for('chat_page'))
+    return render_template("verify-pending.html", email=current_user.email)
+
 @app.route("/verify-email")
 def verify_email_page():
     token   = request.args.get("token", "")
