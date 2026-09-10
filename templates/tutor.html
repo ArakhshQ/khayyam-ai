@@ -3,11 +3,37 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script>
+    // Auto-attach the CSRF token to every same-page state-changing fetch()
+    // call, so individual functions below don't each need to remember to.
+    (function() {
+      var token = document.querySelector('meta[name="csrf-token"]').content;
+      var originalFetch = window.fetch;
+      window.fetch = function(url, options) {
+        options = options || {};
+        var method = (options.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') {
+          if (options.headers instanceof Headers) {
+            options.headers.set('X-CSRFToken', token);
+          } else {
+            options.headers = Object.assign({}, options.headers, {'X-CSRFToken': token});
+          }
+        }
+        return originalFetch(url, options);
+      };
+    })();
+  </script>
   <title>استاد خیام — کلاس درس</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  {{ csrf_meta_tag() }}
+  <script src="/static/main.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.15/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.12.0/highlight.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.12.0/styles/atom-one-dark.min.css">
   <style>
     body { height:100vh; display:flex; flex-direction:column; overflow:hidden; }
 
@@ -483,7 +509,7 @@
       if (meData.logged_in) {
         currentUser = meData;
         document.getElementById('auth-nav').innerHTML =
-          `<a href="/profile" class="nav-btn">${meData.username}</a>`;
+          `<a href="/profile" class="nav-btn">${escapeHtml(meData.username)}</a>`;
         document.getElementById('xp-bar-wrap').style.display = 'flex';
         await loadAllProgress();
       }
@@ -837,15 +863,15 @@
 
     wrapper.innerHTML = `
       <div class="inline-quiz-title">🎯 سوال سریع</div>
-      <div class="inline-quiz-q">${q.q}</div>
+      <div class="inline-quiz-q">${escapeHtml(q.q)}</div>
       <div class="inline-quiz-opts">
         ${q.options.map((opt,i) => `
           <button class="inline-opt" onclick="answerInline(this,${i},${q.correct},'${wrapper.id}','${escapeStr(q.explanation)}')">
-            ${opt}
+            ${escapeHtml(opt)}
           </button>
         `).join('')}
       </div>
-      <div class="inline-explanation" id="exp-${wrapper.id}">💡 ${q.explanation}</div>
+      <div class="inline-explanation" id="exp-${wrapper.id}">💡 ${escapeHtml(q.explanation)}</div>
     `;
 
     messagesEl.appendChild(wrapper);
@@ -975,11 +1001,11 @@
         </div>
         <div class="quiz-track"><div class="quiz-fill" style="width:${pct}%"></div></div>
       </div>
-      <div class="quiz-q">${q.q}</div>
+      <div class="quiz-q">${escapeHtml(q.q)}</div>
       <div class="quiz-opts">
-        ${q.options.map((opt,i)=>`<button class="quiz-opt" onclick="answerQ(${i})">${opt}</button>`).join('')}
+        ${q.options.map((opt,i)=>`<button class="quiz-opt" onclick="answerQ(${i})">${escapeHtml(opt)}</button>`).join('')}
       </div>
-      <div class="quiz-explanation" id="qexp">💡 ${q.explanation}</div>
+      <div class="quiz-explanation" id="qexp">💡 ${escapeHtml(q.explanation)}</div>
       <button class="quiz-next" id="qnext" onclick="nextQ()">
         ${quizCurrent+1 < quizQuestions.length ? 'سوال بعدی →' : 'نتیجه را ببین →'}
       </button>
@@ -1075,11 +1101,11 @@
         <div class="quiz-progress-row"><span>سوال ${quizCurrent+1} از ${quizQuestions.length}</span><span>سطح ${q.level}</span></div>
         <div class="quiz-track"><div class="quiz-fill" style="width:${pct}%"></div></div>
       </div>
-      <div class="quiz-q">${q.q}</div>
+      <div class="quiz-q">${escapeHtml(q.q)}</div>
       <div class="quiz-opts">
-        ${q.options.map((opt,i)=>`<button class="quiz-opt" onclick="answerPlacement(${i})">${opt}</button>`).join('')}
+        ${q.options.map((opt,i)=>`<button class="quiz-opt" onclick="answerPlacement(${i})">${escapeHtml(opt)}</button>`).join('')}
       </div>
-      <div class="quiz-explanation" id="qexp">💡 ${q.explanation}</div>
+      <div class="quiz-explanation" id="qexp">💡 ${escapeHtml(q.explanation)}</div>
       <button class="quiz-next" id="qnext" onclick="nextPlacement()">
         ${quizCurrent+1 < quizQuestions.length ? 'سوال بعدی →' : 'نتیجه را ببین →'}
       </button>`;
@@ -1160,7 +1186,12 @@
     av.textContent = role==='ai' ? 'استاد' : '👤';
     const bub = document.createElement('div');
     bub.className = 'bubble';
-    bub.innerHTML = role==='ai' ? marked.parse(text) : text;
+    if (role === 'ai') {
+      bub.innerHTML = DOMPurify.sanitize(marked.parse(text));
+      bub.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+    } else {
+      bub.textContent = text;
+    }
     div.appendChild(av);
     div.appendChild(bub);
     el.appendChild(div);

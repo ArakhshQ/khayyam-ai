@@ -3,10 +3,33 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script>
+    // Auto-attach the CSRF token to every same-page state-changing fetch()
+    // call, so individual functions below don't each need to remember to.
+    (function() {
+      var token = document.querySelector('meta[name="csrf-token"]').content;
+      var originalFetch = window.fetch;
+      window.fetch = function(url, options) {
+        options = options || {};
+        var method = (options.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') {
+          if (options.headers instanceof Headers) {
+            options.headers.set('X-CSRFToken', token);
+          } else {
+            options.headers = Object.assign({}, options.headers, {'X-CSRFToken': token});
+          }
+        }
+        return originalFetch(url, options);
+      };
+    })();
+  </script>
   <title>پنل ادمین — خیام</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  {{ csrf_meta_tag() }}
+  <script src="/static/main.js"></script>
   <style>
     body { min-height: 100vh; }
 
@@ -402,6 +425,18 @@
 <div class="toast" id="toast"></div>
 
 <script>
+  // Escapes untrusted text before it's interpolated into innerHTML template
+  // literals below. Usernames, emails, and every admin-editable dialect/
+  // culture/example field are user-controlled data, not markup - without
+  // this, anyone could register with a username like
+  // "<img src=x onerror=...>" and run script in an admin's browser the
+  // next time they open this panel.
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str ?? '';
+    return div.innerHTML;
+  }
+
   let knowledge = {};
   let examples  = {};
   let users     = [];
@@ -485,12 +520,12 @@
 
       tr.innerHTML = `
         <td>
-          <div style="font-weight:500;">${u.username}</div>
+          <div style="font-weight:500;">${escapeHtml(u.username)}</div>
           ${u.is_admin ? '<span class="admin-badge">👑 ادمین</span>' : ''}
         </td>
         <td><span class="plan-badge ${planClass}">${planLabel}</span></td>
         <td style="color:var(--text-dim);font-size:12px;">
-          ${u.email || ''} ${u.phone ? '· ' + u.phone : ''}
+          ${escapeHtml(u.email || '')} ${u.phone ? '· ' + escapeHtml(u.phone) : ''}
         </td>
         <td style="color:var(--text-dim);font-size:12px;">${joinDate}</td>
         <td>
@@ -535,10 +570,10 @@
       div.innerHTML = `
         <div class="item-body">
           <div class="item-label">درست ← اشتباه</div>
-          <span class="item-correct">${item.correct}</span>
+          <span class="item-correct">${escapeHtml(item.correct)}</span>
           <span style="color:var(--text-dim)"> ← </span>
-          <span class="item-wrong">${item.wrong}</span>
-          <div class="item-note">${item.note}</div>
+          <span class="item-wrong">${escapeHtml(item.wrong)}</span>
+          <div class="item-note">${escapeHtml(item.note)}</div>
         </div>
         <button class="del-btn" onclick="deleteDialect(${i})">✕</button>`;
       list.appendChild(div);
@@ -586,8 +621,8 @@
       div.className = 'item-card';
       div.innerHTML = `
         <div class="item-body">
-          <div class="item-topic">${item.topic}</div>
-          <div class="item-content">${item.content}</div>
+          <div class="item-topic">${escapeHtml(item.topic)}</div>
+          <div class="item-content">${escapeHtml(item.content)}</div>
         </div>
         <button class="del-btn" onclick="deleteCulture(${i})">✕</button>`;
       list.appendChild(div);
@@ -632,9 +667,9 @@
       div.innerHTML = `
         <div class="item-body">
           <div class="item-label">کاربر</div>
-          <div class="item-content" style="margin-bottom:8px">${item.user}</div>
+          <div class="item-content" style="margin-bottom:8px">${escapeHtml(item.user)}</div>
           <div class="item-label">خیام</div>
-          <div class="item-correct">${item.assistant}</div>
+          <div class="item-correct">${escapeHtml(item.assistant)}</div>
         </div>
         <button class="del-btn" onclick="deleteExample(${i})">✕</button>`;
       list.appendChild(div);

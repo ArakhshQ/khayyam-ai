@@ -9,6 +9,8 @@ from auth import register_user, login_user_by_username
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import update as sa_update
 from flask_limiter import Limiter
+from flask_wtf.csrf import CSRFProtect, CSRFError
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import json
 import re
@@ -22,6 +24,12 @@ from email.mime.multipart import MIMEMultipart
 load_dotenv()
 
 app = Flask(__name__)
+# Render terminates SSL at its edge and forwards to the app over plain
+# HTTP, so without this, Flask thinks every request arrived over HTTP -
+# breaking request.is_secure (used below by CSRF's referrer check) and any
+# future code that checks the request scheme. x_for=0 because
+# get_client_ip() below already parses X-Forwarded-For itself.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=0, x_proto=1)
 # ADMIN_PASSWORD is an admin login credential, not a session-signing key -
 # these are different secrets and shouldn't share a value. Set a real
 # SECRET_KEY in your environment; the random fallback still works but will
@@ -31,6 +39,29 @@ database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
+
+# ── SESSION COOKIE SECURITY ──
+# RENDER is set to "true" automatically on Render, and unset locally - used
+# here so Secure cookies (HTTPS-only) are on in production but don't
+# silently break local dev over plain http.
+IS_PRODUCTION = bool(os.getenv("RENDER"))
+app.config['SESSION_COOKIE_SECURE']   = IS_PRODUCTION
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# ── CSRF PROTECTION ──
+# No time limit: these are long-lived chat/tutor sessions, and a token that
+# silently expires mid-session (while the tab stays open) would just look
+# like a random broken request to the user. The token is still tied to the
+# session and invalidated on logout, so this isn't a meaningful weakening.
+app.config['WTF_CSRF_TIME_LIMIT'] = None
+csrf = CSRFProtect(app)
+
+@app.errorhandler(CSRFError)
+def csrf_error(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "csrf_invalid", "reply": "نشست شما منقضی شده. صفحه را دوباره بارگذاری کنید."}), 400
+    return jsonify({"error": "csrf_invalid"}), 400
 
 db.init_app(app)
 
@@ -772,6 +803,7 @@ def build_system_prompt(user_memories=None):
 ۵. کلمات مهم را **بولد** کن
 ۶. جواب‌های کوتاه را بدون فرمت بنویس
 ۷. هرگز یک بلوک طولانی بدون تقسیم‌بندی ننویس
+۸. اگر کد می‌نویسی (هر زبان برنامه‌نویسی)، همیشه آن را داخل بلوک کد با سه بک‌تیک بگذار و نام زبان را جلوی بک‌تیک اول بنویس، مثلاً ```python — کد را هرگز وسط متن معمولی و بدون بلوک ننویس، حتی یک خط کوتاه
 
 ====================
 حالت ویژه: شعر
@@ -1807,6 +1839,7 @@ def build_tutor_system_prompt(subject, topic_title, topic_desc, chat_history_len
 - اگر سوال داری آن را در آخر و جدا بنویس
 - از Markdown برای بولد و لیست استفاده کن
 - در موضوعات علمی و کمپیوتر از نمادها و کد استفاده کن
+- اگر کد برنامه‌نویسی می‌نویسی، همیشه آن را داخل بلوک کد با سه بک‌تیک و نام زبان بگذار (مثلاً ```python) — کد را هرگز وسط متن معمولی ننویس
 
 ====================
 وضعیت درس

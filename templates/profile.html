@@ -3,10 +3,33 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script>
+    // Auto-attach the CSRF token to every same-page state-changing fetch()
+    // call, so individual functions below don't each need to remember to.
+    (function() {
+      var token = document.querySelector('meta[name="csrf-token"]').content;
+      var originalFetch = window.fetch;
+      window.fetch = function(url, options) {
+        options = options || {};
+        var method = (options.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') {
+          if (options.headers instanceof Headers) {
+            options.headers.set('X-CSRFToken', token);
+          } else {
+            options.headers = Object.assign({}, options.headers, {'X-CSRFToken': token});
+          }
+        }
+        return originalFetch(url, options);
+      };
+    })();
+  </script>
   <title>پروفایل — خیام</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  {{ csrf_meta_tag() }}
+  <script src="/static/main.js"></script>
   <style>
   body {
     min-height: 100vh;
@@ -340,7 +363,7 @@
           div.innerHTML = `
             <div class="conv-icon">💬</div>
             <div class="conv-body">
-              <div class="conv-title">${conv.title}</div>
+              <div class="conv-title">${escapeHtml(conv.title)}</div>
               <div class="conv-date">${formatDate(conv.updated_at)}</div>
             </div>
             <button class="conv-del" onclick="deleteConv(event, ${conv.id})">✕</button>`;
