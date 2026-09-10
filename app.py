@@ -305,32 +305,86 @@ def consume_account_token(raw_token, purpose):
     db.session.commit()
     return row.user_id
 
+def build_email_html(heading, body_lines, button_text, button_link, footer_text):
+    """
+    Shared branded email shell for every transactional email (verification,
+    password reset, and any future ones). Uses a table-based layout rather
+    than flexbox/grid - email clients (particularly Outlook desktop) have
+    very inconsistent CSS support, and tables are the one layout method
+    that renders reliably everywhere. Colors match the site's own palette
+    exactly (static/style.css --gold/--bg/--surface/--border).
+    """
+    body_html = "".join(f'<p style="margin:0 0 10px;font-size:14px;line-height:2;color:#a89f8c;">{line}</p>' for line in body_lines)
+    return f"""
+<div dir="rtl" style="background:#0f0e0c;padding:40px 16px;margin:0;font-family:Tahoma,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" align="center" style="max-width:460px;margin:0 auto;background:#1a1814;border:1px solid #2e2a22;border-radius:14px;overflow:hidden;">
+    <tr>
+      <td style="padding:32px 32px 4px;text-align:center;">
+        <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 22px;">
+          <tr>
+            <td style="width:40px;height:40px;border:1.5px solid #c9a84c;border-radius:10px;text-align:center;vertical-align:middle;color:#c9a84c;font-size:19px;font-weight:bold;font-family:Tahoma,Arial,sans-serif;">خ</td>
+            <td style="padding-right:10px;color:#c9a84c;font-size:19px;font-weight:bold;font-family:Tahoma,Arial,sans-serif;">خیام</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:4px 36px 36px;text-align:center;">
+        <h1 style="margin:0 0 16px;font-size:19px;color:#f2efe8;font-weight:700;">{heading}</h1>
+        {body_html}
+        <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:24px auto 0;">
+          <tr>
+            <td style="background:#c9a84c;border-radius:9px;">
+              <a href="{button_link}" style="display:inline-block;padding:14px 40px;color:#0f0e0c;font-size:15px;font-weight:700;text-decoration:none;font-family:Tahoma,Arial,sans-serif;">{button_text}</a>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:26px 0 0;font-size:12px;color:#5c574a;line-height:1.9;">
+          اگر دکمه کار نکرد، این لینک را در مرورگر خود باز کنید:<br/>
+          <a href="{button_link}" style="color:#8a6e2f;word-break:break-all;">{button_link}</a>
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:18px 32px;background:#141210;border-top:1px solid #2e2a22;text-align:center;">
+        <p style="margin:0;font-size:12px;color:#6b6558;line-height:1.8;">{footer_text}</p>
+      </td>
+    </tr>
+  </table>
+</div>"""
+
 def send_verification_email(user):
     if not user.email:
         return
     token = create_account_token(user.id, 'verify_email', ttl_minutes=60 * 24)
     link  = f"{SITE_URL}/verify-email?token={token}"
-    html  = f"""
-    <div dir="rtl" style="font-family:Tahoma,sans-serif;background:#0f0e0c;color:#e8e4da;padding:32px;">
-      <h2 style="color:#c9a84c;">تایید ایمیل خیام</h2>
-      <p>سلام {user.username}،</p>
-      <p>برای تایید ایمیل خود روی لینک زیر کلیک کنید. این لینک تا ۲۴ ساعت معتبر است.</p>
-      <p><a href="{link}" style="color:#c9a84c;">تایید ایمیل</a></p>
-      <p style="color:#9a9488;font-size:12px;">اگر این حساب را نساخته‌اید، این ایمیل را نادیده بگیرید.</p>
-    </div>"""
+    html  = build_email_html(
+        heading="تایید ایمیل",
+        body_lines=[
+            f"سلام {user.username}،",
+            "برای تایید ایمیل خود روی دکمه زیر کلیک کنید.",
+            "این لینک تا ۲۴ ساعت معتبر است."
+        ],
+        button_text="تایید ایمیل",
+        button_link=link,
+        footer_text="اگر این حساب را نساخته‌اید، این ایمیل را نادیده بگیرید."
+    )
     send_email(user.email, "تایید ایمیل — خیام", html)
 
 def send_password_reset_email(user):
     token = create_account_token(user.id, 'reset_password', ttl_minutes=30)
     link  = f"{SITE_URL}/reset-password?token={token}"
-    html  = f"""
-    <div dir="rtl" style="font-family:Tahoma,sans-serif;background:#0f0e0c;color:#e8e4da;padding:32px;">
-      <h2 style="color:#c9a84c;">بازیابی رمز عبور — خیام</h2>
-      <p>سلام {user.username}،</p>
-      <p>برای تعیین رمز عبور جدید روی لینک زیر کلیک کنید. این لینک تا ۳۰ دقیقه معتبر است.</p>
-      <p><a href="{link}" style="color:#c9a84c;">تعیین رمز عبور جدید</a></p>
-      <p style="color:#9a9488;font-size:12px;">اگر این درخواست را شما نفرستاده‌اید، این ایمیل را نادیده بگیرید — رمز عبور شما تغییر نخواهد کرد.</p>
-    </div>"""
+    html  = build_email_html(
+        heading="بازیابی رمز عبور",
+        body_lines=[
+            f"سلام {user.username}،",
+            "برای تعیین رمز عبور جدید روی دکمه زیر کلیک کنید.",
+            "این لینک تا ۳۰ دقیقه معتبر است."
+        ],
+        button_text="تعیین رمز عبور جدید",
+        button_link=link,
+        footer_text="اگر این درخواست را شما نفرستاده‌اید، این ایمیل را نادیده بگیرید — رمز عبور شما تغییر نخواهد کرد."
+    )
     send_email(user.email, "بازیابی رمز عبور — خیام", html)
 
 PLAN_CONFIG = {
