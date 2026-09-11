@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge, GuestUsage, GuestGlobalUsage, AccountToken
+from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge, GuestUsage, GuestGlobalUsage, AccountToken, CallRequest
 from functools import wraps
 from openai import OpenAI
 from groq import Groq
@@ -1493,6 +1493,58 @@ def delete_memory(memory_id):
     return jsonify({"success": True})
 
 # ── ADMIN APIs ──
+SUPPORT_PHONE = "+93782408793"
+
+@app.route("/api/call-request", methods=["POST"])
+@limiter.limit("5 per hour")
+def submit_call_request():
+    data           = request.get_json()
+    name           = (data.get("name") or "").strip()
+    phone          = (data.get("phone") or "").strip()
+    requested_plan = (data.get("plan") or "").strip()
+
+    if not name:
+        return jsonify({"success": False, "error": "نام الزامی است"})
+    if not phone:
+        return jsonify({"success": False, "error": "شماره تماس الزامی است"})
+    if requested_plan not in PLAN_CONFIG or requested_plan == 'free':
+        return jsonify({"success": False, "error": "پلان نامعتبر"})
+
+    req = CallRequest(
+        user_id=current_user.id if current_user.is_authenticated else None,
+        name=name, phone=phone, requested_plan=requested_plan
+    )
+    db.session.add(req)
+    db.session.commit()
+    return jsonify({"success": True})
+
+@app.route("/api/admin/call-requests", methods=["GET"])
+@login_required
+@admin_required
+def get_call_requests():
+    reqs = CallRequest.query.order_by(CallRequest.created_at.desc()).all()
+    return jsonify([{
+        "id":             r.id,
+        "name":           r.name,
+        "phone":          r.phone,
+        "requested_plan": r.requested_plan,
+        "status":         r.status,
+        "created_at":     r.created_at.isoformat()
+    } for r in reqs])
+
+@app.route("/api/admin/call-requests/<int:request_id>/status", methods=["POST"])
+@login_required
+@admin_required
+def update_call_request_status(request_id):
+    data   = request.get_json()
+    status = data.get("status", "pending")
+    if status not in ('pending', 'contacted', 'done'):
+        return jsonify({"success": False, "error": "وضعیت نامعتبر"})
+    req = CallRequest.query.get_or_404(request_id)
+    req.status = status
+    db.session.commit()
+    return jsonify({"success": True})
+
 @app.route("/api/admin/users", methods=["GET"])
 @login_required
 @admin_required

@@ -205,6 +205,22 @@ class GuestGlobalUsage(db.Model):
     tokens_used = db.Column(db.Integer, default=0)
     updated_at  = db.Column(db.DateTime, default=datetime.utcnow)
 
+class CallRequest(db.Model):
+    """
+    A request from a user (typically inside Afghanistan, where mainstream
+    online payment processors aren't available) asking to be called about
+    upgrading their plan. Lets staff follow up proactively instead of only
+    waiting for the user to call in themselves.
+    """
+    __tablename__ = 'call_requests'
+    id              = db.Column(db.Integer, primary_key=True)
+    user_id         = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    name            = db.Column(db.String(120), nullable=False)
+    phone           = db.Column(db.String(30), nullable=False)
+    requested_plan  = db.Column(db.String(20), nullable=False)
+    status          = db.Column(db.String(20), default='pending')  # pending | contacted | done
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
+
 def json_loads_safe(val):
     try:
         return json.loads(val) if val else []

@@ -322,9 +322,30 @@
   <!-- TABS -->
   <div class="tabs">
     <button class="tab active" onclick="switchTab('users', this)">👥 کاربران</button>
+    <button class="tab" onclick="switchTab('calls', this)">درخواست تماس</button>
     <button class="tab" onclick="switchTab('dialect', this)">🗣️ کلمات دری</button>
     <button class="tab" onclick="switchTab('culture', this)">🏛️ فرهنگ</button>
     <button class="tab" onclick="switchTab('examples', this)">💬 نمونه گفتگو</button>
+  </div>
+
+  <!-- TAB: CALL REQUESTS -->
+  <div class="tab-content" id="tab-calls">
+    <div style="overflow-x:auto;">
+      <table class="user-table">
+        <thead>
+          <tr>
+            <th>نام</th>
+            <th>شماره تماس</th>
+            <th>پلان درخواستی</th>
+            <th>تاریخ</th>
+            <th>وضعیت</th>
+          </tr>
+        </thead>
+        <tbody id="calls-tbody">
+          <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-dim);">در حال بارگذاری...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- TAB: USERS -->
@@ -440,22 +461,26 @@
   let knowledge = {};
   let examples  = {};
   let users     = [];
+  let callRequests = [];
 
   const PLAN_PRICES = { free: 0, basic: 10, pro: 20, premium: 40 };
   const PLAN_LABELS = { free: 'رایگان', basic: 'پایه', pro: 'حرفه‌ای', premium: 'پریمیوم' };
 
   // ── INIT ──
   async function init() {
-    const [k, e, u] = await Promise.all([
+    const [k, e, u, c] = await Promise.all([
       fetch('/api/admin/knowledge').then(r => r.json()),
       fetch('/api/admin/examples').then(r => r.json()),
-      fetch('/api/admin/users').then(r => r.json())
+      fetch('/api/admin/users').then(r => r.json()),
+      fetch('/api/admin/call-requests').then(r => r.json())
     ]);
     knowledge = k;
     examples  = e;
     users     = u;
+    callRequests = c;
     renderAll();
     renderUsers();
+    renderCallRequests();
     updateStats();
   }
 
@@ -538,6 +563,51 @@
         </td>`;
       tbody.appendChild(tr);
     });
+  }
+
+  const CALL_STATUS_LABELS = { pending: 'در انتظار', contacted: 'تماس گرفته شد', done: 'تکمیل شد' };
+
+  function renderCallRequests() {
+    const tbody = document.getElementById('calls-tbody');
+    if (!callRequests || callRequests.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-dim);">هنوز درخواستی ثبت نشده</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    callRequests.forEach(r => {
+      const tr = document.createElement('tr');
+      const date = new Date(r.created_at).toLocaleDateString('fa-AF');
+      const planLabel = PLAN_LABELS[r.requested_plan] || r.requested_plan;
+
+      tr.innerHTML = `
+        <td>${escapeHtml(r.name)}</td>
+        <td style="direction:ltr;text-align:left;">${escapeHtml(r.phone)}</td>
+        <td>${planLabel}</td>
+        <td style="color:var(--text-dim);font-size:12px;">${date}</td>
+        <td>
+          <select class="plan-select" onchange="updateCallStatus(${r.id}, this.value)">
+            <option value="pending"   ${r.status === 'pending'   ? 'selected' : ''}>در انتظار</option>
+            <option value="contacted" ${r.status === 'contacted' ? 'selected' : ''}>تماس گرفته شد</option>
+            <option value="done"      ${r.status === 'done'      ? 'selected' : ''}>تکمیل شد</option>
+          </select>
+        </td>`;
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function updateCallStatus(requestId, status) {
+    const res  = await fetch(`/api/admin/call-requests/${requestId}/status`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const r = callRequests.find(x => x.id === requestId);
+      if (r) r.status = status;
+      showToast('وضعیت به‌روزرسانی شد');
+    }
   }
 
   async function changePlan(userId, newPlan) {
