@@ -14,7 +14,13 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin      = db.Column(db.Boolean, default=False)
     is_verified   = db.Column(db.Boolean, default=False)
-    plan          = db.Column(db.String(20), default='free')
+    # Chat and tutor are independent purchases - a user can hold a paid plan
+    # in one, both, or neither at the same time. Each has its own expiry so
+    # it can be checked and auto-downgraded to free on its own schedule.
+    chat_plan             = db.Column(db.String(20), default='free')
+    chat_plan_expires_at  = db.Column(db.DateTime, nullable=True)
+    tutor_plan            = db.Column(db.String(20), default='free')
+    tutor_plan_expires_at = db.Column(db.DateTime, nullable=True)
     total_xp      = db.Column(db.Integer, default=0)
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -139,6 +145,25 @@ class TutorProgress(db.Model):
             'last_topic_title':  self.last_topic_title,
             'last_activity':     self.last_activity.isoformat(),
         }
+
+class TutorTopicChat(db.Model):
+    """
+    Chat history for one specific topic within a subject. Kept separate
+    from TutorProgress (which stays subject-level, for XP/level/completed
+    topics) so that switching topics starts a genuinely fresh conversation
+    instead of continuing whatever the last-visited topic in that subject
+    was talking about. Each (user, subject, topic) combination gets its
+    own saved thread.
+    """
+    __tablename__ = 'tutor_topic_chats'
+    id           = db.Column(db.Integer, primary_key=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    subject      = db.Column(db.String(50), nullable=False)
+    topic_key    = db.Column(db.String(50), nullable=False)
+    chat_history = db.Column(db.Text, default='[]')
+    updated_at   = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint('user_id', 'subject', 'topic_key', name='_user_subject_topic_uc'),)
 
 class QuizResult(db.Model):
     __tablename__ = 'quiz_results'
