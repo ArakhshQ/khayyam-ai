@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge, GuestUsage, GuestGlobalUsage, AccountToken, CallRequest
+from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge, GuestUsage, GuestGlobalUsage, AccountToken, CallRequest, TutorTopicChat
 from functools import wraps
 from openai import OpenAI
 from groq import Groq
@@ -103,6 +103,18 @@ def enforce_email_verification():
     if request.path.startswith('/api/'):
         return jsonify({"error": "verify_required", "message": "لطفاً ابتدا ایمیل خود را تایید کنید"}), 403
     return redirect(url_for('verify_pending_page'))
+
+@app.before_request
+def check_plan_expiry():
+    """
+    Runs on every authenticated request. If either of a user's plans has
+    quietly passed its expiry date since they were last active, this
+    catches and corrects it before the request is handled - so a request
+    that would otherwise be served against a stale/expired paid plan
+    instead sees the corrected (free) plan straight away.
+    """
+    if current_user.is_authenticated:
+        check_and_expire_plans(current_user)
 
 def get_client_ip():
     """
@@ -415,6 +427,109 @@ def send_password_reset_email(user):
     )
     send_email(user.email, "بازیابی رمز عبور — خیام", html)
 
+PLAN_DISPLAY_NAMES = {
+    'free': 'رایگان', 'basic': 'پایه', 'pro': 'حرفه‌ای',
+    'premium': 'پریمیوم', 'tutor_pro': 'استاد حرفه‌ای',
+}
+
+def send_plan_granted_email(user, plan_type, plan_value, expires_at):
+    """plan_type is 'chat' or 'tutor' - used only for the email copy."""
+    if not user.email:
+        return
+    section_name = "چت عمومی" if plan_type == 'chat' else "بخش تدریس (استاد خیام)"
+    plan_label    = PLAN_DISPLAY_NAMES.get(plan_value, plan_value)
+    expiry_str    = expires_at.strftime('%Y-%m-%d') if expires_at else None
+    body_lines = [
+        f"سلام {user.username}،",
+        f"پلان «{plan_label}» برای {section_name} روی حساب شما فعال شد.",
+    ]
+    if expiry_str:
+        body_lines.append(f"این پلان ماهانه است و در {expiry_str} به پایان می‌رسد. برای ادامه استفاده، باید آن را دوباره تمدید کنید.")
+    html = build_email_html(
+        heading="پلان شما فعال شد",
+        body_lines=body_lines,
+        button_text="مشاهده حساب کاربری",
+        button_link=f"{SITE_URL}/profile",
+        footer_text="اگر سوالی دارید، با پشتیبانی خیام تماس بگیرید."
+    )
+    send_email(user.email, "پلان شما فعال شد — خیام", html)
+
+def send_plan_expired_email(user, plan_type, plan_value):
+    if not user.email:
+        return
+    section_name = "چت عمومی" if plan_type == 'chat' else "بخش تدریس (استاد خیام)"
+    plan_label    = PLAN_DISPLAY_NAMES.get(plan_value, plan_value)
+    html = build_email_html(
+        heading="پلان شما به پایان رسید",
+        body_lines=[
+            f"سلام {user.username}،",
+            f"پلان «{plan_label}» شما برای {section_name} به پایان رسیده و حساب شما به پلان رایگان تغییر کرد.",
+            "هر وقت خواستید می‌توانید دوباره آن را فعال کنید."
+        ],
+        button_text="تمدید پلان",
+        button_link=f"{SITE_URL}/pricing",
+        footer_text="این یک اطلاع‌رسانی خودکار است."
+    )
+    send_email(user.email, "پلان شما به پایان رسید — خیام", html)
+
+def grant_plan(user, plan_type, plan_value, ttl_days=30):
+    """
+    Sets a user's chat_plan or tutor_plan, with a monthly expiry (unless
+    resetting to 'free', which has no expiry). Sends the "plan activated"
+    email. This is the single place plan-granting happens, so both the
+    admin panel and any future payment-webhook integration call the same
+    logic instead of duplicating it.
+    """
+    expires_at = None if plan_value == 'free' else datetime.utcnow() + timedelta(days=ttl_days)
+    if plan_type == 'chat':
+        user.chat_plan = plan_value
+        user.chat_plan_expires_at = expires_at
+    else:
+        user.tutor_plan = plan_value
+        user.tutor_plan_expires_at = expires_at
+    db.session.commit()
+
+    if plan_value != 'free':
+        try:
+            send_plan_granted_email(user, plan_type, plan_value, expires_at)
+        except Exception as e:
+            print(f"send_plan_granted_email failed for user {user.id}: {e}")
+
+def check_and_expire_plans(user):
+    """
+    Lazily checks whether either of a user's plans has passed its expiry
+    date, downgrading it to free and emailing them if so. Called on every
+    authenticated request (see before_request hook below) rather than via
+    a separate cron job - the moment a user's plan has expired, the very
+    next request they make (or any request while they're logged in) will
+    catch and correct it, without needing a scheduler running on Render.
+    """
+    now = datetime.utcnow()
+    changed = False
+
+    if user.chat_plan != 'free' and user.chat_plan_expires_at and user.chat_plan_expires_at < now:
+        expired_plan = user.chat_plan
+        user.chat_plan = 'free'
+        user.chat_plan_expires_at = None
+        changed = True
+        try:
+            send_plan_expired_email(user, 'chat', expired_plan)
+        except Exception as e:
+            print(f"send_plan_expired_email (chat) failed for user {user.id}: {e}")
+
+    if user.tutor_plan != 'free' and user.tutor_plan_expires_at and user.tutor_plan_expires_at < now:
+        expired_plan = user.tutor_plan
+        user.tutor_plan = 'free'
+        user.tutor_plan_expires_at = None
+        changed = True
+        try:
+            send_plan_expired_email(user, 'tutor', expired_plan)
+        except Exception as e:
+            print(f"send_plan_expired_email (tutor) failed for user {user.id}: {e}")
+
+    if changed:
+        db.session.commit()
+
 PLAN_CONFIG = {
     'free': [
         {'model': 'gpt-5.4-mini',                              'tier': 1, 'limit': 5000,    'reset': 'daily'},
@@ -624,6 +739,12 @@ TUTOR_PLAN_CONFIG = {
         {'model': 'gpt-5.4',      'limit': 3000000, 'reset': 'monthly', 'col': 'tutor_tier1'},
     ],
 }
+
+# All plan values a user's `plan` column can actually hold. tutor_pro isn't
+# in PLAN_CONFIG (it intentionally gets free-tier general chat - it's a
+# tutor-only upgrade), so anything validating a plan value against "is this
+# real" should check this set, not PLAN_CONFIG alone.
+VALID_PLANS = set(PLAN_CONFIG.keys()) | set(TUTOR_PLAN_CONFIG.keys())
 
 def pick_tutor_model(user_id, plan, tokens_to_use):
     """
@@ -1265,16 +1386,19 @@ def api_me():
             "phone":     current_user.phone,
             "is_admin":  current_user.is_admin,
             "is_verified": bool(current_user.is_verified),
-            "plan":      getattr(current_user, 'plan', 'free') or 'free'
+            "chat_plan":  current_user.chat_plan or 'free',
+            "chat_plan_expires_at": current_user.chat_plan_expires_at.isoformat() if current_user.chat_plan_expires_at else None,
+            "tutor_plan": current_user.tutor_plan or 'free',
+            "tutor_plan_expires_at": current_user.tutor_plan_expires_at.isoformat() if current_user.tutor_plan_expires_at else None,
         })
     return jsonify({"logged_in": False})
 
 @app.route("/api/usage")
 @login_required
 def api_usage():
-    summary = get_usage_summary(current_user.id, current_user.plan)
+    summary = get_usage_summary(current_user.id, current_user.chat_plan)
     return jsonify({
-        "plan":    current_user.plan,
+        "plan":    current_user.chat_plan,
         "summary": summary
     })
 
@@ -1335,7 +1459,7 @@ def chat():
         image_type   = None
 
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = getattr(current_user, 'plan', 'free') or 'free' \
+    plan    = getattr(current_user, 'chat_plan', 'free') or 'free' \
               if current_user.is_authenticated else 'free'
 
     user_memories = get_user_memories(user_id) if user_id else None
@@ -1409,7 +1533,7 @@ def persona_chat():
     persona_prompt = data.get("persona_prompt", "")
 
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = getattr(current_user, 'plan', 'free') or 'free' \
+    plan    = getattr(current_user, 'chat_plan', 'free') or 'free' \
               if current_user.is_authenticated else 'free'
 
     try:
@@ -1507,7 +1631,7 @@ def submit_call_request():
         return jsonify({"success": False, "error": "نام الزامی است"})
     if not phone:
         return jsonify({"success": False, "error": "شماره تماس الزامی است"})
-    if requested_plan not in PLAN_CONFIG or requested_plan == 'free':
+    if requested_plan not in VALID_PLANS or requested_plan == 'free':
         return jsonify({"success": False, "error": "پلان نامعتبر"})
 
     req = CallRequest(
@@ -1556,21 +1680,38 @@ def get_users():
         "email":      u.email,
         "phone":      u.phone,
         "is_admin":   u.is_admin,
-        "plan":       u.plan,
+        "chat_plan":              u.chat_plan,
+        "chat_plan_expires_at":   u.chat_plan_expires_at.isoformat() if u.chat_plan_expires_at else None,
+        "tutor_plan":             u.tutor_plan,
+        "tutor_plan_expires_at":  u.tutor_plan_expires_at.isoformat() if u.tutor_plan_expires_at else None,
         "created_at": u.created_at.isoformat()
     } for u in users])
 
-@app.route("/api/admin/users/<int:user_id>/plan", methods=["POST"])
+CHAT_PLAN_VALUES  = {'free', 'basic', 'pro', 'premium'}
+TUTOR_PLAN_VALUES = {'free', 'tutor_pro'}
+
+@app.route("/api/admin/users/<int:user_id>/chat-plan", methods=["POST"])
 @login_required
 @admin_required
-def update_user_plan(user_id):
+def update_user_chat_plan(user_id):
     data = request.get_json()
     plan = data.get("plan", "free")
-    if plan not in PLAN_CONFIG:
+    if plan not in CHAT_PLAN_VALUES:
         return jsonify({"success": False, "error": "پلان نامعتبر"})
     user = User.query.get_or_404(user_id)
-    user.plan = plan
-    db.session.commit()
+    grant_plan(user, 'chat', plan)
+    return jsonify({"success": True})
+
+@app.route("/api/admin/users/<int:user_id>/tutor-plan", methods=["POST"])
+@login_required
+@admin_required
+def update_user_tutor_plan(user_id):
+    data = request.get_json()
+    plan = data.get("plan", "free")
+    if plan not in TUTOR_PLAN_VALUES:
+        return jsonify({"success": False, "error": "پلان نامعتبر"})
+    user = User.query.get_or_404(user_id)
+    grant_plan(user, 'tutor', plan)
     return jsonify({"success": True})
 
 @app.route("/api/admin/knowledge", methods=["GET"])
@@ -1919,6 +2060,17 @@ def get_or_create_progress(user_id, subject):
         db.session.commit()
     return progress
 
+def get_or_create_topic_chat(user_id, subject, topic_key):
+    """Chat history scoped to one specific topic - see TutorTopicChat."""
+    chat = TutorTopicChat.query.filter_by(
+        user_id=user_id, subject=subject, topic_key=topic_key
+    ).first()
+    if not chat:
+        chat = TutorTopicChat(user_id=user_id, subject=subject, topic_key=topic_key)
+        db.session.add(chat)
+        db.session.commit()
+    return chat
+
 def award_xp(user_id, amount, subject=None):
     user = User.query.get(user_id)
     if user:
@@ -2013,7 +2165,7 @@ def get_curriculum():
 @app.route("/api/tutor/progress/<subject>")
 @login_required
 def get_tutor_progress(subject):
-    """Returns student's progress for a specific subject."""
+    """Returns student's progress for a specific subject (level, XP, completed topics - NOT chat history, which is per-topic; see /api/tutor/topic-chat)."""
     progress = get_or_create_progress(current_user.id, subject)
     user = User.query.get(current_user.id)
     badges = StudentBadge.query.filter_by(user_id=current_user.id).all()
@@ -2021,9 +2173,19 @@ def get_tutor_progress(subject):
     return jsonify({
         'progress':   progress.to_dict(),
         'total_xp':   user.total_xp or 0,
-        'badges':     [b.to_dict() for b in badges],
-        'chat_history': json.loads(progress.chat_history or '[]')
+        'badges':     [b.to_dict() for b in badges]
     })
+
+@app.route("/api/tutor/topic-chat/<subject>/<topic_key>")
+@login_required
+def get_topic_chat(subject, topic_key):
+    """Returns the saved conversation for one specific topic, so resuming
+    a topic continues where you left off - without pulling in whatever
+    a different topic in the same subject was last talking about."""
+    if subject not in CURRICULUM:
+        return jsonify({"error": "مضمون پیدا نشد"}), 400
+    chat = get_or_create_topic_chat(current_user.id, subject, topic_key)
+    return jsonify({'chat_history': json.loads(chat.chat_history or '[]')})
 
 @app.route("/api/tutor/start-topic", methods=["POST"])
 @login_required
@@ -2110,12 +2272,13 @@ def tutor_chat_new():
 
         return jsonify({"reply": reply})
 
-    progress     = get_or_create_progress(current_user.id, subject)
-    chat_history = json.loads(progress.chat_history or '[]')
+    progress = get_or_create_progress(current_user.id, subject)  # subject-level: level/XP/last-studied only
+    topic_chat   = get_or_create_topic_chat(current_user.id, subject, topic_key)
+    chat_history = json.loads(topic_chat.chat_history or '[]')
     system_prompt = build_tutor_system_prompt(
         subject, topic_info['title'], topic_info['desc'], len(chat_history)
     )
-    plan = getattr(current_user, 'plan', 'free') or 'free'
+    plan = getattr(current_user, 'tutor_plan', 'free') or 'free'
 
     try:
         reply, is_limited, reset_ts = smart_tutor_chat(
@@ -2137,13 +2300,15 @@ def tutor_chat_new():
             "reset_ts": reset_ts
         })
 
-    # save history
+    # save history - scoped to THIS topic only, so switching topics never
+    # bleeds into a different conversation
     chat_history.append({"role": "user", "content": message})
     chat_history.append({"role": "assistant", "content": reply})
     if len(chat_history) > 60:
         chat_history = chat_history[-60:]
 
-    progress.chat_history     = json.dumps(chat_history, ensure_ascii=False)
+    topic_chat.chat_history   = json.dumps(chat_history, ensure_ascii=False)
+    topic_chat.updated_at     = datetime.utcnow()
     progress.last_activity    = datetime.utcnow()
     progress.last_topic_title = topic_info['title']
     db.session.commit()
@@ -2207,7 +2372,7 @@ def run_gated_completion(prompt, max_tokens=2000, temperature=0.8):
             return None, True, next_utc_midnight_ts()
         model = GUEST_MODEL
     else:
-        plan = getattr(current_user, 'plan', 'free') or 'free'
+        plan = getattr(current_user, 'tutor_plan', 'free') or 'free'
         model, reset_ts, is_limited, col = pick_tutor_model(current_user.id, plan, estimated_tokens)
         if is_limited:
             return None, True, reset_ts

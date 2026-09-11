@@ -693,7 +693,7 @@
 
     if (currentUser) {
       try {
-        const res  = await fetch(`/api/tutor/progress/${currentSubject}`);
+        const res  = await fetch(`/api/tutor/topic-chat/${currentSubject}/${topic.key}`);
         const data = await res.json();
         chatHistory = data.chat_history || [];
         hideLoading();

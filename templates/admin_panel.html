@@ -370,6 +370,10 @@
         <span class="overview-val gold" id="count-premium">—</span>
       </div>
       <div class="overview-row">
+        <span class="overview-key">استاد حرفه‌ای ($50)</span>
+        <span class="overview-val gold" id="count-tutor_pro">—</span>
+      </div>
+      <div class="overview-row">
         <span class="overview-key">درآمد تخمینی ماهانه</span>
         <span class="overview-val gold" id="est-revenue">—</span>
       </div>
@@ -380,10 +384,10 @@
         <thead>
           <tr>
             <th>کاربر</th>
-            <th>پلان</th>
             <th>ایمیل / تلفن</th>
             <th>تاریخ عضویت</th>
-            <th>تغییر پلان</th>
+            <th>پلان چت</th>
+            <th>پلان تیوتر</th>
           </tr>
         </thead>
         <tbody id="users-tbody">
@@ -463,8 +467,8 @@
   let users     = [];
   let callRequests = [];
 
-  const PLAN_PRICES = { free: 0, basic: 10, pro: 20, premium: 40 };
-  const PLAN_LABELS = { free: 'رایگان', basic: 'پایه', pro: 'حرفه‌ای', premium: 'پریمیوم' };
+  const PLAN_PRICES = { free: 0, basic: 10, pro: 20, premium: 40, tutor_pro: 50 };
+  const PLAN_LABELS = { free: 'رایگان', basic: 'پایه', pro: 'حرفه‌ای', premium: 'پریمیوم', tutor_pro: 'استاد حرفه‌ای' };
 
   // ── INIT ──
   async function init() {
@@ -491,13 +495,17 @@
   }
 
   function updateStats() {
-    const paid    = users.filter(u => u.plan !== 'free').length;
-    const counts  = { free: 0, basic: 0, pro: 0, premium: 0 };
+    const paid    = users.filter(u => u.chat_plan !== 'free' || u.tutor_plan !== 'free').length;
+    const counts  = { free: 0, basic: 0, pro: 0, premium: 0, tutor_pro: 0 };
     let revenue   = 0;
 
     users.forEach(u => {
-      counts[u.plan] = (counts[u.plan] || 0) + 1;
-      revenue += PLAN_PRICES[u.plan] || 0;
+      // chat_plan and tutor_plan are independent purchases, so both are
+      // counted and both contribute to revenue - a user can show up in
+      // two buckets at once (e.g. 'pro' AND 'tutor_pro').
+      counts[u.chat_plan]  = (counts[u.chat_plan]  || 0) + 1;
+      counts[u.tutor_plan] = (counts[u.tutor_plan] || 0) + 1;
+      revenue += (PLAN_PRICES[u.chat_plan] || 0) + (PLAN_PRICES[u.tutor_plan] || 0);
     });
 
     document.getElementById('stat-total-users').textContent = users.length;
@@ -505,11 +513,12 @@
     document.getElementById('stat-dialect').textContent     = (knowledge.dari_dialect || []).length;
     document.getElementById('stat-examples').textContent    = (examples.conversation_examples || []).length;
 
-    document.getElementById('count-free').textContent    = counts.free + ' نفر';
-    document.getElementById('count-basic').textContent   = counts.basic + ' نفر';
-    document.getElementById('count-pro').textContent     = counts.pro + ' نفر';
-    document.getElementById('count-premium').textContent = counts.premium + ' نفر';
-    document.getElementById('est-revenue').textContent   = '$' + revenue + ' / ماه';
+    document.getElementById('count-free').textContent      = counts.free + ' نفر';
+    document.getElementById('count-basic').textContent     = counts.basic + ' نفر';
+    document.getElementById('count-pro').textContent       = counts.pro + ' نفر';
+    document.getElementById('count-premium').textContent   = counts.premium + ' نفر';
+    document.getElementById('count-tutor_pro').textContent = counts.tutor_pro + ' نفر';
+    document.getElementById('est-revenue').textContent     = '$' + revenue + ' / ماه';
   }
 
   // ── TABS ──
@@ -540,26 +549,34 @@
     users.forEach(u => {
       const tr = document.createElement('tr');
       const joinDate = new Date(u.created_at).toLocaleDateString('fa-AF');
-      const planClass = `plan-${u.plan}`;
-      const planLabel = PLAN_LABELS[u.plan] || u.plan;
+
+      const chatExpiry  = u.chat_plan_expires_at  ? new Date(u.chat_plan_expires_at).toLocaleDateString('fa-AF')  : null;
+      const tutorExpiry = u.tutor_plan_expires_at ? new Date(u.tutor_plan_expires_at).toLocaleDateString('fa-AF') : null;
 
       tr.innerHTML = `
         <td>
           <div style="font-weight:500;">${escapeHtml(u.username)}</div>
           ${u.is_admin ? '<span class="admin-badge">👑 ادمین</span>' : ''}
         </td>
-        <td><span class="plan-badge ${planClass}">${planLabel}</span></td>
         <td style="color:var(--text-dim);font-size:12px;">
           ${escapeHtml(u.email || '')} ${u.phone ? '· ' + escapeHtml(u.phone) : ''}
         </td>
         <td style="color:var(--text-dim);font-size:12px;">${joinDate}</td>
         <td>
-          <select class="plan-select" onchange="changePlan(${u.id}, this.value)">
-            <option value="free"    ${u.plan === 'free'    ? 'selected' : ''}>رایگان</option>
-            <option value="basic"   ${u.plan === 'basic'   ? 'selected' : ''}>پایه $10</option>
-            <option value="pro"     ${u.plan === 'pro'     ? 'selected' : ''}>حرفه‌ای $20</option>
-            <option value="premium" ${u.plan === 'premium' ? 'selected' : ''}>پریمیوم $40</option>
+          <select class="plan-select" onchange="changeChatPlan(${u.id}, this.value)">
+            <option value="free"    ${u.chat_plan === 'free'    ? 'selected' : ''}>رایگان</option>
+            <option value="basic"   ${u.chat_plan === 'basic'   ? 'selected' : ''}>پایه $10</option>
+            <option value="pro"     ${u.chat_plan === 'pro'     ? 'selected' : ''}>حرفه‌ای $20</option>
+            <option value="premium" ${u.chat_plan === 'premium' ? 'selected' : ''}>پریمیوم $40</option>
           </select>
+          ${chatExpiry ? `<div style="font-size:11px;color:var(--text-dim);margin-top:3px;">تا ${chatExpiry}</div>` : ''}
+        </td>
+        <td>
+          <select class="plan-select" onchange="changeTutorPlan(${u.id}, this.value)">
+            <option value="free"      ${u.tutor_plan === 'free'      ? 'selected' : ''}>رایگان</option>
+            <option value="tutor_pro" ${u.tutor_plan === 'tutor_pro' ? 'selected' : ''}>استاد حرفه‌ای $50</option>
+          </select>
+          ${tutorExpiry ? `<div style="font-size:11px;color:var(--text-dim);margin-top:3px;">تا ${tutorExpiry}</div>` : ''}
         </td>`;
       tbody.appendChild(tr);
     });
@@ -610,8 +627,8 @@
     }
   }
 
-  async function changePlan(userId, newPlan) {
-    const res  = await fetch(`/api/admin/users/${userId}/plan`, {
+  async function changeChatPlan(userId, newPlan) {
+    const res  = await fetch(`/api/admin/users/${userId}/chat-plan`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ plan: newPlan })
@@ -619,9 +636,24 @@
     const data = await res.json();
     if (data.success) {
       const u = users.find(u => u.id === userId);
-      if (u) u.plan = newPlan;
-      updateStats();
-      showToast('✓ پلان تغییر یافت');
+      if (u) u.chat_plan = newPlan;
+      await init();  // re-fetch so the new expiry date shows immediately
+      showToast('✓ پلان چت تغییر یافت');
+    }
+  }
+
+  async function changeTutorPlan(userId, newPlan) {
+    const res  = await fetch(`/api/admin/users/${userId}/tutor-plan`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ plan: newPlan })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const u = users.find(u => u.id === userId);
+      if (u) u.tutor_plan = newPlan;
+      await init();
+      showToast('✓ پلان تیوتر تغییر یافت');
     }
   }
 

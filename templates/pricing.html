@@ -51,6 +51,12 @@
       font-size:16px; color:var(--text-dim);
       max-width:500px; margin:0 auto; line-height:1.8;
     }
+    .monthly-note {
+      max-width:520px; margin:18px auto 0;
+      font-size:13px; color:var(--text-dim); line-height:1.9;
+      background:var(--surface); border:1px solid var(--border);
+      border-radius:12px; padding:14px 20px;
+    }
 
     /* ── TABS ── */
     .plan-tabs {
@@ -251,6 +257,11 @@
     <div class="page-badge">💎 پلان‌های خیام</div>
     <h1>هر سطحی که باشی<br/><span>پلانی برای تو داریم</span></h1>
     <p>از رایگان شروع کن. هر وقت خواستی ارتقا بده.</p>
+    <div class="monthly-note">
+      همه پلان‌های پولی ماهانه هستند و باید هر ماه تمدید شوند.
+      پلان چت عمومی و پلان استاد خیام کاملاً جدا از هم هستند —
+      می‌توانید همزمان هر دو را داشته باشید، و خریدن یکی دیگری را لغو نمی‌کند.
+    </div>
   </div>
 
   <!-- TABS -->
@@ -519,6 +530,7 @@
           <option value="basic">پایه — $10</option>
           <option value="pro">حرفه‌ای — $20</option>
           <option value="premium">پریمیوم — $40</option>
+          <option value="tutor_pro">استاد حرفه‌ای — $50 (فقط تدریس)</option>
         </select>
       </div>
       <button class="plan-cta cta-paid" style="width:auto;padding:12px 32px;" onclick="submitCallRequest()">
@@ -549,9 +561,10 @@
   function contactForPlan(planName) {
     document.getElementById('contact').scrollIntoView({ behavior: 'smooth' });
     const select = document.getElementById('call-plan');
-    if (planName.includes('پایه'))      select.value = 'basic';
-    else if (planName.includes('حرفه')) select.value = 'pro';
-    else if (planName.includes('پریمیوم') || planName.includes('استاد')) select.value = 'premium';
+    if (planName.includes('استاد'))      select.value = 'tutor_pro';
+    else if (planName.includes('پایه'))  select.value = 'basic';
+    else if (planName.includes('حرفه'))  select.value = 'pro';
+    else if (planName.includes('پریمیوم')) select.value = 'premium';
   }
 
   async function submitCallRequest() {

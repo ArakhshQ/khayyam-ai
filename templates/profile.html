@@ -113,6 +113,28 @@
     white-space: nowrap;
   }
 
+  .plans-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px 24px;
+    margin-bottom: 32px;
+    animation: fadeUp 0.4s ease both;
+  }
+  .plan-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .plan-row:last-of-type { border-bottom: none; }
+  .plan-row-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+  .plan-row-expiry { font-size: 12px; color: var(--text-dim); }
+  .plans-upgrade-link {
+    display: block; text-align: center; margin-top: 14px;
+    font-size: 13px; color: var(--gold); text-decoration: none;
+  }
+  .plans-upgrade-link:hover { text-decoration: underline; }
+
   /* ── SECTION TITLE ── */
   .section-title {
     font-size: 13px;
@@ -232,7 +254,25 @@
         <div class="user-name" id="user-name">در حال بارگذاری...</div>
         <div class="user-detail" id="user-detail"></div>
       </div>
-      <span class="user-badge">رایگان</span>
+    </div>
+
+    <div class="section-title">پلان‌های من</div>
+    <div class="plans-card" id="plans-card">
+      <div class="plan-row">
+        <div>
+          <div class="plan-row-title">چت عمومی</div>
+          <div class="plan-row-expiry" id="chat-plan-expiry"></div>
+        </div>
+        <span class="user-badge" id="chat-plan-badge">—</span>
+      </div>
+      <div class="plan-row">
+        <div>
+          <div class="plan-row-title">استاد خیام (تدریس)</div>
+          <div class="plan-row-expiry" id="tutor-plan-expiry"></div>
+        </div>
+        <span class="user-badge" id="tutor-plan-badge">—</span>
+      </div>
+      <a href="/pricing" class="plans-upgrade-link">مشاهده پلان‌ها و ارتقا ←</a>
     </div>
 
     <!-- conversations -->
@@ -292,6 +332,8 @@
   return d.toLocaleDateString('fa-AF');
 }
 
+    const PLAN_LABELS = { free: 'رایگان', basic: 'پایه', pro: 'حرفه‌ای', premium: 'پریمیوم', tutor_pro: 'استاد حرفه‌ای' };
+
     async function loadUser() {
       const res  = await fetch('/api/me');
       const data = await res.json();
@@ -306,6 +348,18 @@
       if (data.email) detail.push(data.email);
       if (data.phone) detail.push(data.phone);
       document.getElementById('user-detail').textContent = detail.join(' · ');
+
+      document.getElementById('chat-plan-badge').textContent = PLAN_LABELS[data.chat_plan] || data.chat_plan;
+      document.getElementById('tutor-plan-badge').textContent = PLAN_LABELS[data.tutor_plan] || data.tutor_plan;
+
+      const chatExpiryEl  = document.getElementById('chat-plan-expiry');
+      const tutorExpiryEl = document.getElementById('tutor-plan-expiry');
+      chatExpiryEl.textContent  = data.chat_plan_expires_at
+        ? 'تمدید بعدی: ' + new Date(data.chat_plan_expires_at).toLocaleDateString('fa-AF')
+        : (data.chat_plan === 'free' ? 'همیشه رایگان' : '');
+      tutorExpiryEl.textContent = data.tutor_plan_expires_at
+        ? 'تمدید بعدی: ' + new Date(data.tutor_plan_expires_at).toLocaleDateString('fa-AF')
+        : (data.tutor_plan === 'free' ? 'هنوز فعال نشده' : '');
     }
 
     async function loadConversations() {
