@@ -18,6 +18,8 @@ import base64
 import hashlib
 import secrets
 import smtplib
+import urllib.request
+import urllib.error
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -1618,6 +1620,62 @@ def delete_memory(memory_id):
 
 # ── ADMIN APIs ──
 SUPPORT_PHONE = "+93782408793"
+
+# ── VOICE TEST (temporary - admin only, for evaluating gpt-realtime's Dari
+# output before deciding whether to build the real voice feature on it) ──
+REALTIME_VOICE_MODEL = "gpt-realtime-2025-08-28"
+
+@app.route("/voice-test")
+@login_required
+@admin_required
+def voice_test_page():
+    return render_template("voice-test.html")
+
+@app.route("/api/voice-test/token", methods=["POST"])
+@login_required
+@admin_required
+@limiter.limit("20 per hour")
+def voice_test_token():
+    """
+    Mints a short-lived ephemeral token so the browser can connect directly
+    to OpenAI's Realtime API without ever seeing the real API key. This is
+    the newer (post-GA) token endpoint - if OpenAI has since renamed it
+    again, the error text returned here will say so directly rather than
+    failing silently.
+    """
+    body = json.dumps({
+        "session": {
+            "type": "realtime",
+            "model": REALTIME_VOICE_MODEL,
+            "instructions": (
+                "شما باید همیشه و فقط به زبان دری (فارسی افغانستان) صحبت کنید. "
+                "هر متنی که کاربر می‌فرستد را با صدای طبیعی و روان به دری بخوانید، "
+                "و اگر خواسته شد یک پاسخ کوتاه و طبیعی هم بدهید."
+            ),
+            "audio": {"output": {"voice": "cedar"}}
+        }
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/realtime/client_secrets",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        return jsonify({"success": True, "client_secret": data.get("value")})
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode(errors="replace")
+        print(f"voice_test_token HTTP {e.code}: {error_body}")
+        return jsonify({"success": False, "error": f"HTTP {e.code}: {error_body}"})
+    except Exception as e:
+        print(f"voice_test_token error: {e}")
+        return jsonify({"success": False, "error": str(e)})
 
 @app.route("/api/call-request", methods=["POST"])
 @limiter.limit("5 per hour")
