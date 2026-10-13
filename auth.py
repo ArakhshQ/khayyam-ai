@@ -32,6 +32,7 @@ def register_user(username, password, email=None, phone=None):
     if not email and not phone:
         return None, "ایمیل یا شماره تلفن الزامی است"
 
+    if email: email = email.strip().lower()
     user = User(
         username=username,
         password_hash=hash_password(password),

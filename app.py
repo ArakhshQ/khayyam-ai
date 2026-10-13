@@ -5,18 +5,25 @@ from functools import wraps
 from openai import OpenAI
 from groq import Groq
 from dotenv import load_dotenv
-from auth import register_user, login_user_by_username
+from auth import register_user, login_user_by_email, hash_password
 from datetime import datetime, timezone, timedelta
 import os
 import json
 import re
 import base64
+import smtplib
+import ssl
+import time
+from email.message import EmailMessage
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from sqlalchemy import text as sql_text
 from io import BytesIO
 
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("ADMIN_PASSWORD", "fallback-secret")
+app.secret_key = os.getenv("SECRET_KEY") or os.getenv("ADMIN_PASSWORD") or os.urandom(32).hex()
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "true").lower() == "true")
 database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -67,6 +74,12 @@ PLAN_NAMES = {
 
 with app.app_context():
     db.create_all()
+    # Additive migration: keep existing users and their data intact.
+    from sqlalchemy import inspect
+    columns = {c['name'] for c in inspect(db.engine).get_columns('users')}
+    if 'email_verified' not in columns:
+        with db.engine.begin() as conn:
+            conn.execute(sql_text('ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE'))
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -684,15 +697,17 @@ def pricing_page():
 
 @app.route("/api/register", methods=["POST"])
 def api_register():
-    data     = request.get_json()
+    data     = request.get_json(silent=True) or {}
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
-    email    = (data.get("email") or "").strip() or None
-    phone    = (data.get("phone") or "").strip() or None
+    email    = (data.get("email") or "").strip().lower()
+    phone    = None
 
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        return jsonify({"success": False, "error": "ایمیل معتبر وارد کنید"}), 400
     if len(username) < 3:
         return jsonify({"success": False, "error": "نام کاربری باید حداقل ۳ حرف باشد"})
-    if len(password) < 6:
+    if len(password) < 8:
         return jsonify({"success": False, "error": "رمز عبور باید حداقل ۶ حرف باشد"})
 
     user, error = register_user(username, password, email, phone)
@@ -700,20 +715,139 @@ def api_register():
         return jsonify({"success": False, "error": error})
 
     login_user(user)
-    return jsonify({"success": True})
+    try:
+        send_account_email(user, 'verify')
+    except Exception:
+        app.logger.exception('Verification email delivery failed')
+    return jsonify({"success": True, "verification_email_sent": bool(os.getenv('SMTP_HOST') and os.getenv('SMTP_USER') and os.getenv('SMTP_PASSWORD') and os.getenv('SMTP_FROM'))})
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
-    data       = request.get_json()
-    identifier = data.get("identifier", "").strip()
+    data       = request.get_json(silent=True) or {}
+    identifier = (data.get("email") or data.get("identifier") or "").strip().lower()
     password   = data.get("password", "").strip()
 
-    user, error = login_user_by_username(identifier, password)
+    user, error = login_user_by_email(identifier, password)
     if error:
         return jsonify({"success": False, "error": error})
 
     login_user(user)
     return jsonify({"success": True})
+
+# Signed, expiring tokens. Password-reset tokens become invalid after password changes.
+def account_token(user, purpose):
+    payload = {'uid': user.id, 'purpose': purpose, 'email': user.email}
+    if purpose == 'reset':
+        payload['password_hash'] = user.password_hash
+    return URLSafeTimedSerializer(app.secret_key).dumps(payload, salt='khayyam-account-v1')
+
+def token_user(token, purpose, max_age):
+    try:
+        data = URLSafeTimedSerializer(app.secret_key).loads(token, salt='khayyam-account-v1', max_age=max_age)
+        if data.get('purpose') != purpose: return None
+        user = db.session.get(User, data.get('uid'))
+        if not user or user.email != data.get('email'): return None
+        if purpose == 'reset' and user.password_hash != data.get('password_hash'): return None
+        return user
+    except (BadSignature, SignatureExpired, TypeError, ValueError):
+        return None
+
+def send_account_email(user, purpose):
+    host = os.getenv('SMTP_HOST', '').strip()
+    port = int(os.getenv('SMTP_PORT', '587'))
+    sender = os.getenv('SMTP_FROM', '').strip()
+    username = os.getenv('SMTP_USER', '').strip()
+    password = os.getenv('SMTP_PASSWORD', '')
+    if not host or not sender or not username or not password:
+        app.logger.warning('Brevo SMTP is not configured; email was not sent')
+        return False
+    token = account_token(user, purpose)
+    if purpose == 'verify':
+        link = url_for('verify_email', token=token, _external=True)
+        subject = 'تأیید ایمیل خیام | Verify your Khayyam email'
+        body = f'برای تأیید ایمیل خود روی لینک زیر کلیک کنید (اعتبار: ۲۴ ساعت):\n{link}\n\nIf you did not register, ignore this email.'
+    else:
+        link = url_for('reset_password_page', token=token, _external=True)
+        subject = 'بازیابی رمز عبور خیام | Reset your Khayyam password'
+        body = f'برای تعیین رمز عبور جدید روی لینک زیر کلیک کنید (اعتبار: ۳۰ دقیقه):\n{link}\n\nIf you did not request this, ignore this email.'
+    message = EmailMessage()
+    message['From'] = sender
+    message['To'] = user.email
+    message['Subject'] = subject
+    message.set_content(body)
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=15) as smtp:
+            smtp.login(username, password)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(host, port, timeout=15) as smtp:
+            smtp.ehlo()
+            smtp.starttls(context=ssl.create_default_context())
+            smtp.ehlo()
+            smtp.login(username, password)
+            smtp.send_message(message)
+    return True
+
+# Lightweight per-process throttling; production multi-worker deployments should use Redis.
+_email_requests = {}
+def email_throttled(email, action):
+    key = (email, action)
+    now = time.monotonic()
+    if now - _email_requests.get(key, 0) < 60: return True
+    _email_requests[key] = now
+    if len(_email_requests) > 5000:
+        for k, t in list(_email_requests.items()):
+            if now - t > 3600: _email_requests.pop(k, None)
+    return False
+
+@app.route('/forgot-password')
+def forgot_password_page():
+    return render_template('forgot_password.html')
+
+@app.route('/reset-password/<token>')
+def reset_password_page(token):
+    return render_template('reset_password.html', token=token, valid=bool(token_user(token, 'reset', 1800)))
+
+@app.route('/api/forgot-password', methods=['POST'])
+def api_forgot_password():
+    email = str((request.get_json(silent=True) or {}).get('email', '')).strip().lower()
+    if not email or len(email) > 150: return jsonify({'error':'ایمیل معتبر وارد کنید'}), 400
+    user = User.query.filter_by(email=email).first()
+    if user and not email_throttled(email, 'reset'):
+        try: send_account_email(user, 'reset')
+        except Exception: app.logger.exception('Password reset email failed')
+    return jsonify({'success':True, 'message':'اگر این ایمیل ثبت شده باشد، لینک بازیابی ارسال خواهد شد.'})
+
+@app.route('/api/reset-password', methods=['POST'])
+def api_reset_password():
+    data = request.get_json(silent=True) or {}
+    user = token_user(str(data.get('token', '')), 'reset', 1800)
+    if not user: return jsonify({'error':'لینک نامعتبر یا منقضی شده است'}), 400
+    password = str(data.get('password', ''))
+    if len(password) < 8 or len(password) > 128: return jsonify({'error':'رمز عبور باید بین ۸ و ۱۲۸ نویسه باشد'}), 400
+    user.password_hash = hash_password(password)
+    db.session.commit()
+    return jsonify({'success':True})
+
+@app.route('/verify-email/<token>')
+def verify_email(token):
+    user = token_user(token, 'verify', 86400)
+    if not user: return render_template('email_result.html', message='لینک تأیید نامعتبر یا منقضی شده است.')
+    user.email_verified = True
+    db.session.commit()
+    return render_template('email_result.html', message='ایمیل شما با موفقیت تأیید شد!')
+
+@app.route('/api/resend-verification', methods=['POST'])
+@login_required
+def resend_verification():
+    if current_user.email_verified: return jsonify({'success':True, 'message':'ایمیل قبلاً تأیید شده است.'})
+    if email_throttled(current_user.email or '', 'verify'): return jsonify({'error':'لطفاً یک دقیقه صبر کنید.'}), 429
+    try:
+        if not send_account_email(current_user, 'verify'): return jsonify({'error':'ارسال ایمیل هنوز تنظیم نشده است.'}), 503
+    except Exception:
+        app.logger.exception('Resend verification failed')
+        return jsonify({'error':'ارسال ایمیل ناموفق بود.'}), 502
+    return jsonify({'success':True})
 
 @app.route("/api/me")
 def api_me():

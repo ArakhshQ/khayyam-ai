@@ -13,6 +13,7 @@ class User(UserMixin, db.Model):
     username      = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin      = db.Column(db.Boolean, default=False)
+    email_verified = db.Column(db.Boolean, default=False)
     plan          = db.Column(db.String(20), default='free')
     total_xp      = db.Column(db.Integer, default=0)
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)

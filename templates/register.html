@@ -203,26 +203,15 @@
         <input class="form-input" type="text" id="username" placeholder="مثال: ahmad123"/>
       </div>
 
-      <!-- method toggle -->
       <div class="form-group">
-        <label class="form-label">روش ثبت‌نام</label>
-        <div class="method-toggle">
-          <button class="method-btn active" onclick="setMethod('email', this)">📧 ایمیل</button>
-          <button class="method-btn" onclick="setMethod('phone', this)">📱 شماره تلفن</button>
-        </div>
-
-        <div id="email-field">
-          <input class="form-input" type="email" id="email" placeholder="example@gmail.com" style="direction:ltr"/>
-        </div>
-        <div id="phone-field" style="display:none">
-          <input class="form-input" type="tel" id="phone" placeholder="+93 700 000 000" style="direction:ltr"/>
-        </div>
+        <label class="form-label">ایمیل</label>
+        <input class="form-input" type="email" id="email" required placeholder="example@gmail.com" style="direction:ltr"/>
       </div>
 
       <div class="form-group">
         <label class="form-label">رمز عبور</label>
-        <input class="form-input" type="password" id="password" placeholder="حداقل ۶ حرف"/>
-        <div class="password-hint">رمز عبور باید حداقل ۶ حرف داشته باشد</div>
+        <input class="form-input" type="password" id="password" placeholder="حداقل ۸ حرف"/>
+        <div class="password-hint">رمز عبور باید حداقل ۸ حرف داشته باشد</div>
       </div>
 
       <div class="form-group">
@@ -261,16 +250,6 @@
   </div>
 </nav>
   <script>
-    let currentMethod = 'email';
-
-    function setMethod(method, btn) {
-      currentMethod = method;
-      document.querySelectorAll('.method-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('email-field').style.display = method === 'email' ? 'block' : 'none';
-      document.getElementById('phone-field').style.display = method === 'phone' ? 'block' : 'none';
-    }
-
     function showError(msg) {
       const box = document.getElementById('error-box');
       box.textContent = msg;
@@ -294,13 +273,13 @@
       const username  = document.getElementById('username').value.trim();
       const password  = document.getElementById('password').value;
       const password2 = document.getElementById('password2').value;
-      const email     = currentMethod === 'email'  ? document.getElementById('email').value.trim()  : null;
-      const phone     = currentMethod === 'phone'  ? document.getElementById('phone').value.trim()  : null;
+      const email     = document.getElementById('email').value.trim().toLowerCase();
+      const phone     = null;
 
       if (!username)           return showError('نام کاربری الزامی است');
       if (username.length < 3) return showError('نام کاربری باید حداقل ۳ حرف باشد');
-      if (!email && !phone)    return showError('ایمیل یا شماره تلفن الزامی است');
-      if (password.length < 6) return showError('رمز عبور باید حداقل ۶ حرف باشد');
+      if (!email || !document.getElementById('email').checkValidity()) return showError('ایمیل معتبر الزامی است');
+      if (password.length < 8) return showError('رمز عبور باید حداقل ۸ حرف باشد');
       if (password !== password2) return showError('رمزهای عبور یکسان نیستند');
 
       const btn = document.getElementById('submit-btn');

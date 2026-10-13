@@ -1405,7 +1405,7 @@
       setVoiceStatus(messages[error.name] || 'دسترسی به میکروفون ناموفق بود. مجوز مرورگر و اتصال میکروفون را بررسی کنید.', true);
       finishRecordingCleanup();
     } finally {
-      if (!khayyamIsRecording) recordBtn.disabled = false;
+      recordBtn.disabled = false; // Keep Stop clickable while recording
     }
   }
 
