@@ -25,6 +25,8 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY") or os.getenv("ADMIN_PASSWORD") or os.urandom(32).hex()
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "true").lower() == "true")
 database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
+if database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
