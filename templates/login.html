@@ -3,39 +3,19 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <meta name="csrf-token" content="{{ csrf_token() }}">
-  <script>
-    // Auto-attach the CSRF token to every same-page state-changing fetch()
-    // call, so individual functions below don't each need to remember to.
-    (function() {
-      var token = document.querySelector('meta[name="csrf-token"]').content;
-      var originalFetch = window.fetch;
-      window.fetch = function(url, options) {
-        options = options || {};
-        var method = (options.method || 'GET').toUpperCase();
-        if (method !== 'GET' && method !== 'HEAD') {
-          if (options.headers instanceof Headers) {
-            options.headers.set('X-CSRFToken', token);
-          } else {
-            options.headers = Object.assign({}, options.headers, {'X-CSRFToken': token});
-          }
-        }
-        return originalFetch(url, options);
-      };
-    })();
-  </script>
   <title>ورود — خیام</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  {{ csrf_meta_tag() }}
-  <script src="/static/main.js"></script>
   <style>
+   
+    
     body {
       background: var(--bg); color: var(--text);
       font-family: 'Vazirmatn', sans-serif;
       min-height: 100vh; display: flex; flex-direction: column;
     }
+   
     nav {
       position: relative; z-index: 10;
       display: flex; align-items: center; justify-content: space-between;
@@ -71,34 +51,30 @@
       to   { opacity: 1; transform: translateY(0); }
     }
     .card-top { text-align: center; margin-bottom: 28px; }
+    .card-icon { font-size: 36px; display: block; margin-bottom: 12px; }
     .card-top h1 { font-size: 22px; font-weight: 700; color: var(--gold); margin-bottom: 6px; }
     .card-top p  { font-size: 13px; color: var(--text-dim); line-height: 1.7; }
-    .form-group  { margin-bottom: 18px; }
+    .form-group  { margin-bottom: 16px; }
     .form-label  {
-      display: flex; align-items: center; justify-content: space-between;
-      font-size: 13px; font-weight: 600;
-      color: var(--text); margin-bottom: 8px;
+      display: block; font-size: 12px; font-weight: 500;
+      color: var(--text-dim); margin-bottom: 7px; letter-spacing: 0.05em;
     }
-    .form-label a {
-      font-size: 12px; font-weight: 500; color: var(--gold); text-decoration: none;
-    }
-    .form-label a:hover { text-decoration: underline; }
     .form-input {
-      width: 100%; padding: 12px 14px;
+      width: 100%; padding: 11px 14px;
       background: var(--surface2); border: 1px solid var(--border);
       border-radius: 9px; color: var(--text);
       font-family: 'Vazirmatn', sans-serif;
-      font-size: 14px; font-weight: 500; outline: none; transition: border-color 0.2s; direction: rtl;
+      font-size: 14px; outline: none; transition: border-color 0.2s; direction: rtl;
     }
     .form-input:focus { border-color: var(--gold-dim); }
-    .form-input::placeholder { color: var(--text-dim); font-weight: 400; opacity: 0.75; }
+    .form-input::placeholder { color: var(--text-dim); }
     .submit-btn {
       width: 100%; padding: 13px;
       background: var(--gold); color: #0f0e0c;
       border: none; border-radius: 9px;
       font-family: 'Vazirmatn', sans-serif;
       font-size: 15px; font-weight: 700;
-      cursor: pointer; transition: all 0.2s; margin-top: 6px;
+      cursor: pointer; transition: all 0.2s; margin-top: 4px;
     }
     .submit-btn:hover { background: #e0bb60; transform: translateY(-1px); }
     .submit-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
@@ -107,6 +83,10 @@
       border-radius: 8px; padding: 10px 14px;
       font-size: 13px; color: var(--red-lt);
       margin-bottom: 16px; display: none;
+    }
+    .hint {
+      font-size: 12px; color: var(--text-dim);
+      margin-top: 5px; padding-right: 4px;
     }
     .footer-link {
       text-align: center; margin-top: 20px;
@@ -128,23 +108,22 @@
   <div class="page">
     <div class="card">
       <div class="card-top">
+        <span class="card-icon">🔑</span>
         <h1>خوش آمدید</h1>
-        <p>با ایمیل یا نام کاربری وارد شوید</p>
+        <p>با ایمیل، شماره تلفن، یا نام کاربری وارد شوید</p>
       </div>
 
       <div id="error-box" class="error-box"></div>
 
       <div class="form-group">
-        <label class="form-label">ایمیل یا نام کاربری</label>
-        <input class="form-input" type="text" id="identifier" placeholder="ahmad123" style="direction:ltr" autocomplete="username"/>
+        <label class="form-label">ایمیل / شماره تلفن / نام کاربری</label>
+        <input class="form-input" type="text" id="identifier" placeholder="هر کدام را وارد کنید" style="direction:ltr"/>
+        <div class="hint">می‌توانید با ایمیل، شماره تلفن، یا نام کاربری وارد شوید</div>
       </div>
 
       <div class="form-group">
-        <label class="form-label">
-          <span>رمز عبور</span>
-          <a href="/forgot-password">رمز عبور را فراموش کرده‌اید؟</a>
-        </label>
-        <input class="form-input" type="password" id="password" placeholder="رمز عبور خود را بنویسید" autocomplete="current-password"/>
+        <label class="form-label">رمز عبور</label>
+        <input class="form-input" type="password" id="password" placeholder="رمز عبور خود را وارد کنید"/>
       </div>
 
       <button class="submit-btn" id="submit-btn" onclick="login()">
@@ -172,7 +151,7 @@
       const identifier = document.getElementById('identifier').value.trim();
       const password   = document.getElementById('password').value;
 
-      if (!identifier) return showError('لطفاً ایمیل یا نام کاربری را وارد کنید');
+      if (!identifier) return showError('لطفاً ایمیل یا شماره تلفن یا نام کاربری را وارد کنید');
       if (!password)   return showError('رمز عبور الزامی است');
 
       const btn = document.getElementById('submit-btn');

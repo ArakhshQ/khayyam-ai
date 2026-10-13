@@ -3,37 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <meta name="csrf-token" content="{{ csrf_token() }}">
-  <script>
-    // Auto-attach the CSRF token to every same-page state-changing fetch()
-    // call, so individual functions below don't each need to remember to.
-    (function() {
-      var token = document.querySelector('meta[name="csrf-token"]').content;
-      var originalFetch = window.fetch;
-      window.fetch = function(url, options) {
-        options = options || {};
-        var method = (options.method || 'GET').toUpperCase();
-        if (method !== 'GET' && method !== 'HEAD') {
-          if (options.headers instanceof Headers) {
-            options.headers.set('X-CSRFToken', token);
-          } else {
-            options.headers = Object.assign({}, options.headers, {'X-CSRFToken': token});
-          }
-        }
-        return originalFetch(url, options);
-      };
-    })();
-  </script>
   <title>خیام</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  {{ csrf_meta_tag() }}
-  <script src="/static/main.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.15/purify.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.12.0/highlight.min.js"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.12.0/styles/atom-one-dark.min.css">
   <style>
     body {
       height: 100vh;
@@ -309,6 +283,20 @@
     #send-btn:hover { background: #e0bb60; transform: scale(1.05); }
     #send-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
 
+    .voice-action-btn {
+      width:34px; height:34px; border-radius:8px; border:1px solid var(--border);
+      background:transparent; color:var(--text); font-size:16px; cursor:pointer;
+      display:flex; align-items:center; justify-content:center; flex-shrink:0;
+      transition:all .15s;
+    }
+    .voice-action-btn:hover { background:var(--surface); border-color:var(--gold-dim); }
+    .voice-action-btn.recording { background:rgba(220,60,60,.14); border-color:#d9534f; color:#e66; animation:voicePulse 1.2s infinite; }
+    .voice-action-btn:disabled { opacity:.55; cursor:wait; }
+    .voice-status { max-width:700px; margin:7px auto 0; min-height:0; font-size:12px; color:var(--text-dim); text-align:center; }
+    .voice-status:empty { display:none; }
+    .voice-status.error { color:#e57373; }
+    @keyframes voicePulse { 50% { box-shadow:0 0 0 4px rgba(220,60,60,.12); } }
+
     .input-hint { text-align: center; font-size: 11px; color: var(--text-dim); margin-top: 7px; }
 
     .limit-notice {
@@ -335,7 +323,19 @@
       .input-area { position: fixed; bottom: 64px; left: 0; right: 0; }
       .chat-wrapper { padding-bottom: 160px; }
     }
-  </style>
+  
+    .speak-reply-btn {
+      display:inline-flex; align-items:center; gap:6px; margin-top:9px;
+      padding:5px 10px; border-radius:8px; border:1px solid var(--gold-dim);
+      background:rgba(201,168,76,0.07); color:var(--gold);
+      font-family:'Vazirmatn',sans-serif; font-size:12px; cursor:pointer;
+      transition:background .2s, border-color .2s;
+    }
+    .speak-reply-btn:hover { background:rgba(201,168,76,0.15); border-color:var(--gold); }
+    .speak-reply-btn:disabled { opacity:.65; cursor:wait; }
+    .speak-reply-btn .speak-icon { font-size:14px; }
+    .voice-disclosure { text-align:center; font-size:10px; color:var(--text-dim); margin-top:4px; }
+</style>
 </head>
 <body>
 
@@ -436,9 +436,14 @@
 <input type="file" id="camera-input" accept="image/*" capture="environment"
   style="display:none" onchange="handleFileSelect(this, 'image')"/>
         <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
+        <button type="button" id="voice-record-btn" class="voice-action-btn" onclick="toggleVoiceRecording()" title="ضبط پیام صوتی" aria-label="ضبط پیام صوتی">🎙</button>
+        <button type="button" id="voice-upload-btn" class="voice-action-btn" onclick="document.getElementById('voice-file-input').click()" title="بارگذاری فایل صوتی" aria-label="بارگذاری فایل صوتی">📁</button>
+        <input type="file" id="voice-file-input" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg,.mp4" hidden onchange="handleVoiceFile(this)" />
         <button id="send-btn" onclick="sendMessage()">↑</button>
       </div>
       <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
+      <p id="voice-status" class="voice-status" aria-live="polite">با ضبط صدا، فایل برای تبدیل به متن به OpenAI فرستاده می‌شود.</p>
+      <p class="voice-disclosure">صدای پاسخ‌ها توسط هوش مصنوعی تولید می‌شود.</p>
     </div>
   </div>
 
@@ -568,7 +573,7 @@
         const item     = document.createElement('div');
         item.className = 'conv-item' + (conv.id === currentConvId ? ' active' : '');
         item.innerHTML = `
-          <span class="conv-title">${escapeHtml(conv.title)}</span>
+          <span class="conv-title">${conv.title}</span>
           <span class="conv-date">${formatDate(conv.updated_at)}</span>
           <button class="conv-delete" onclick="deleteConv(event, ${conv.id})" title="حذف">✕</button>
         `;
@@ -652,30 +657,108 @@
 
   function appendBubble(role, text) {
     const messagesEl = document.getElementById('messages');
-    const welcome    = document.getElementById('welcome');
+    const welcome = document.getElementById('welcome');
     if (welcome) welcome.style.display = 'none';
 
-    const div      = document.createElement('div');
-    div.className  = `message ${role}`;
-
-    const avatar       = document.createElement('div');
-    avatar.className   = `avatar ${role}`;
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+    const avatar = document.createElement('div');
+    avatar.className = `avatar ${role}`;
     avatar.textContent = role === 'ai' ? 'خ' : '👤';
 
-    const bubble     = document.createElement('div');
+    const bubble = document.createElement('div');
     bubble.className = 'bubble';
-
+    const content = document.createElement('div');
+    content.className = 'bubble-content';
     if (role === 'ai') {
-      bubble.innerHTML = DOMPurify.sanitize(marked.parse(text));
-      bubble.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+      content.innerHTML = marked.parse(text);
+      bubble.appendChild(content);
+      const speakBtn = document.createElement('button');
+      speakBtn.type = 'button';
+      speakBtn.className = 'speak-reply-btn';
+      speakBtn.innerHTML = '<span class="speak-icon">🔊</span><span>شنیدن پاسخ</span>';
+      speakBtn.title = 'خواندن پاسخ با صدای تولیدشده توسط هوش مصنوعی';
+      speakBtn.addEventListener('click', () => speakReply(content.innerText, speakBtn));
+      bubble.appendChild(speakBtn);
     } else {
-      bubble.textContent = text;
+      content.textContent = text;
+      bubble.appendChild(content);
     }
 
     div.appendChild(avatar);
     div.appendChild(bubble);
     messagesEl.appendChild(div);
     scrollToBottom();
+  }
+
+  // Only generates audio after the user clicks a reply's speaker button.
+  let khayyamAudio = null;
+  let khayyamAudioUrl = null;
+  let khayyamActiveButton = null;
+
+  function resetSpeakButton(button) {
+    if (!button) return;
+    button.disabled = false;
+    button.innerHTML = '<span class="speak-icon">🔊</span><span>شنیدن پاسخ</span>';
+  }
+
+  async function speakReply(text, button) {
+    const cleanText = (text || '').replace(/\s+/g, ' ').trim();
+    if (!cleanText) return;
+
+    if (khayyamAudio && khayyamActiveButton === button) {
+      khayyamAudio.pause();
+      khayyamAudio.currentTime = 0;
+      khayyamAudio = null;
+      if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+      khayyamAudioUrl = null;
+      resetSpeakButton(button);
+      khayyamActiveButton = null;
+      return;
+    }
+
+    if (khayyamAudio) {
+      khayyamAudio.pause();
+      if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+      resetSpeakButton(khayyamActiveButton);
+    }
+
+    button.disabled = true;
+    button.innerHTML = '<span class="speak-icon">⏳</span><span>در حال ساخت صدا...</span>';
+    khayyamActiveButton = button;
+
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: cleanText})
+      });
+      if (!response.ok) {
+        let message = 'ساخت صدا ناموفق بود.';
+        try { const err = await response.json(); if (err.error) message = err.error; } catch (_) {}
+        throw new Error(message);
+      }
+      const audioBlob = await response.blob();
+      khayyamAudioUrl = URL.createObjectURL(audioBlob);
+      khayyamAudio = new Audio(khayyamAudioUrl);
+      khayyamAudio.onended = () => {
+        resetSpeakButton(button);
+        if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+        khayyamAudio = null; khayyamAudioUrl = null; khayyamActiveButton = null;
+      };
+      khayyamAudio.onerror = () => {
+        resetSpeakButton(button);
+        khayyamAudio = null; khayyamActiveButton = null;
+      };
+      await khayyamAudio.play();
+      button.disabled = false;
+      button.innerHTML = '<span class="speak-icon">⏹</span><span>توقف صدا</span>';
+    } catch (error) {
+      console.error('Khayyam TTS error:', error);
+      resetSpeakButton(button);
+      khayyamActiveButton = null;
+      alert(error.message || 'پخش صدا ناموفق بود. لطفاً دوباره تلاش کنید.');
+    }
   }
 
   function showTyping() {
@@ -741,12 +824,7 @@
   function clearFile() {
     selectedFile     = null;
     selectedFileType = null;
-    const imageInput  = document.getElementById('image-input');
-    const docInput    = document.getElementById('doc-input');
-    const cameraInput = document.getElementById('camera-input');
-    if (imageInput)  imageInput.value  = '';
-    if (docInput)    docInput.value    = '';
-    if (cameraInput) cameraInput.value = '';
+    document.getElementById('file-input').value  = '';
     document.getElementById('file-preview').classList.remove('visible');
     document.getElementById('img-preview').src   = '';
     document.getElementById('img-preview').style.display = 'none';
@@ -821,44 +899,6 @@
       const data = await res.json();
       removeTyping();
 
-      // guest daily quota exhausted — show signup/limit notice, no reply
-      if (data.limited) {
-        const resetDate = data.reset_ts ? new Date(data.reset_ts * 1000) : null;
-        let timeStr = '';
-        if (resetDate) {
-          const time     = resetDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-          timeStr = ` بازنشینی فردا ساعت ${time}.`;
-        }
-        const notice = document.createElement('div');
-        notice.style.cssText = `
-          background:var(--surface); border:1px solid var(--gold);
-          border-radius:14px; padding:20px; margin:8px auto;
-          max-width:500px; text-align:center; direction:rtl;`;
-        notice.innerHTML = `
-          <div style="font-size:28px;margin-bottom:10px;">⏰</div>
-          <div style="font-size:15px;font-weight:700;color:var(--gold);margin-bottom:8px;">
-            سقف روزانه مهمان تمام شد
-          </div>
-          <div style="font-size:13px;color:var(--text-dim);line-height:1.8;margin-bottom:16px;">
-            برای امروز به سقف رایگان رسیدی.${timeStr}
-            <br/>برای ادامه بدون محدودیت، ثبت‌نام کن — رایگان است.
-          </div>
-          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-            <a href="/register" style="
-              padding:8px 20px; border-radius:99px; background:var(--gold);
-              color:#0f0e0c; font-family:'Vazirmatn',sans-serif;
-              font-size:13px; font-weight:700; text-decoration:none;">
-              ثبت‌نام رایگان ↗
-            </a>
-          </div>`;
-        document.getElementById('messages').appendChild(notice);
-        scrollToBottom();
-        isLoading = false;
-        document.getElementById('send-btn').disabled = false;
-        input.focus();
-        return;
-      }
-
       // safety check
       if (!data.reply) {
         appendBubble('ai', 'متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.');
@@ -907,6 +947,153 @@
     isLoading = false;
     document.getElementById('send-btn').disabled = false;
     input.focus();
+  }
+
+  // ── VOICE INPUT: browser recording -> Flask -> OpenAI transcription ──
+  let khayyamRecorder = null;
+  let khayyamMicStream = null;
+  let khayyamAudioChunks = [];
+  let khayyamIsRecording = false;
+  let khayyamIsTranscribing = false;
+
+  function setVoiceStatus(message, isError = false) {
+    const status = document.getElementById('voice-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.classList.toggle('error', Boolean(isError));
+  }
+
+  function getRecordingMimeType() {
+    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg'];
+    return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+  }
+
+  async function toggleVoiceRecording() {
+    if (khayyamIsTranscribing) return;
+    if (khayyamIsRecording && khayyamRecorder) {
+      setVoiceStatus('ضبط متوقف شد؛ در حال تبدیل صدا به متن...');
+      try { khayyamRecorder.stop(); } catch (error) { console.error(error); }
+      return;
+    }
+
+    if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      setVoiceStatus('برای دسترسی به میکروفون، سایت باید با HTTPS باز شود. در Render از آدرس https استفاده کنید.', true);
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setVoiceStatus('این مرورگر اجازه ضبط مستقیم نمی‌دهد. از دکمه 📁 برای انتخاب فایل صوتی استفاده کنید.', true);
+      return;
+    }
+    if (!window.MediaRecorder) {
+      setVoiceStatus('ضبط مستقیم در این مرورگر پشتیبانی نمی‌شود. از دکمه 📁 برای انتخاب فایل صوتی استفاده کنید.', true);
+      return;
+    }
+
+    const recordBtn = document.getElementById('voice-record-btn');
+    recordBtn.disabled = true;
+    setVoiceStatus('در انتظار اجازه میکروفون...');
+    try {
+      khayyamMicStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false
+      });
+      const mimeType = getRecordingMimeType();
+      khayyamRecorder = new MediaRecorder(khayyamMicStream, mimeType ? { mimeType } : undefined);
+      khayyamAudioChunks = [];
+      khayyamRecorder.ondataavailable = event => {
+        if (event.data && event.data.size > 0) khayyamAudioChunks.push(event.data);
+      };
+      khayyamRecorder.onerror = event => {
+        console.error('MediaRecorder error:', event.error || event);
+        setVoiceStatus('هنگام ضبط خطا رخ داد. اجازه میکروفون و تنظیمات مرورگر را بررسی کنید.', true);
+        finishRecordingCleanup();
+      };
+      khayyamRecorder.onstop = async () => {
+        const actualType = khayyamRecorder && khayyamRecorder.mimeType ? khayyamRecorder.mimeType : (mimeType || 'audio/webm');
+        const blob = new Blob(khayyamAudioChunks, { type: actualType });
+        finishRecordingCleanup();
+        if (blob.size < 1000) {
+          setVoiceStatus('ضبط خیلی کوتاه یا خالی است. چند ثانیه صحبت کنید و دوباره امتحان کنید.', true);
+          return;
+        }
+        const ext = actualType.includes('mp4') ? 'mp4' : actualType.includes('ogg') ? 'ogg' : 'webm';
+        await transcribeVoiceBlob(blob, `khayyam-recording.${ext}`);
+      };
+      khayyamRecorder.start(250);
+      khayyamIsRecording = true;
+      recordBtn.classList.add('recording');
+      recordBtn.textContent = '⏹';
+      recordBtn.title = 'توقف ضبط';
+      recordBtn.setAttribute('aria-label', 'توقف ضبط');
+      setVoiceStatus('در حال ضبط... برای پایان، دوباره روی دکمه میکروفون بزنید.');
+    } catch (error) {
+      console.error('Microphone access failed:', error);
+      const messages = {
+        NotAllowedError: 'اجازه میکروفون رد شد. روی آیکون قفل کنار آدرس سایت بزنید و Microphone را Allow کنید.',
+        PermissionDeniedError: 'اجازه میکروفون رد شد. تنظیمات مجوز مرورگر را بررسی کنید.',
+        NotFoundError: 'میکروفونی پیدا نشد. میکروفون را وصل کنید و دوباره تلاش کنید.',
+        NotReadableError: 'میکروفون در برنامه دیگری استفاده می‌شود. برنامه‌های دیگر را ببندید.'
+      };
+      setVoiceStatus(messages[error.name] || 'دسترسی به میکروفون ناموفق بود. مجوز مرورگر و اتصال میکروفون را بررسی کنید.', true);
+      finishRecordingCleanup();
+    } finally {
+      if (!khayyamIsRecording) recordBtn.disabled = false;
+    }
+  }
+
+  function finishRecordingCleanup() {
+    khayyamIsRecording = false;
+    const btn = document.getElementById('voice-record-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('recording');
+      btn.textContent = '🎙';
+      btn.title = 'ضبط پیام صوتی';
+      btn.setAttribute('aria-label', 'ضبط پیام صوتی');
+    }
+    if (khayyamMicStream) {
+      khayyamMicStream.getTracks().forEach(track => track.stop());
+      khayyamMicStream = null;
+    }
+    khayyamRecorder = null;
+  }
+
+  function handleVoiceFile(input) {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (file) transcribeVoiceBlob(file, file.name || 'voice-recording.webm');
+  }
+
+  async function transcribeVoiceBlob(blob, filename) {
+    if (khayyamIsTranscribing) return;
+    khayyamIsTranscribing = true;
+    const recordBtn = document.getElementById('voice-record-btn');
+    const uploadBtn = document.getElementById('voice-upload-btn');
+    if (recordBtn) recordBtn.disabled = true;
+    if (uploadBtn) uploadBtn.disabled = true;
+    setVoiceStatus('در حال ارسال صدا و تبدیل آن به متن...');
+    try {
+      const formData = new FormData();
+      formData.append('audio', blob, filename);
+      const response = await fetch('/api/transcribe', { method: 'POST', body: formData });
+      let data = {};
+      try { data = await response.json(); } catch (_) {}
+      if (!response.ok) throw new Error(data.error || `خطای سرور (${response.status})`);
+      const transcript = (data.text || '').trim();
+      if (!transcript) throw new Error('متنی از صدا تشخیص داده نشد. دوباره ضبط کنید.');
+      const input = document.getElementById('user-input');
+      input.value = input.value.trim() ? `${input.value.trim()} ${transcript}` : transcript;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+      setVoiceStatus('متن آماده است. آن را بررسی یا ویرایش کنید و سپس دکمه ارسال را بزنید.');
+    } catch (error) {
+      console.error('Khayyam transcription error:', error);
+      setVoiceStatus(error.message || 'تبدیل صدا به متن ناموفق بود. دوباره امتحان کنید.', true);
+    } finally {
+      khayyamIsTranscribing = false;
+      if (recordBtn) recordBtn.disabled = false;
+      if (uploadBtn) uploadBtn.disabled = false;
+    }
   }
 
   // ── INPUT BEHAVIOR ──

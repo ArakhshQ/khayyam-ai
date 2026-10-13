@@ -8,8 +8,6 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  {{ csrf_meta_tag() }}
-  <script src="/static/main.js"></script>
   <style>
     * { box-sizing:border-box; }
     body { overflow-x:hidden; }
@@ -147,18 +145,6 @@
       display:flex; flex-direction:column; align-items:center; gap:8px;
       color:var(--text-dim); font-size:12px;
       animation:fadeUp 1s ease 1s both;
-    }
-    /* on short screens the hero content can grow taller than the viewport,
-       which pushes it right up against the absolutely-positioned hint below.
-       Below this height, drop the hint into normal flow instead so it always
-       keeps a real gap from the content above it, no matter how tall the
-       hero content gets. */
-    @media (max-height:750px) {
-      .hero { flex-direction:column; }
-      .scroll-hint {
-        position:static; transform:none;
-        margin-top:28px;
-      }
     }
     .scroll-arrow {
       width:20px; height:20px; border-right:2px solid var(--text-dim);

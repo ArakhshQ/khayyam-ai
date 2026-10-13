@@ -7,8 +7,6 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  {{ csrf_meta_tag() }}
-  <script src="/static/main.js"></script>
   <style>
     body { min-height:100vh; }
 
@@ -50,12 +48,6 @@
     .page-top p {
       font-size:16px; color:var(--text-dim);
       max-width:500px; margin:0 auto; line-height:1.8;
-    }
-    .monthly-note {
-      max-width:520px; margin:18px auto 0;
-      font-size:13px; color:var(--text-dim); line-height:1.9;
-      background:var(--surface); border:1px solid var(--border);
-      border-radius:12px; padding:14px 20px;
     }
 
     /* ── TABS ── */
@@ -181,46 +173,6 @@
     .contact h2 { font-size:20px; font-weight:700; margin-bottom:10px; }
     .contact p { font-size:14px; color:var(--text-dim); margin-bottom:24px; line-height:1.8; }
 
-    .call-us-number {
-      display:inline-block; margin-bottom:28px;
-      font-size:22px; font-weight:700; color:var(--gold);
-      text-decoration:none; direction:ltr;
-    }
-    .call-us-number:hover { text-decoration:underline; }
-
-    .call-divider {
-      display:flex; align-items:center; gap:12px;
-      color:var(--text-dim); font-size:13px;
-      margin:0 auto 24px; max-width:420px;
-    }
-    .call-divider::before, .call-divider::after {
-      content:''; flex:1; height:1px; background:var(--border);
-    }
-
-    .call-form {
-      max-width:380px; margin:0 auto; text-align:right;
-    }
-    .call-form-row { margin-bottom:14px; }
-    .call-form-row label {
-      display:block; font-size:13px; font-weight:600;
-      color:var(--text); margin-bottom:6px;
-    }
-    .call-form-row input, .call-form-row select {
-      width:100%; padding:11px 14px;
-      background:var(--surface2); border:1px solid var(--border);
-      border-radius:9px; color:var(--text);
-      font-family:'Vazirmatn',sans-serif; font-size:14px; outline:none;
-    }
-    .call-form-row input:focus, .call-form-row select:focus { border-color:var(--gold-dim); }
-    .call-form-row input::placeholder { color:var(--text-dim); opacity:0.75; }
-
-    .call-msg {
-      font-size:13px; border-radius:8px; padding:10px 14px;
-      margin-bottom:14px; display:none; line-height:1.8;
-    }
-    .call-msg.error   { background:var(--red);   color:var(--red-lt);   display:none; }
-    .call-msg.success { background:var(--green); color:var(--green-lt); display:none; }
-
     @keyframes fadeUp {
       from { opacity:0; transform:translateY(16px); }
       to   { opacity:1; transform:translateY(0); }
@@ -257,11 +209,6 @@
     <div class="page-badge">💎 پلان‌های خیام</div>
     <h1>هر سطحی که باشی<br/><span>پلانی برای تو داریم</span></h1>
     <p>از رایگان شروع کن. هر وقت خواستی ارتقا بده.</p>
-    <div class="monthly-note">
-      همه پلان‌های پولی ماهانه هستند و باید هر ماه تمدید شوند.
-      پلان چت عمومی و پلان استاد خیام کاملاً جدا از هم هستند —
-      می‌توانید همزمان هر دو را داشته باشید، و خریدن یکی دیگری را لغو نمی‌کند.
-    </div>
   </div>
 
   <!-- TABS -->
@@ -506,37 +453,11 @@
   <!-- CONTACT -->
   <div class="contact" id="contact">
     <h2>برای خرید با ما تماس بگیرید</h2>
-    <p>در افغانستان پرداخت آنلاین در دسترس نیست — با شماره زیر تماس بگیرید تا نحوه پرداخت را برایتان توضیح دهیم.</p>
-
-    <a href="tel:+93782408793" class="call-us-number">+93 78 240 8793</a>
-
-    <div class="call-divider"><span>یا فرم زیر را پر کنید تا ما با شما تماس بگیریم</span></div>
-
-    <div id="call-form-wrap" class="call-form">
-      <div id="call-error" class="call-msg error"></div>
-      <div id="call-success" class="call-msg success"></div>
-
-      <div class="call-form-row">
-        <label>نام شما</label>
-        <input type="text" id="call-name" placeholder="نام کامل"/>
-      </div>
-      <div class="call-form-row">
-        <label>شماره تماس</label>
-        <input type="tel" id="call-phone" placeholder="+93 7XX XXX XXX" style="direction:ltr;text-align:left;"/>
-      </div>
-      <div class="call-form-row">
-        <label>پلان مورد نظر</label>
-        <select id="call-plan">
-          <option value="basic">پایه — $10</option>
-          <option value="pro">حرفه‌ای — $20</option>
-          <option value="premium">پریمیوم — $40</option>
-          <option value="tutor_pro">استاد حرفه‌ای — $50 (فقط تدریس)</option>
-        </select>
-      </div>
-      <button class="plan-cta cta-paid" style="width:auto;padding:12px 32px;" onclick="submitCallRequest()">
-        درخواست تماس ←
-      </button>
-    </div>
+    <p>پس از تماس، پلان شما ظرف چند ساعت فعال می‌شود.</p>
+    <a href="mailto:info@khayyam.ai" class="plan-cta cta-paid"
+       style="display:inline-block;width:auto;padding:12px 32px;">
+      تماس با ما ←
+    </a>
   </div>
 
 </div>
@@ -559,45 +480,9 @@
   }
 
   function contactForPlan(planName) {
-    document.getElementById('contact').scrollIntoView({ behavior: 'smooth' });
-    const select = document.getElementById('call-plan');
-    if (planName.includes('استاد'))      select.value = 'tutor_pro';
-    else if (planName.includes('پایه'))  select.value = 'basic';
-    else if (planName.includes('حرفه'))  select.value = 'pro';
-    else if (planName.includes('پریمیوم')) select.value = 'premium';
-  }
-
-  async function submitCallRequest() {
-    const name  = document.getElementById('call-name').value.trim();
-    const phone = document.getElementById('call-phone').value.trim();
-    const plan  = document.getElementById('call-plan').value;
-    const errBox = document.getElementById('call-error');
-    const okBox  = document.getElementById('call-success');
-    errBox.style.display = 'none';
-    okBox.style.display  = 'none';
-
-    if (!name)  { errBox.textContent = 'لطفاً نام خود را بنویسید'; errBox.style.display = 'block'; return; }
-    if (!phone) { errBox.textContent = 'لطفاً شماره تماس خود را بنویسید'; errBox.style.display = 'block'; return; }
-
-    try {
-      const res  = await fetch('/api/call-request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone, plan })
-      });
-      const data = await res.json();
-      if (data.success) {
-        document.getElementById('call-form-wrap').style.display = 'none';
-        okBox.textContent = 'درخواست شما ثبت شد. به زودی با شما تماس می‌گیریم.';
-        okBox.style.display = 'block';
-      } else {
-        errBox.textContent = data.error || 'خطایی رخ داد';
-        errBox.style.display = 'block';
-      }
-    } catch (err) {
-      errBox.textContent = 'خطای اتصال. دوباره امتحان کنید.';
-      errBox.style.display = 'block';
-    }
+    const subject = encodeURIComponent(`درخواست پلان ${planName}`);
+    const body    = encodeURIComponent(`سلام،\nمی‌خواهم پلان ${planName} را خریداری کنم.\nنام کاربری من: `);
+    window.location.href = `mailto:info@khayyam.ai?subject=${subject}&body=${body}`;
   }
 
   async function checkAuth() {

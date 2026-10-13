@@ -1,69 +1,26 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for
+from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge, GuestUsage, GuestGlobalUsage, AccountToken, CallRequest, TutorTopicChat
+from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge
 from functools import wraps
 from openai import OpenAI
 from groq import Groq
 from dotenv import load_dotenv
 from auth import register_user, login_user_by_username
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import update as sa_update
-from flask_limiter import Limiter
-from flask_wtf.csrf import CSRFProtect, CSRFError
-from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import json
 import re
 import base64
-import hashlib
-import secrets
-import smtplib
-import urllib.request
-import urllib.error
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from io import BytesIO
 
 load_dotenv()
 
 app = Flask(__name__)
-# Render terminates SSL at its edge and forwards to the app over plain
-# HTTP, so without this, Flask thinks every request arrived over HTTP -
-# breaking request.is_secure (used below by CSRF's referrer check) and any
-# future code that checks the request scheme. x_for=0 because
-# get_client_ip() below already parses X-Forwarded-For itself.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=0, x_proto=1)
-# ADMIN_PASSWORD is an admin login credential, not a session-signing key -
-# these are different secrets and shouldn't share a value. Set a real
-# SECRET_KEY in your environment; the random fallback still works but will
-# invalidate sessions on every restart, so set it explicitly in production.
-app.secret_key = os.getenv("SECRET_KEY") or os.getenv("ADMIN_PASSWORD", "fallback-secret")
+app.secret_key = os.getenv("ADMIN_PASSWORD", "fallback-secret")
 database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
-
-# ── SESSION COOKIE SECURITY ──
-# RENDER is set to "true" automatically on Render, and unset locally - used
-# here so Secure cookies (HTTPS-only) are on in production but don't
-# silently break local dev over plain http.
-IS_PRODUCTION = bool(os.getenv("RENDER"))
-app.config['SESSION_COOKIE_SECURE']   = IS_PRODUCTION
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-
-# ── CSRF PROTECTION ──
-# No time limit: these are long-lived chat/tutor sessions, and a token that
-# silently expires mid-session (while the tab stays open) would just look
-# like a random broken request to the user. The token is still tied to the
-# session and invalidated on logout, so this isn't a meaningful weakening.
-app.config['WTF_CSRF_TIME_LIMIT'] = None
-csrf = CSRFProtect(app)
-
-@app.errorhandler(CSRFError)
-def csrf_error(e):
-    if request.path.startswith('/api/'):
-        return jsonify({"error": "csrf_invalid", "reply": "نشست شما منقضی شده. صفحه را دوباره بارگذاری کنید."}), 400
-    return jsonify({"error": "csrf_invalid"}), 400
 
 db.init_app(app)
 
@@ -71,466 +28,11 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login_page'
 
-@login_manager.unauthorized_handler
-def unauthorized():
-    # API routes should get a JSON 401, not an HTML redirect to /login
-    if request.path.startswith('/api/'):
-        return jsonify({"error": "login_required"}), 401
-    return redirect(url_for('login_page'))
-
-# Paths a logged-in, not-yet-verified user may still reach. Everything else
-# (chat, tutor, profile, pricing, the homepage, every other /api/ route)
-# is blocked until they verify - this re-checks on every single request,
-# not just once at registration, so closing the tab and coming back later
-# still enforces it. Guests (current_user not authenticated at all) are
-# completely unaffected - this only ever applies to a logged-in session.
-VERIFY_EXEMPT_PATHS = {
-    '/verify-pending', '/verify-email', '/logout',
-    '/api/resend-verification', '/api/me',
-}
-
-@app.before_request
-def enforce_email_verification():
-    if not current_user.is_authenticated:
-        return  # guests are never gated - they have their own quota system
-    if current_user.is_admin:
-        return  # never let this policy lock out the site's own admin account
-    if current_user.is_verified:
-        return
-    if request.path.startswith('/static/'):
-        return
-    if request.path in VERIFY_EXEMPT_PATHS:
-        return
-
-    if request.path.startswith('/api/'):
-        return jsonify({"error": "verify_required", "message": "لطفاً ابتدا ایمیل خود را تایید کنید"}), 403
-    return redirect(url_for('verify_pending_page'))
-
-@app.before_request
-def check_plan_expiry():
-    """
-    Runs on every authenticated request. If either of a user's plans has
-    quietly passed its expiry date since they were last active, this
-    catches and corrects it before the request is handled - so a request
-    that would otherwise be served against a stale/expired paid plan
-    instead sees the corrected (free) plan straight away.
-    """
-    if current_user.is_authenticated:
-        check_and_expire_plans(current_user)
-
-def get_client_ip():
-    """
-    Render (like most PaaS hosts) puts the app behind a reverse proxy, so
-    request.remote_addr is the proxy's IP, not the visitor's. The real
-    client IP is the first entry in X-Forwarded-For.
-    """
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.remote_addr or "unknown"
-
-limiter = Limiter(
-    app=app,
-    key_func=get_client_ip,
-    default_limits=[],
-    storage_uri="memory://"
-    # NOTE: in-memory storage only works correctly with a single web
-    # process/dyno. If you scale Render to more than one instance, switch
-    # this to a Redis storage_uri or the per-IP limits below become
-    # per-instance instead of global.
-)
-
-@app.errorhandler(429)
-def rate_limit_exceeded(e):
-    if request.path.startswith('/api/'):
-        return jsonify({
-            "error": "too_many_requests",
-            "reply": "لطفاً کمی آهسته‌تر پیام بفرست — تعداد درخواست‌ها زیاد است."
-        }), 429
-    return e
-
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 groq_client   = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 KNOWLEDGE_FILE = "knowledge.json"
 EXAMPLES_FILE  = "examples.json"
-
-# ── GUEST QUOTA CONFIG ──
-GUEST_DAILY_TOKEN_LIMIT = int(os.getenv("GUEST_DAILY_TOKEN_LIMIT", 5000))
-# Sitewide ceiling across ALL guests combined, per day - the real defense
-# against someone rotating IPs to dodge the per-IP limit above.
-GUEST_GLOBAL_DAILY_CAP  = int(os.getenv("GUEST_GLOBAL_DAILY_CAP", 200000))
-GUEST_MODEL             = "gpt-5.4-mini"
-_IP_SALT                = os.getenv("SECRET_KEY") or app.secret_key
-
-def hash_ip(ip):
-    """Store a salted hash instead of the raw IP - enough to rate-limit by, not enough to be a PII log of visitor IPs."""
-    return hashlib.sha256(f"{_IP_SALT}:{ip}".encode()).hexdigest()
-
-def today_key():
-    return datetime.utcnow().strftime("%Y-%m-%d")
-
-def next_utc_midnight_ts():
-    now      = datetime.utcnow()
-    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return tomorrow.replace(tzinfo=timezone.utc).timestamp()
-
-def _get_or_create_guest_row(model, **filters):
-    """
-    get_or_create that's safe against two concurrent first-ever requests
-    both trying to INSERT the same row at once — a plain "query, then
-    insert if missing" isn't atomic, so under load two threads can both
-    see "missing" and both attempt the insert. Only one insert wins (the
-    unique constraint rejects the other with an IntegrityError); on that
-    error we just roll back and re-fetch the row the winner created.
-    """
-    row = model.query.filter_by(**filters).first()
-    if row:
-        return row
-    try:
-        row = model(tokens_used=0, **filters)
-        db.session.add(row)
-        db.session.commit()
-        return row
-    except Exception:
-        db.session.rollback()
-        return model.query.filter_by(**filters).first()
-
-def reserve_guest_tokens(estimate):
-    """
-    Atomically reserves `estimate` tokens against the per-IP daily cap AND
-    the sitewide daily cap, BEFORE we spend money calling the model.
-    Returns (allowed, ip_hash, date_key).
-
-    Uses conditional UPDATE...WHERE statements (not read-then-write) so two
-    concurrent requests from the same guest can't both pass the check before
-    either one commits - the DB evaluates the WHERE clause against the
-    latest row value at update time, so this is race-safe under both
-    SQLite and Postgres without needing explicit locks.
-    """
-    ip_hash  = hash_ip(get_client_ip())
-    date_key = today_key()
-
-    try:
-        row  = _get_or_create_guest_row(GuestUsage, ip_hash=ip_hash, date_key=date_key)
-        grow = _get_or_create_guest_row(GuestGlobalUsage, date_key=date_key)
-
-        result_ip = db.session.execute(
-            sa_update(GuestUsage)
-              .where(GuestUsage.id == row.id,
-                     GuestUsage.tokens_used + estimate <= GUEST_DAILY_TOKEN_LIMIT)
-              .values(tokens_used=GuestUsage.tokens_used + estimate, updated_at=datetime.utcnow())
-        )
-        if result_ip.rowcount == 0:
-            db.session.rollback()
-            return False, ip_hash, date_key
-
-        result_global = db.session.execute(
-            sa_update(GuestGlobalUsage)
-              .where(GuestGlobalUsage.id == grow.id,
-                     GuestGlobalUsage.tokens_used + estimate <= GUEST_GLOBAL_DAILY_CAP)
-              .values(tokens_used=GuestGlobalUsage.tokens_used + estimate, updated_at=datetime.utcnow())
-        )
-        if result_global.rowcount == 0:
-            # global cap hit - undo the per-IP reservation we just made
-            db.session.execute(
-                sa_update(GuestUsage).where(GuestUsage.id == row.id)
-                  .values(tokens_used=GuestUsage.tokens_used - estimate)
-            )
-            db.session.commit()
-            return False, ip_hash, date_key
-
-        db.session.commit()
-        return True, ip_hash, date_key
-    except Exception as e:
-        print(f"reserve_guest_tokens error: {e}")
-        db.session.rollback()
-        # fail CLOSED: if the quota system itself breaks, block the guest
-        # request rather than silently allow unlimited spend
-        return False, None, None
-
-def true_up_guest_tokens(ip_hash, date_key, estimate, actual):
-    """Corrects the reservation once the API tells us the real token count."""
-    if not ip_hash or actual is None:
-        return
-    delta = actual - estimate
-    if delta == 0:
-        return
-    try:
-        db.session.execute(
-            sa_update(GuestUsage)
-              .where(GuestUsage.ip_hash == ip_hash, GuestUsage.date_key == date_key)
-              .values(tokens_used=GuestUsage.tokens_used + delta)
-        )
-        db.session.execute(
-            sa_update(GuestGlobalUsage)
-              .where(GuestGlobalUsage.date_key == date_key)
-              .values(tokens_used=GuestGlobalUsage.tokens_used + delta)
-        )
-        db.session.commit()
-    except Exception as e:
-        print(f"true_up_guest_tokens error: {e}")
-        db.session.rollback()
-
-# ── EMAIL (verification + password reset) ──
-SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_FROM = os.getenv("SMTP_FROM") or SMTP_USER
-SITE_URL  = os.getenv("SITE_URL", "http://127.0.0.1:5000")  # e.g. https://khayyam.ai in production
-
-def send_email(to_email, subject, html_body):
-    """
-    Sends a transactional email over SMTP. Works with any SMTP provider
-    (SendGrid, Mailgun, Postmark, Resend, Amazon SES, or even Gmail for
-    testing) - just set SMTP_HOST/PORT/USER/PASSWORD/FROM as env vars.
-    Never raises: a broken email config should not break registration or
-    password reset, it should just log and let the caller continue.
-    """
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
-        print(f"send_email skipped (SMTP not configured) - would have sent '{subject}' to {to_email}")
-        return False
-    try:
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From']    = SMTP_FROM
-        msg['To']      = to_email
-        msg.attach(MIMEText(html_body, 'html', 'utf-8'))
-
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
-        return True
-    except Exception as e:
-        print(f"send_email error sending to {to_email}: {e}")
-        return False
-
-def create_account_token(user_id, purpose, ttl_minutes=60):
-    """
-    Creates a one-time token for the given purpose ('verify_email' or
-    'reset_password'), invalidating any earlier unused tokens of the same
-    purpose for this user first so old links stop working once a new one
-    is requested. Returns the RAW token - only this return value should
-    ever be emailed; the database only ever sees its hash.
-    """
-    raw_token  = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-
-    db.session.execute(
-        sa_update(AccountToken)
-          .where(AccountToken.user_id == user_id, AccountToken.purpose == purpose,
-                 AccountToken.used_at.is_(None))
-          .values(used_at=datetime.utcnow())
-    )
-    db.session.add(AccountToken(
-        user_id=user_id, token_hash=token_hash, purpose=purpose,
-        expires_at=datetime.utcnow() + timedelta(minutes=ttl_minutes)
-    ))
-    db.session.commit()
-    return raw_token
-
-def consume_account_token(raw_token, purpose):
-    """
-    Validates and burns a token in one step. Returns the user_id on
-    success, or None if the token is missing, wrong purpose, expired, or
-    already used. A token can only ever be consumed once.
-    """
-    if not raw_token:
-        return None
-    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    row = AccountToken.query.filter_by(token_hash=token_hash, purpose=purpose).first()
-    if not row or row.used_at is not None or row.expires_at < datetime.utcnow():
-        return None
-    row.used_at = datetime.utcnow()
-    db.session.commit()
-    return row.user_id
-
-def build_email_html(heading, body_lines, button_text, button_link, footer_text):
-    """
-    Shared branded email shell for every transactional email (verification,
-    password reset, and any future ones). Uses a table-based layout rather
-    than flexbox/grid - email clients (particularly Outlook desktop) have
-    very inconsistent CSS support, and tables are the one layout method
-    that renders reliably everywhere. Colors match the site's own palette
-    exactly (static/style.css --gold/--bg/--surface/--border).
-    """
-    body_html = "".join(f'<p style="margin:0 0 10px;font-size:14px;line-height:2;color:#a89f8c;">{line}</p>' for line in body_lines)
-    return f"""
-<div dir="rtl" style="background:#0f0e0c;padding:40px 16px;margin:0;font-family:Tahoma,Arial,sans-serif;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" align="center" style="max-width:460px;margin:0 auto;background:#1a1814;border:1px solid #2e2a22;border-radius:14px;overflow:hidden;">
-    <tr>
-      <td style="padding:32px 32px 4px;text-align:center;">
-        <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 22px;">
-          <tr>
-            <td style="width:40px;height:40px;border:1.5px solid #c9a84c;border-radius:10px;text-align:center;vertical-align:middle;color:#c9a84c;font-size:19px;font-weight:bold;font-family:Tahoma,Arial,sans-serif;">خ</td>
-            <td style="padding-right:10px;color:#c9a84c;font-size:19px;font-weight:bold;font-family:Tahoma,Arial,sans-serif;">خیام</td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-    <tr>
-      <td style="padding:4px 36px 36px;text-align:center;">
-        <h1 style="margin:0 0 16px;font-size:19px;color:#f2efe8;font-weight:700;">{heading}</h1>
-        {body_html}
-        <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:24px auto 0;">
-          <tr>
-            <td style="background:#c9a84c;border-radius:9px;">
-              <a href="{button_link}" style="display:inline-block;padding:14px 40px;color:#0f0e0c;font-size:15px;font-weight:700;text-decoration:none;font-family:Tahoma,Arial,sans-serif;">{button_text}</a>
-            </td>
-          </tr>
-        </table>
-        <p style="margin:26px 0 0;font-size:12px;color:#5c574a;line-height:1.9;">
-          اگر دکمه کار نکرد، این لینک را در مرورگر خود باز کنید:<br/>
-          <a href="{button_link}" style="color:#8a6e2f;word-break:break-all;">{button_link}</a>
-        </p>
-      </td>
-    </tr>
-    <tr>
-      <td style="padding:18px 32px;background:#141210;border-top:1px solid #2e2a22;text-align:center;">
-        <p style="margin:0;font-size:12px;color:#6b6558;line-height:1.8;">{footer_text}</p>
-      </td>
-    </tr>
-  </table>
-</div>"""
-
-def send_verification_email(user):
-    if not user.email:
-        return
-    token = create_account_token(user.id, 'verify_email', ttl_minutes=60 * 24)
-    link  = f"{SITE_URL}/verify-email?token={token}"
-    html  = build_email_html(
-        heading="تایید ایمیل",
-        body_lines=[
-            f"سلام {user.username}،",
-            "برای تایید ایمیل خود روی دکمه زیر کلیک کنید.",
-            "این لینک تا ۲۴ ساعت معتبر است."
-        ],
-        button_text="تایید ایمیل",
-        button_link=link,
-        footer_text="اگر این حساب را نساخته‌اید، این ایمیل را نادیده بگیرید."
-    )
-    send_email(user.email, "تایید ایمیل — خیام", html)
-
-def send_password_reset_email(user):
-    token = create_account_token(user.id, 'reset_password', ttl_minutes=30)
-    link  = f"{SITE_URL}/reset-password?token={token}"
-    html  = build_email_html(
-        heading="بازیابی رمز عبور",
-        body_lines=[
-            f"سلام {user.username}،",
-            "برای تعیین رمز عبور جدید روی دکمه زیر کلیک کنید.",
-            "این لینک تا ۳۰ دقیقه معتبر است."
-        ],
-        button_text="تعیین رمز عبور جدید",
-        button_link=link,
-        footer_text="اگر این درخواست را شما نفرستاده‌اید، این ایمیل را نادیده بگیرید — رمز عبور شما تغییر نخواهد کرد."
-    )
-    send_email(user.email, "بازیابی رمز عبور — خیام", html)
-
-PLAN_DISPLAY_NAMES = {
-    'free': 'رایگان', 'basic': 'پایه', 'pro': 'حرفه‌ای',
-    'premium': 'پریمیوم', 'tutor_pro': 'استاد حرفه‌ای',
-}
-
-def send_plan_granted_email(user, plan_type, plan_value, expires_at):
-    """plan_type is 'chat' or 'tutor' - used only for the email copy."""
-    if not user.email:
-        return
-    section_name = "چت عمومی" if plan_type == 'chat' else "بخش تدریس (استاد خیام)"
-    plan_label    = PLAN_DISPLAY_NAMES.get(plan_value, plan_value)
-    expiry_str    = expires_at.strftime('%Y-%m-%d') if expires_at else None
-    body_lines = [
-        f"سلام {user.username}،",
-        f"پلان «{plan_label}» برای {section_name} روی حساب شما فعال شد.",
-    ]
-    if expiry_str:
-        body_lines.append(f"این پلان ماهانه است و در {expiry_str} به پایان می‌رسد. برای ادامه استفاده، باید آن را دوباره تمدید کنید.")
-    html = build_email_html(
-        heading="پلان شما فعال شد",
-        body_lines=body_lines,
-        button_text="مشاهده حساب کاربری",
-        button_link=f"{SITE_URL}/profile",
-        footer_text="اگر سوالی دارید، با پشتیبانی خیام تماس بگیرید."
-    )
-    send_email(user.email, "پلان شما فعال شد — خیام", html)
-
-def send_plan_expired_email(user, plan_type, plan_value):
-    if not user.email:
-        return
-    section_name = "چت عمومی" if plan_type == 'chat' else "بخش تدریس (استاد خیام)"
-    plan_label    = PLAN_DISPLAY_NAMES.get(plan_value, plan_value)
-    html = build_email_html(
-        heading="پلان شما به پایان رسید",
-        body_lines=[
-            f"سلام {user.username}،",
-            f"پلان «{plan_label}» شما برای {section_name} به پایان رسیده و حساب شما به پلان رایگان تغییر کرد.",
-            "هر وقت خواستید می‌توانید دوباره آن را فعال کنید."
-        ],
-        button_text="تمدید پلان",
-        button_link=f"{SITE_URL}/pricing",
-        footer_text="این یک اطلاع‌رسانی خودکار است."
-    )
-    send_email(user.email, "پلان شما به پایان رسید — خیام", html)
-
-def grant_plan(user, plan_type, plan_value, ttl_days=30):
-    """
-    Sets a user's chat_plan or tutor_plan, with a monthly expiry (unless
-    resetting to 'free', which has no expiry). Sends the "plan activated"
-    email. This is the single place plan-granting happens, so both the
-    admin panel and any future payment-webhook integration call the same
-    logic instead of duplicating it.
-    """
-    expires_at = None if plan_value == 'free' else datetime.utcnow() + timedelta(days=ttl_days)
-    if plan_type == 'chat':
-        user.chat_plan = plan_value
-        user.chat_plan_expires_at = expires_at
-    else:
-        user.tutor_plan = plan_value
-        user.tutor_plan_expires_at = expires_at
-    db.session.commit()
-
-    if plan_value != 'free':
-        try:
-            send_plan_granted_email(user, plan_type, plan_value, expires_at)
-        except Exception as e:
-            print(f"send_plan_granted_email failed for user {user.id}: {e}")
-
-def check_and_expire_plans(user):
-    """
-    Lazily checks whether either of a user's plans has passed its expiry
-    date, downgrading it to free and emailing them if so. Called on every
-    authenticated request (see before_request hook below) rather than via
-    a separate cron job - the moment a user's plan has expired, the very
-    next request they make (or any request while they're logged in) will
-    catch and correct it, without needing a scheduler running on Render.
-    """
-    now = datetime.utcnow()
-    changed = False
-
-    if user.chat_plan != 'free' and user.chat_plan_expires_at and user.chat_plan_expires_at < now:
-        expired_plan = user.chat_plan
-        user.chat_plan = 'free'
-        user.chat_plan_expires_at = None
-        changed = True
-        try:
-            send_plan_expired_email(user, 'chat', expired_plan)
-        except Exception as e:
-            print(f"send_plan_expired_email (chat) failed for user {user.id}: {e}")
-
-    if user.tutor_plan != 'free' and user.tutor_plan_expires_at and user.tutor_plan_expires_at < now:
-        expired_plan = user.tutor_plan
-        user.tutor_plan = 'free'
-        user.tutor_plan_expires_at = None
-        changed = True
-        try:
-            send_plan_expired_email(user, 'tutor', expired_plan)
-        except Exception as e:
-            print(f"send_plan_expired_email (tutor) failed for user {user.id}: {e}")
-
-    if changed:
-        db.session.commit()
 
 PLAN_CONFIG = {
     'free': [
@@ -656,47 +158,6 @@ def pick_model_and_update(user_id, plan, tokens_to_use):
     last = cascade[-1]
     return last['model'], last['tier'], None, True
 
-def true_up_registered_tokens(user_id, tier, estimate, actual):
-    """
-    Corrects a registered user's tier-N counter once we know the real token
-    count from the API response, instead of leaving it at the pre-call
-    estimate. Mirrors true_up_guest_tokens but for the tiered plan pools.
-    """
-    if user_id is None or actual is None or tier is None:
-        return
-    delta = actual - estimate
-    if delta == 0:
-        return
-    try:
-        usage = get_or_create_usage(user_id)
-        if not usage:
-            return
-        col = f'tier{tier}_tokens'
-        setattr(usage, col, max(0, (getattr(usage, col, 0) or 0) + delta))
-        usage.updated_at = datetime.utcnow()
-        db.session.commit()
-    except Exception as e:
-        print(f"true_up_registered_tokens error: {e}")
-        db.session.rollback()
-
-def true_up_registered_tutor_tokens(user_id, col, estimate, actual):
-    if user_id is None or actual is None or col is None:
-        return
-    delta = actual - estimate
-    if delta == 0:
-        return
-    try:
-        usage = get_or_create_usage(user_id)
-        if not usage:
-            return
-        tokens_col = f'{col}_tokens'
-        setattr(usage, tokens_col, max(0, (getattr(usage, tokens_col, 0) or 0) + delta))
-        usage.updated_at = datetime.utcnow()
-        db.session.commit()
-    except Exception as e:
-        print(f"true_up_registered_tutor_tokens error: {e}")
-        db.session.rollback()
-
 def get_usage_summary(user_id, plan):
     cascade = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
     usage   = get_or_create_usage(user_id)
@@ -742,23 +203,15 @@ TUTOR_PLAN_CONFIG = {
     ],
 }
 
-# All plan values a user's `plan` column can actually hold. tutor_pro isn't
-# in PLAN_CONFIG (it intentionally gets free-tier general chat - it's a
-# tutor-only upgrade), so anything validating a plan value against "is this
-# real" should check this set, not PLAN_CONFIG alone.
-VALID_PLANS = set(PLAN_CONFIG.keys()) | set(TUTOR_PLAN_CONFIG.keys())
-
 def pick_tutor_model(user_id, plan, tokens_to_use):
     """
-    Returns (model, reset_ts, is_limited, col)
+    Returns (model, reset_ts, is_limited)
     is_limited=True means hard stop — no fallback, show upgrade message
-    col is the usage column that was charged, needed later to true it up
-    with the real token count once the API responds.
     """
     cascade = TUTOR_PLAN_CONFIG.get(plan, TUTOR_PLAN_CONFIG['free'])
     usage   = get_or_create_usage(user_id)
     if not usage:
-        return cascade[0]['model'], None, False, None
+        return cascade[0]['model'], None, False
 
     for tier in cascade:
         model  = tier['model']
@@ -782,45 +235,38 @@ def pick_tutor_model(user_id, plan, tokens_to_use):
             usage.updated_at = datetime.utcnow()
             db.session.commit()
             reset_ts = get_reset_timestamp(reset_at, period)
-            return model, reset_ts, False, col
+            return model, reset_ts, False
 
         # this tier is exhausted — hard stop
         reset_ts = get_reset_timestamp(reset_at, period)
-        return None, reset_ts, True, None
+        return None, reset_ts, True
 
-    return None, None, True, None
-
+    return None, None, True
 def smart_tutor_chat(system_prompt, history, user_message, user_id=None, plan='free', temperature=0.7):
     """
     Returns (reply, is_limited, reset_ts)
     is_limited=True means token limit hit — frontend shows upgrade message
-    (used for both the registered-plan cascade and the guest daily quota)
     """
     messages         = history + [{"role": "user", "content": user_message}]
     estimated_tokens = len(user_message) // 4 + 400
 
     if user_id is None:
-        # guest — capped daily quota, shared with general chat, same as smart_chat
-        allowed, ip_hash, date_key = reserve_guest_tokens(estimated_tokens)
-        if not allowed:
-            return None, True, next_utc_midnight_ts()
+        # guest — use nano with no tracking, limited responses
         try:
-            reply, actual = call_openai_model(GUEST_MODEL, system_prompt, messages, temperature)
-            true_up_guest_tokens(ip_hash, date_key, estimated_tokens, actual)
+            reply, _ = call_openai_model('gpt-5.4-nano', system_prompt, messages, temperature)
             return reply, False, None
         except Exception as e:
             print(f"Tutor guest error: {e}")
             return "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید.", False, None
 
-    model, reset_ts, is_limited, col = pick_tutor_model(user_id, plan, estimated_tokens)
+    model, reset_ts, is_limited = pick_tutor_model(user_id, plan, estimated_tokens)
     print(f"TUTOR: user={user_id} plan={plan} model={model} limited={is_limited}")
 
     if is_limited:
         return None, True, reset_ts
 
     try:
-        reply, actual = call_openai_model(model, system_prompt, messages, temperature)
-        true_up_registered_tutor_tokens(user_id, col, estimated_tokens, actual)
+        reply, _ = call_openai_model(model, system_prompt, messages, temperature)
         return reply, False, reset_ts
     except Exception as e:
         print(f"Tutor OpenAI error with {model}: {e}")
@@ -1008,7 +454,6 @@ def build_system_prompt(user_memories=None):
 ۵. کلمات مهم را **بولد** کن
 ۶. جواب‌های کوتاه را بدون فرمت بنویس
 ۷. هرگز یک بلوک طولانی بدون تقسیم‌بندی ننویس
-۸. اگر کد می‌نویسی (هر زبان برنامه‌نویسی)، همیشه آن را داخل بلوک کد با سه بک‌تیک بگذار و نام زبان را جلوی بک‌تیک اول بنویس، مثلاً ```python — کد را هرگز وسط متن معمولی و بدون بلوک ننویس، حتی یک خط کوتاه
 
 ====================
 حالت ویژه: شعر
@@ -1146,20 +591,16 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     estimated_tokens = len(user_message) // 4 + 400
 
     if user_id is None:
-        allowed, ip_hash, date_key = reserve_guest_tokens(estimated_tokens)
-        if not allowed:
-            return None, False, next_utc_midnight_ts(), None, True
         try:
-            reply, actual = call_openai_model(
-                GUEST_MODEL, system_prompt, messages,
+            reply, _ = call_openai_model(
+                'gpt-5.4-nano', system_prompt, messages,
                 temperature, image_b64, image_type
             )
-            true_up_guest_tokens(ip_hash, date_key, estimated_tokens, actual)
-            return reply, False, None, GUEST_MODEL, False
+            return reply, False, None, 'gpt-5.4-nano'
         except Exception as e:
             print(f"Guest OpenAI error: {e}")
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, False, None, 'llama-4-scout', False
+            return reply, False, None, 'llama-4-scout'
 
     model, tier, reset_ts, switched = pick_model_and_update(
         user_id, plan, estimated_tokens
@@ -1169,27 +610,26 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     if 'llama' in model or 'gpt-oss' in model or 'qwen' in model:
         try:
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, switched, reset_ts, model, False
+            return reply, switched, reset_ts, model
         except Exception as e:
             print(f"Groq error: {e}")
-            return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", switched, reset_ts, model, False
+            return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", switched, reset_ts, model
 
     try:
-        reply, actual = call_openai_model(
+        reply, _ = call_openai_model(
             model, system_prompt, messages,
             temperature, image_b64, image_type
         )
-        true_up_registered_tokens(user_id, tier, estimated_tokens, actual)
         print(f"DEBUG: OpenAI replied with {model}")
-        return reply, switched, reset_ts, model, False
+        return reply, switched, reset_ts, model
     except Exception as e:
         print(f"OpenAI error with {model}: {e} — falling back to Groq")
         try:
             reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, switched, reset_ts, 'llama-4-scout', False
+            return reply, switched, reset_ts, 'llama-4-scout'
         except Exception as e2:
             print(f"Groq fallback failed: {e2}")
-            return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه دیگر امتحان کنید.", switched, reset_ts, 'error', False
+            return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه دیگر امتحان کنید.", switched, reset_ts, 'error'
 
 # ── DOCUMENT EXTRACTION ──
 def extract_text_from_file(file_bytes, filename):
@@ -1243,35 +683,26 @@ def pricing_page():
     return render_template("pricing.html")
 
 @app.route("/api/register", methods=["POST"])
-@limiter.limit("10 per hour")
 def api_register():
     data     = request.get_json()
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     email    = (data.get("email") or "").strip() or None
+    phone    = (data.get("phone") or "").strip() or None
 
     if len(username) < 3:
         return jsonify({"success": False, "error": "نام کاربری باید حداقل ۳ حرف باشد"})
     if len(password) < 6:
         return jsonify({"success": False, "error": "رمز عبور باید حداقل ۶ حرف باشد"})
-    if not email:
-        return jsonify({"success": False, "error": "ایمیل الزامی است"})
 
-    user, error = register_user(username, password, email, phone=None)
+    user, error = register_user(username, password, email, phone)
     if error:
         return jsonify({"success": False, "error": error})
-
-    try:
-        send_verification_email(user)
-    except Exception as e:
-        print(f"verification email failed for user {user.id}: {e}")
-        # registration still succeeds - they can resend from the verify-pending page
 
     login_user(user)
     return jsonify({"success": True})
 
 @app.route("/api/login", methods=["POST"])
-@limiter.limit("20 per hour")
 def api_login():
     data       = request.get_json()
     identifier = data.get("identifier", "").strip()
@@ -1280,100 +711,6 @@ def api_login():
     user, error = login_user_by_username(identifier, password)
     if error:
         return jsonify({"success": False, "error": error})
-
-    login_user(user)
-    return jsonify({"success": True})
-
-# ── EMAIL VERIFICATION ──
-@app.route("/verify-pending")
-@login_required
-def verify_pending_page():
-    if current_user.is_verified:
-        return redirect(url_for('chat_page'))
-    return render_template("verify-pending.html", email=current_user.email)
-
-@app.route("/verify-email")
-def verify_email_page():
-    token   = request.args.get("token", "")
-    user_id = consume_account_token(token, "verify_email")
-    if not user_id:
-        return render_template("verify-email.html", success=False)
-    user = User.query.get(user_id)
-    if user:
-        user.is_verified = True
-        db.session.commit()
-    return render_template("verify-email.html", success=True)
-
-@app.route("/api/resend-verification", methods=["POST"])
-@login_required
-@limiter.limit("3 per hour")
-def resend_verification():
-    if current_user.is_verified:
-        return jsonify({"success": False, "error": "ایمیل شما قبلاً تایید شده"})
-    if not current_user.email:
-        return jsonify({"success": False, "error": "برای این حساب ایمیلی ثبت نشده"})
-    try:
-        send_verification_email(current_user)
-    except Exception as e:
-        print(f"resend_verification error: {e}")
-        return jsonify({"success": False, "error": "ارسال ایمیل ناموفق بود. دوباره امتحان کنید."})
-    return jsonify({"success": True})
-
-# ── PASSWORD RESET ──
-@app.route("/forgot-password")
-def forgot_password_page():
-    return render_template("forgot-password.html")
-
-@app.route("/api/forgot-password", methods=["POST"])
-@limiter.limit("5 per hour")
-def api_forgot_password():
-    data  = request.get_json()
-    email = (data.get("email") or "").strip()
-
-    # Always return the same response whether or not the email exists -
-    # confirming/denying an account's existence here is a user-enumeration
-    # leak, so the UI can't tell the difference either way.
-    generic_response = {"success": True, "message": "اگر این ایمیل در سیستم ثبت باشد، لینک بازیابی برایتان ارسال شد."}
-
-    if not email:
-        return jsonify(generic_response)
-
-    user = User.query.filter_by(email=email).first()
-    if user:
-        try:
-            send_password_reset_email(user)
-        except Exception as e:
-            print(f"forgot_password email error: {e}")
-
-    return jsonify(generic_response)
-
-@app.route("/reset-password")
-def reset_password_page():
-    token = request.args.get("token", "")
-    return render_template("reset-password.html", token=token)
-
-@app.route("/api/reset-password", methods=["POST"])
-@limiter.limit("10 per hour")
-def api_reset_password():
-    data     = request.get_json()
-    token    = data.get("token", "")
-    password = (data.get("password") or "").strip()
-
-    if len(password) < 6:
-        return jsonify({"success": False, "error": "رمز عبور باید حداقل ۶ حرف باشد"})
-
-    user_id = consume_account_token(token, "reset_password")
-    if not user_id:
-        return jsonify({"success": False, "error": "لینک نامعتبر یا منقضی شده. یک لینک جدید درخواست کنید."})
-
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({"success": False, "error": "حساب کاربری یافت نشد"})
-
-    from auth import hash_password
-    user.password_hash = hash_password(password)
-    user.is_verified    = True  # proving control of the inbox is as good as clicking the verify link
-    db.session.commit()
 
     login_user(user)
     return jsonify({"success": True})
@@ -1387,20 +724,16 @@ def api_me():
             "email":     current_user.email,
             "phone":     current_user.phone,
             "is_admin":  current_user.is_admin,
-            "is_verified": bool(current_user.is_verified),
-            "chat_plan":  current_user.chat_plan or 'free',
-            "chat_plan_expires_at": current_user.chat_plan_expires_at.isoformat() if current_user.chat_plan_expires_at else None,
-            "tutor_plan": current_user.tutor_plan or 'free',
-            "tutor_plan_expires_at": current_user.tutor_plan_expires_at.isoformat() if current_user.tutor_plan_expires_at else None,
+            "plan":      getattr(current_user, 'plan', 'free') or 'free'
         })
     return jsonify({"logged_in": False})
 
 @app.route("/api/usage")
 @login_required
 def api_usage():
-    summary = get_usage_summary(current_user.id, current_user.chat_plan)
+    summary = get_usage_summary(current_user.id, current_user.plan)
     return jsonify({
-        "plan":    current_user.chat_plan,
+        "plan":    current_user.plan,
         "summary": summary
     })
 
@@ -1428,8 +761,103 @@ def admin_panel():
     return render_template("admin_panel.html")
 
 # ── CHAT API ──
+@app.route("/api/transcribe", methods=["POST"])
+def transcribe_audio():
+    """Receive a browser-recorded audio file and return its transcription."""
+    if not os.getenv("OPENAI_API_KEY"):
+        return jsonify({"error": "سرویس صدا تنظیم نشده است. لطفاً OPENAI_API_KEY را در تنظیمات سرور بررسی کنید."}), 503
+
+    audio = request.files.get("audio")
+    if audio is None or not audio.filename:
+        return jsonify({"error": "فایل صوتی دریافت نشد. دوباره ضبط کنید یا فایل صوتی را انتخاب نمایید."}), 400
+
+    # Only audio formats supported by the transcription endpoint are accepted.
+    allowed_extensions = {"webm", "mp4", "m4a", "mp3", "wav", "ogg", "mpeg", "mpga", "flac"}
+    original_name = os.path.basename(audio.filename or "recording.webm")
+    extension = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else ""
+    mime = (audio.mimetype or "application/octet-stream").split(";", 1)[0].lower()
+    mime_to_ext = {
+        "audio/webm": "webm", "video/webm": "webm", "audio/mp4": "mp4", "video/mp4": "mp4",
+        "audio/m4a": "m4a", "audio/x-m4a": "m4a", "audio/mpeg": "mp3", "audio/mp3": "mp3",
+        "audio/wav": "wav", "audio/x-wav": "wav", "audio/ogg": "ogg", "application/ogg": "ogg",
+        "audio/flac": "flac", "audio/x-flac": "flac", "audio/mpeg3": "mp3", "audio/mpga": "mpga"
+    }
+    if extension not in allowed_extensions:
+        extension = mime_to_ext.get(mime, "")
+    if extension not in allowed_extensions:
+        return jsonify({"error": "قالب این فایل صوتی پشتیبانی نمی‌شود. فایل WebM، MP4، MP3 یا WAV را امتحان کنید."}), 415
+    # Give OpenAI a useful content type even when a browser labels the blob generically.
+    if mime not in mime_to_ext:
+        mime = {
+            "webm": "audio/webm", "mp4": "audio/mp4", "m4a": "audio/mp4", "mp3": "audio/mpeg",
+            "mpeg": "audio/mpeg", "mpga": "audio/mpeg", "wav": "audio/wav", "ogg": "audio/ogg",
+            "flac": "audio/flac"
+        }.get(extension, "application/octet-stream")
+
+    audio_bytes = audio.read()
+    if not audio_bytes:
+        return jsonify({"error": "ضبط خالی است. قبل از توقف ضبط، چند ثانیه صحبت کنید."}), 400
+    if len(audio_bytes) > 20 * 1024 * 1024:
+        return jsonify({"error": "فایل صوتی بیش از حد بزرگ است. یک ضبط کوتاه‌تر بفرستید."}), 413
+
+    try:
+        transcription = openai_client.audio.transcriptions.create(
+            model=os.getenv("STT_MODEL", "gpt-4o-mini-transcribe"),
+            file=(f"recording.{extension}", BytesIO(audio_bytes), mime),
+            prompt=(
+                "Transcribe the speech in its original language and script. The speaker may use Afghan Dari "
+                "or Persian. Preserve the spoken language; do not translate it into English. Return only the words spoken."
+            ),
+        )
+        transcript = (getattr(transcription, "text", "") or "").strip()
+        if not transcript:
+            return jsonify({"error": "گفتاری تشخیص داده نشد. نزدیک‌تر به میکروفون صحبت کنید و دوباره امتحان کنید."}), 422
+        return jsonify({"text": transcript})
+    except Exception:
+        app.logger.exception("Audio transcription failed")
+        return jsonify({"error": "تبدیل صدا به متن ناموفق شد. تنظیمات API و لاگ‌های Render را بررسی کنید."}), 502
+
+
+@app.route("/api/tts", methods=["POST"])
+def text_to_speech():
+    """Generate user-requested speech for Khayyam's Persian/Dari replies."""
+    if not os.getenv("OPENAI_API_KEY"):
+        return jsonify({"error": "سرویس صدا تنظیم نشده است. لطفاً OPENAI_API_KEY را در تنظیمات سرور بررسی کنید."}), 503
+
+    payload = request.get_json(silent=True) or {}
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        return jsonify({"error": "متنی برای خواندن فرستاده نشده است."}), 400
+    if len(text) > 4000:
+        return jsonify({"error": "این پاسخ برای خواندن صوتی طولانی است. لطفاً بخش کوتاه‌تری را انتخاب کنید."}), 400
+
+    try:
+        speech = openai_client.audio.speech.create(
+            model=os.getenv("TTS_MODEL", "gpt-4o-mini-tts"),
+            voice=os.getenv("TTS_VOICE", "coral"),
+            input=text,
+            instructions=(
+                "Speak in Persian as naturally as possible, aiming for clear Afghan Dari "
+                "pronunciation rather than an exaggerated Iranian accent. Use a warm, calm, "
+                "patient teacher's voice. Read Persian text only; pronounce English technical "
+                "terms clearly. Keep a moderate pace."
+            ),
+            response_format="mp3",
+        )
+        audio_bytes = speech.read()
+        return send_file(
+            BytesIO(audio_bytes),
+            mimetype="audio/mpeg",
+            as_attachment=False,
+            download_name="khayyam-reply.mp3",
+            max_age=0,
+        )
+    except Exception as exc:
+        app.logger.exception("Text-to-speech generation failed")
+        return jsonify({"error": "ساخت صدا ناموفق بود. لطفاً دوباره امتحان کنید."}), 502
+
+
 @app.route("/api/chat", methods=["POST"])
-@limiter.limit("15 per minute")
 def chat():
     if request.content_type and 'multipart/form-data' in request.content_type:
         user_message = request.form.get("message", "")
@@ -1461,13 +889,13 @@ def chat():
         image_type   = None
 
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = getattr(current_user, 'chat_plan', 'free') or 'free' \
+    plan    = getattr(current_user, 'plan', 'free') or 'free' \
               if current_user.is_authenticated else 'free'
 
     user_memories = get_user_memories(user_id) if user_id else None
 
     try:
-        reply, switched, reset_ts, model_used, is_limited = smart_chat(
+        reply, switched, reset_ts, model_used = smart_chat(
             system_prompt=build_system_prompt(user_memories=user_memories),
             history=history[-10:],
             user_message=user_message,
@@ -1480,10 +908,6 @@ def chat():
     except Exception as e:
         print(f"smart_chat crashed: {e}")
         return jsonify({"reply": "متأسفم، خطایی رخ داد. لطفاً دوباره امتحان کنید."})
-
-    # guest daily quota exhausted — no reply, frontend shows signup/limit notice
-    if is_limited:
-        return jsonify({"limited": True, "reset_ts": reset_ts, "guest": True})
 
     if not reply:
         reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
@@ -1527,7 +951,6 @@ def chat():
 
 # ── PERSONA API ──
 @app.route("/api/persona-chat", methods=["POST"])
-@limiter.limit("15 per minute")
 def persona_chat():
     data           = request.get_json()
     user_message   = data.get("message", "")
@@ -1535,11 +958,11 @@ def persona_chat():
     persona_prompt = data.get("persona_prompt", "")
 
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = getattr(current_user, 'chat_plan', 'free') or 'free' \
+    plan    = getattr(current_user, 'plan', 'free') or 'free' \
               if current_user.is_authenticated else 'free'
 
     try:
-        reply, _, reset_ts, _, is_limited = smart_chat(
+        reply, _, _, _ = smart_chat(
             system_prompt=persona_prompt,
             history=history[-10:],
             user_message=user_message,
@@ -1549,10 +972,7 @@ def persona_chat():
         )
     except Exception as e:
         print(f"Persona chat error: {e}")
-        return jsonify({"reply": "متأسفم، مشکلی پیش آمد."})
-
-    if is_limited:
-        return jsonify({"limited": True, "reset_ts": reset_ts, "guest": True})
+        reply = "متأسفم، مشکلی پیش آمد."
 
     return jsonify({"reply": reply})
 
@@ -1619,114 +1039,6 @@ def delete_memory(memory_id):
     return jsonify({"success": True})
 
 # ── ADMIN APIs ──
-SUPPORT_PHONE = "+93782408793"
-
-# ── VOICE TEST (temporary - admin only, for evaluating gpt-realtime's Dari
-# output before deciding whether to build the real voice feature on it) ──
-REALTIME_VOICE_MODEL = "gpt-realtime-2025-08-28"
-
-@app.route("/voice-test")
-@login_required
-@admin_required
-def voice_test_page():
-    return render_template("voice-test.html")
-
-@app.route("/api/voice-test/token", methods=["POST"])
-@login_required
-@admin_required
-@limiter.limit("20 per hour")
-def voice_test_token():
-    """
-    Mints a short-lived ephemeral token so the browser can connect directly
-    to OpenAI's Realtime API without ever seeing the real API key. This is
-    the newer (post-GA) token endpoint - if OpenAI has since renamed it
-    again, the error text returned here will say so directly rather than
-    failing silently.
-    """
-    body = json.dumps({
-        "session": {
-            "type": "realtime",
-            "model": REALTIME_VOICE_MODEL,
-            "instructions": (
-                "شما باید همیشه و فقط به زبان دری (فارسی افغانستان) صحبت کنید. "
-                "هر متنی که کاربر می‌فرستد را با صدای طبیعی و روان به دری بخوانید، "
-                "و اگر خواسته شد یک پاسخ کوتاه و طبیعی هم بدهید."
-            ),
-            "audio": {"output": {"voice": "cedar"}}
-        }
-    }).encode()
-
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/realtime/client_secrets",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-            "Content-Type": "application/json"
-        },
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-        return jsonify({"success": True, "client_secret": data.get("value")})
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode(errors="replace")
-        print(f"voice_test_token HTTP {e.code}: {error_body}")
-        return jsonify({"success": False, "error": f"HTTP {e.code}: {error_body}"})
-    except Exception as e:
-        print(f"voice_test_token error: {e}")
-        return jsonify({"success": False, "error": str(e)})
-
-@app.route("/api/call-request", methods=["POST"])
-@limiter.limit("5 per hour")
-def submit_call_request():
-    data           = request.get_json()
-    name           = (data.get("name") or "").strip()
-    phone          = (data.get("phone") or "").strip()
-    requested_plan = (data.get("plan") or "").strip()
-
-    if not name:
-        return jsonify({"success": False, "error": "نام الزامی است"})
-    if not phone:
-        return jsonify({"success": False, "error": "شماره تماس الزامی است"})
-    if requested_plan not in VALID_PLANS or requested_plan == 'free':
-        return jsonify({"success": False, "error": "پلان نامعتبر"})
-
-    req = CallRequest(
-        user_id=current_user.id if current_user.is_authenticated else None,
-        name=name, phone=phone, requested_plan=requested_plan
-    )
-    db.session.add(req)
-    db.session.commit()
-    return jsonify({"success": True})
-
-@app.route("/api/admin/call-requests", methods=["GET"])
-@login_required
-@admin_required
-def get_call_requests():
-    reqs = CallRequest.query.order_by(CallRequest.created_at.desc()).all()
-    return jsonify([{
-        "id":             r.id,
-        "name":           r.name,
-        "phone":          r.phone,
-        "requested_plan": r.requested_plan,
-        "status":         r.status,
-        "created_at":     r.created_at.isoformat()
-    } for r in reqs])
-
-@app.route("/api/admin/call-requests/<int:request_id>/status", methods=["POST"])
-@login_required
-@admin_required
-def update_call_request_status(request_id):
-    data   = request.get_json()
-    status = data.get("status", "pending")
-    if status not in ('pending', 'contacted', 'done'):
-        return jsonify({"success": False, "error": "وضعیت نامعتبر"})
-    req = CallRequest.query.get_or_404(request_id)
-    req.status = status
-    db.session.commit()
-    return jsonify({"success": True})
-
 @app.route("/api/admin/users", methods=["GET"])
 @login_required
 @admin_required
@@ -1738,38 +1050,21 @@ def get_users():
         "email":      u.email,
         "phone":      u.phone,
         "is_admin":   u.is_admin,
-        "chat_plan":              u.chat_plan,
-        "chat_plan_expires_at":   u.chat_plan_expires_at.isoformat() if u.chat_plan_expires_at else None,
-        "tutor_plan":             u.tutor_plan,
-        "tutor_plan_expires_at":  u.tutor_plan_expires_at.isoformat() if u.tutor_plan_expires_at else None,
+        "plan":       u.plan,
         "created_at": u.created_at.isoformat()
     } for u in users])
 
-CHAT_PLAN_VALUES  = {'free', 'basic', 'pro', 'premium'}
-TUTOR_PLAN_VALUES = {'free', 'tutor_pro'}
-
-@app.route("/api/admin/users/<int:user_id>/chat-plan", methods=["POST"])
+@app.route("/api/admin/users/<int:user_id>/plan", methods=["POST"])
 @login_required
 @admin_required
-def update_user_chat_plan(user_id):
+def update_user_plan(user_id):
     data = request.get_json()
     plan = data.get("plan", "free")
-    if plan not in CHAT_PLAN_VALUES:
+    if plan not in PLAN_CONFIG:
         return jsonify({"success": False, "error": "پلان نامعتبر"})
     user = User.query.get_or_404(user_id)
-    grant_plan(user, 'chat', plan)
-    return jsonify({"success": True})
-
-@app.route("/api/admin/users/<int:user_id>/tutor-plan", methods=["POST"])
-@login_required
-@admin_required
-def update_user_tutor_plan(user_id):
-    data = request.get_json()
-    plan = data.get("plan", "free")
-    if plan not in TUTOR_PLAN_VALUES:
-        return jsonify({"success": False, "error": "پلان نامعتبر"})
-    user = User.query.get_or_404(user_id)
-    grant_plan(user, 'tutor', plan)
+    user.plan = plan
+    db.session.commit()
     return jsonify({"success": True})
 
 @app.route("/api/admin/knowledge", methods=["GET"])
@@ -2118,17 +1413,6 @@ def get_or_create_progress(user_id, subject):
         db.session.commit()
     return progress
 
-def get_or_create_topic_chat(user_id, subject, topic_key):
-    """Chat history scoped to one specific topic - see TutorTopicChat."""
-    chat = TutorTopicChat.query.filter_by(
-        user_id=user_id, subject=subject, topic_key=topic_key
-    ).first()
-    if not chat:
-        chat = TutorTopicChat(user_id=user_id, subject=subject, topic_key=topic_key)
-        db.session.add(chat)
-        db.session.commit()
-    return chat
-
 def award_xp(user_id, amount, subject=None):
     user = User.query.get(user_id)
     if user:
@@ -2190,7 +1474,6 @@ def build_tutor_system_prompt(subject, topic_title, topic_desc, chat_history_len
 - اگر سوال داری آن را در آخر و جدا بنویس
 - از Markdown برای بولد و لیست استفاده کن
 - در موضوعات علمی و کمپیوتر از نمادها و کد استفاده کن
-- اگر کد برنامه‌نویسی می‌نویسی، همیشه آن را داخل بلوک کد با سه بک‌تیک و نام زبان بگذار (مثلاً ```python) — کد را هرگز وسط متن معمولی ننویس
 
 ====================
 وضعیت درس
@@ -2221,9 +1504,8 @@ def get_curriculum():
     return jsonify(result)
 
 @app.route("/api/tutor/progress/<subject>")
-@login_required
 def get_tutor_progress(subject):
-    """Returns student's progress for a specific subject (level, XP, completed topics - NOT chat history, which is per-topic; see /api/tutor/topic-chat)."""
+    """Returns student's progress for a specific subject."""
     progress = get_or_create_progress(current_user.id, subject)
     user = User.query.get(current_user.id)
     badges = StudentBadge.query.filter_by(user_id=current_user.id).all()
@@ -2231,22 +1513,11 @@ def get_tutor_progress(subject):
     return jsonify({
         'progress':   progress.to_dict(),
         'total_xp':   user.total_xp or 0,
-        'badges':     [b.to_dict() for b in badges]
+        'badges':     [b.to_dict() for b in badges],
+        'chat_history': json.loads(progress.chat_history or '[]')
     })
 
-@app.route("/api/tutor/topic-chat/<subject>/<topic_key>")
-@login_required
-def get_topic_chat(subject, topic_key):
-    """Returns the saved conversation for one specific topic, so resuming
-    a topic continues where you left off - without pulling in whatever
-    a different topic in the same subject was last talking about."""
-    if subject not in CURRICULUM:
-        return jsonify({"error": "مضمون پیدا نشد"}), 400
-    chat = get_or_create_topic_chat(current_user.id, subject, topic_key)
-    return jsonify({'chat_history': json.loads(chat.chat_history or '[]')})
-
 @app.route("/api/tutor/start-topic", methods=["POST"])
-@login_required
 def start_topic():
     """Student starts or resumes a topic."""
     data       = request.get_json()
@@ -2284,7 +1555,6 @@ def start_topic():
         "history": json.loads(progress.chat_history or '[]')
     })
 @app.route("/api/tutor/chat", methods=["POST"])
-@limiter.limit("15 per minute")
 def tutor_chat_new():
     data      = request.get_json()
     subject   = data.get("subject")
@@ -2304,39 +1574,12 @@ def tutor_chat_new():
     if not topic_info:
         return jsonify({"error": "موضوع پیدا نشد"}), 400
 
-    if not current_user.is_authenticated:
-        # guest "taste" mode — no persisted progress (nothing to save it
-        # against), so the frontend keeps history client-side and resends
-        # it each turn, capped at the shared guest daily quota.
-        guest_history = data.get("history", [])[-20:]
-        system_prompt = build_tutor_system_prompt(
-            subject, topic_info['title'], topic_info['desc'], len(guest_history)
-        )
-        try:
-            reply, is_limited, reset_ts = smart_tutor_chat(
-                system_prompt=system_prompt,
-                history=guest_history,
-                user_message=message,
-                user_id=None,
-                plan='free',
-                temperature=0.7
-            )
-        except Exception as e:
-            print(f"Tutor guest chat error: {e}")
-            return jsonify({"reply": "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید."})
-
-        if is_limited:
-            return jsonify({"limited": True, "reset_ts": reset_ts, "guest": True})
-
-        return jsonify({"reply": reply})
-
-    progress = get_or_create_progress(current_user.id, subject)  # subject-level: level/XP/last-studied only
-    topic_chat   = get_or_create_topic_chat(current_user.id, subject, topic_key)
-    chat_history = json.loads(topic_chat.chat_history or '[]')
+    progress     = get_or_create_progress(current_user.id, subject)
+    chat_history = json.loads(progress.chat_history or '[]')
     system_prompt = build_tutor_system_prompt(
         subject, topic_info['title'], topic_info['desc'], len(chat_history)
     )
-    plan = getattr(current_user, 'tutor_plan', 'free') or 'free'
+    plan = getattr(current_user, 'plan', 'free') or 'free'
 
     try:
         reply, is_limited, reset_ts = smart_tutor_chat(
@@ -2358,22 +1601,19 @@ def tutor_chat_new():
             "reset_ts": reset_ts
         })
 
-    # save history - scoped to THIS topic only, so switching topics never
-    # bleeds into a different conversation
+    # save history
     chat_history.append({"role": "user", "content": message})
     chat_history.append({"role": "assistant", "content": reply})
     if len(chat_history) > 60:
         chat_history = chat_history[-60:]
 
-    topic_chat.chat_history   = json.dumps(chat_history, ensure_ascii=False)
-    topic_chat.updated_at     = datetime.utcnow()
+    progress.chat_history     = json.dumps(chat_history, ensure_ascii=False)
     progress.last_activity    = datetime.utcnow()
     progress.last_topic_title = topic_info['title']
     db.session.commit()
 
     return jsonify({"reply": reply})
 @app.route("/api/tutor/complete-topic", methods=["POST"])
-@login_required
 def complete_topic():
     """Student marks a topic as complete."""
     data      = request.get_json()
@@ -2413,49 +1653,8 @@ def complete_topic():
         "badge":           None
     })
 
-def run_gated_completion(prompt, max_tokens=2000, temperature=0.8):
-    """
-    Shared gate for one-shot generation calls (quiz + placement test) that
-    used to hit OpenAI directly with NO auth check and NO token tracking —
-    meaning anyone, logged in or not, could call them for free all day.
-    Now: guests spend from the shared guest daily quota, registered users
-    spend from their plan's tutor pool (same tracking smart_tutor_chat uses).
-    Returns (raw_text_or_None, is_limited, reset_ts).
-    """
-    estimated_tokens = max_tokens + len(prompt) // 4
-
-    if not current_user.is_authenticated:
-        allowed, ip_hash, date_key = reserve_guest_tokens(estimated_tokens)
-        if not allowed:
-            return None, True, next_utc_midnight_ts()
-        model = GUEST_MODEL
-    else:
-        plan = getattr(current_user, 'tutor_plan', 'free') or 'free'
-        model, reset_ts, is_limited, col = pick_tutor_model(current_user.id, plan, estimated_tokens)
-        if is_limited:
-            return None, True, reset_ts
-
-    try:
-        response = openai_client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=max_tokens,
-            temperature=temperature
-        )
-        raw    = response.choices[0].message.content.strip()
-        actual = response.usage.total_tokens
-        if not current_user.is_authenticated:
-            true_up_guest_tokens(ip_hash, date_key, estimated_tokens, actual)
-        else:
-            true_up_registered_tutor_tokens(current_user.id, col, estimated_tokens, actual)
-        raw = raw.replace('```json', '').replace('```', '').strip()
-        return raw, False, None
-    except Exception as e:
-        print(f"run_gated_completion error: {e}")
-        return None, False, None
-
 @app.route("/api/tutor/generate-quiz", methods=["POST"])
-@limiter.limit("10 per minute")
+
 def generate_quiz():
     """Generates a fresh quiz for a level using GPT."""
     data    = request.get_json()
@@ -2495,21 +1694,23 @@ def generate_quiz():
 
 correct باید index گزینه درست باشد (0، 1، 2 یا 3)."""
 
-    raw, is_limited, reset_ts = run_gated_completion(quiz_prompt, max_tokens=2000, temperature=0.8)
-
-    if is_limited:
-        return jsonify({"limited": True, "reset_ts": reset_ts})
-    if raw is None:
-        return jsonify({"error": "خطا در ساخت کوییز"}), 500
-
     try:
-        return jsonify(json.loads(raw))
+        response = openai_client.chat.completions.create(
+            model="gpt-5.4-mini",
+            messages=[{"role": "user", "content": quiz_prompt}],
+            max_completion_tokens=2000,
+            temperature=0.8
+        )
+        raw = response.choices[0].message.content.strip()
+        # clean up any markdown fences
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        quiz_data = json.loads(raw)
+        return jsonify(quiz_data)
     except Exception as e:
-        print(f"Quiz JSON parse error: {e}")
+        print(f"Quiz generation error: {e}")
         return jsonify({"error": "خطا در ساخت کوییز"}), 500
 
 @app.route("/api/tutor/submit-quiz", methods=["POST"])
-@login_required
 def submit_quiz():
     """Saves quiz result and awards XP."""
     data      = request.get_json()
@@ -2559,7 +1760,7 @@ def submit_quiz():
     })
 
 @app.route("/api/tutor/placement-test", methods=["POST"])
-@limiter.limit("10 per minute")
+
 def placement_test():
     """Generates a placement test for a subject."""
     data    = request.get_json()
@@ -2591,17 +1792,18 @@ def placement_test():
   ]
 }}"""
 
-    raw, is_limited, reset_ts = run_gated_completion(prompt, max_tokens=2000, temperature=0.7)
-
-    if is_limited:
-        return jsonify({"limited": True, "reset_ts": reset_ts})
-    if raw is None:
-        return jsonify({"error": "خطا در ساخت تست"}), 500
-
     try:
+        response = openai_client.chat.completions.create(
+            model="gpt-5.4-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=2000,
+            temperature=0.7
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = raw.replace('```json', '').replace('```', '').strip()
         return jsonify(json.loads(raw))
     except Exception as e:
-        print(f"Placement test JSON parse error: {e}")
+        print(f"Placement test error: {e}")
         return jsonify({"error": "خطا در ساخت تست"}), 500
 
 @app.route("/api/tutor/placement-result", methods=["POST"])

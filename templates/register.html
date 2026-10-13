@@ -3,33 +3,10 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <meta name="csrf-token" content="{{ csrf_token() }}">
-  <script>
-    // Auto-attach the CSRF token to every same-page state-changing fetch()
-    // call, so individual functions below don't each need to remember to.
-    (function() {
-      var token = document.querySelector('meta[name="csrf-token"]').content;
-      var originalFetch = window.fetch;
-      window.fetch = function(url, options) {
-        options = options || {};
-        var method = (options.method || 'GET').toUpperCase();
-        if (method !== 'GET' && method !== 'HEAD') {
-          if (options.headers instanceof Headers) {
-            options.headers.set('X-CSRFToken', token);
-          } else {
-            options.headers = Object.assign({}, options.headers, {'X-CSRFToken': token});
-          }
-        }
-        return originalFetch(url, options);
-      };
-    })();
-  </script>
   <title>ثبت‌نام — خیام</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  {{ csrf_meta_tag() }}
-  <script src="/static/main.js"></script>
   <style>
   body {
     min-height: 100vh;
@@ -86,38 +63,65 @@
   }
 
   .card-top { text-align: center; margin-bottom: 28px; }
+  .card-icon { font-size: 36px; display: block; margin-bottom: 12px; }
   .card-top h1 { font-size: 22px; font-weight: 700; color: var(--gold); margin-bottom: 6px; }
   .card-top p  { font-size: 13px; color: var(--text-dim); line-height: 1.7; }
 
-  .form-group { margin-bottom: 18px; }
+  .form-group { margin-bottom: 16px; }
   .form-label {
     display: block;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: 7px;
+    letter-spacing: 0.05em;
   }
 
   .form-input {
     width: 100%;
-    padding: 12px 14px;
+    padding: 11px 14px;
     background: var(--surface2);
     border: 1px solid var(--border);
     border-radius: 9px;
     color: var(--text);
     font-family: 'Vazirmatn', sans-serif;
     font-size: 14px;
-    font-weight: 500;
     outline: none;
     transition: border-color 0.2s;
   }
   .form-input:focus { border-color: var(--gold-dim); }
-  .form-input::placeholder { color: var(--text-dim); font-weight: 400; opacity: 0.75; }
+  .form-input::placeholder { color: var(--text-dim); }
+
+  .method-toggle {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .method-btn {
+    flex: 1;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-family: 'Vazirmatn', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .method-btn.active {
+    border-color: var(--gold);
+    background: rgba(201,168,76,0.1);
+    color: var(--gold);
+    font-weight: 500;
+  }
 
   .password-hint {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-dim);
-    margin-top: 6px;
+    margin-top: 5px;
+    padding-right: 4px;
   }
 
   .submit-btn {
@@ -132,7 +136,7 @@
     font-weight: 700;
     cursor: pointer;
     transition: all 0.2s;
-    margin-top: 6px;
+    margin-top: 4px;
   }
   .submit-btn:hover { background: #e0bb60; transform: translateY(-1px); }
   .submit-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
@@ -186,6 +190,7 @@
   <div class="page">
     <div class="card">
       <div class="card-top">
+        <span class="card-icon">✨</span>
         <h1>ثبت‌نام در خیام</h1>
         <p>حساب رایگان بسازید و گفتگوهای خود را ذخیره کنید</p>
       </div>
@@ -195,23 +200,34 @@
 
       <div class="form-group">
         <label class="form-label">نام کاربری</label>
-        <input class="form-input" type="text" id="username" placeholder="ahmad123" autocomplete="username"/>
+        <input class="form-input" type="text" id="username" placeholder="مثال: ahmad123"/>
       </div>
 
+      <!-- method toggle -->
       <div class="form-group">
-        <label class="form-label">ایمیل</label>
-        <input class="form-input" type="email" id="email" placeholder="name@example.com" style="direction:ltr" autocomplete="email"/>
+        <label class="form-label">روش ثبت‌نام</label>
+        <div class="method-toggle">
+          <button class="method-btn active" onclick="setMethod('email', this)">📧 ایمیل</button>
+          <button class="method-btn" onclick="setMethod('phone', this)">📱 شماره تلفن</button>
+        </div>
+
+        <div id="email-field">
+          <input class="form-input" type="email" id="email" placeholder="example@gmail.com" style="direction:ltr"/>
+        </div>
+        <div id="phone-field" style="display:none">
+          <input class="form-input" type="tel" id="phone" placeholder="+93 700 000 000" style="direction:ltr"/>
+        </div>
       </div>
 
       <div class="form-group">
         <label class="form-label">رمز عبور</label>
-        <input class="form-input" type="password" id="password" placeholder="رمز عبور تازه بسازید" autocomplete="new-password"/>
-        <div class="password-hint">حداقل ۶ حرف</div>
+        <input class="form-input" type="password" id="password" placeholder="حداقل ۶ حرف"/>
+        <div class="password-hint">رمز عبور باید حداقل ۶ حرف داشته باشد</div>
       </div>
 
       <div class="form-group">
         <label class="form-label">تکرار رمز عبور</label>
-        <input class="form-input" type="password" id="password2" placeholder="رمز عبور را دوباره بنویسید" autocomplete="new-password"/>
+        <input class="form-input" type="password" id="password2" placeholder="رمز عبور را دوباره وارد کنید"/>
       </div>
 
       <button class="submit-btn" id="submit-btn" onclick="register()">
@@ -227,20 +243,34 @@
 <nav class="bottom-nav">
   <div class="bottom-nav-inner">
     <a href="/" class="bottom-tab">
+      <span class="tab-icon">🏠</span>
       <span class="tab-label">خانه</span>
     </a>
     <a href="/chat" class="bottom-tab">
+      <span class="tab-icon">💬</span>
       <span class="tab-label">چت</span>
     </a>
     <a href="/tutor" class="bottom-tab">
+      <span class="tab-icon">📚</span>
       <span class="tab-label">بیاموز</span>
     </a>
     <a href="/profile" class="bottom-tab">
+      <span class="tab-icon">👤</span>
       <span class="tab-label">پروفایل</span>
     </a>
   </div>
 </nav>
   <script>
+    let currentMethod = 'email';
+
+    function setMethod(method, btn) {
+      currentMethod = method;
+      document.querySelectorAll('.method-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('email-field').style.display = method === 'email' ? 'block' : 'none';
+      document.getElementById('phone-field').style.display = method === 'phone' ? 'block' : 'none';
+    }
+
     function showError(msg) {
       const box = document.getElementById('error-box');
       box.textContent = msg;
@@ -264,11 +294,12 @@
       const username  = document.getElementById('username').value.trim();
       const password  = document.getElementById('password').value;
       const password2 = document.getElementById('password2').value;
-      const email     = document.getElementById('email').value.trim();
+      const email     = currentMethod === 'email'  ? document.getElementById('email').value.trim()  : null;
+      const phone     = currentMethod === 'phone'  ? document.getElementById('phone').value.trim()  : null;
 
       if (!username)           return showError('نام کاربری الزامی است');
       if (username.length < 3) return showError('نام کاربری باید حداقل ۳ حرف باشد');
-      if (!email)              return showError('ایمیل الزامی است');
+      if (!email && !phone)    return showError('ایمیل یا شماره تلفن الزامی است');
       if (password.length < 6) return showError('رمز عبور باید حداقل ۶ حرف باشد');
       if (password !== password2) return showError('رمزهای عبور یکسان نیستند');
 
@@ -280,13 +311,13 @@
         const res  = await fetch('/api/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password, email })
+          body: JSON.stringify({ username, password, email, phone })
         });
         const data = await res.json();
 
         if (data.success) {
           showSuccess('حساب شما ساخته شد! در حال انتقال...');
-          setTimeout(() => window.location.href = '/verify-pending', 1200);
+          setTimeout(() => window.location.href = '/chat', 1200);
         } else {
           showError(data.error);
           btn.disabled = false;

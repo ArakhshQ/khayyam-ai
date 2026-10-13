@@ -13,14 +13,7 @@ class User(UserMixin, db.Model):
     username      = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin      = db.Column(db.Boolean, default=False)
-    is_verified   = db.Column(db.Boolean, default=False)
-    # Chat and tutor are independent purchases - a user can hold a paid plan
-    # in one, both, or neither at the same time. Each has its own expiry so
-    # it can be checked and auto-downgraded to free on its own schedule.
-    chat_plan             = db.Column(db.String(20), default='free')
-    chat_plan_expires_at  = db.Column(db.DateTime, nullable=True)
-    tutor_plan            = db.Column(db.String(20), default='free')
-    tutor_plan_expires_at = db.Column(db.DateTime, nullable=True)
+    plan          = db.Column(db.String(20), default='free')
     total_xp      = db.Column(db.Integer, default=0)
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -30,24 +23,6 @@ class User(UserMixin, db.Model):
     tutor_progress = db.relationship('TutorProgress', backref='user', lazy=True, cascade='all, delete-orphan')
     quiz_results   = db.relationship('QuizResult', backref='user', lazy=True, cascade='all, delete-orphan')
     badges         = db.relationship('StudentBadge', backref='user', lazy=True, cascade='all, delete-orphan')
-    account_tokens = db.relationship('AccountToken', backref='user', lazy=True, cascade='all, delete-orphan')
-
-class AccountToken(db.Model):
-    """
-    One-time tokens for email verification and password reset. We only ever
-    store a hash of the token (same principle as passwords) - the raw token
-    goes out in the email and is never written to the database, so a DB
-    leak alone can't be used to verify emails or reset passwords.
-    """
-    __tablename__ = 'account_tokens'
-    id         = db.Column(db.Integer, primary_key=True)
-    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    token_hash = db.Column(db.String(64), nullable=False, index=True)
-    purpose    = db.Column(db.String(20), nullable=False)  # 'verify_email' | 'reset_password'
-    expires_at = db.Column(db.DateTime, nullable=False)
-    used_at    = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
 
 class Conversation(db.Model):
     __tablename__ = 'conversations'
@@ -146,25 +121,6 @@ class TutorProgress(db.Model):
             'last_activity':     self.last_activity.isoformat(),
         }
 
-class TutorTopicChat(db.Model):
-    """
-    Chat history for one specific topic within a subject. Kept separate
-    from TutorProgress (which stays subject-level, for XP/level/completed
-    topics) so that switching topics starts a genuinely fresh conversation
-    instead of continuing whatever the last-visited topic in that subject
-    was talking about. Each (user, subject, topic) combination gets its
-    own saved thread.
-    """
-    __tablename__ = 'tutor_topic_chats'
-    id           = db.Column(db.Integer, primary_key=True)
-    user_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    subject      = db.Column(db.String(50), nullable=False)
-    topic_key    = db.Column(db.String(50), nullable=False)
-    chat_history = db.Column(db.Text, default='[]')
-    updated_at   = db.Column(db.DateTime, default=datetime.utcnow)
-
-    __table_args__ = (db.UniqueConstraint('user_id', 'subject', 'topic_key', name='_user_subject_topic_uc'),)
-
 class QuizResult(db.Model):
     __tablename__ = 'quiz_results'
     id           = db.Column(db.Integer, primary_key=True)
@@ -205,46 +161,6 @@ class StudentBadge(db.Model):
             'subject':     self.subject,
             'earned_at':   self.earned_at.isoformat(),
         }
-
-class GuestUsage(db.Model):
-    """Per-IP daily token usage for anonymous (not logged in) visitors."""
-    __tablename__ = 'guest_usage'
-    id          = db.Column(db.Integer, primary_key=True)
-    ip_hash     = db.Column(db.String(64), nullable=False, index=True)
-    date_key    = db.Column(db.String(10), nullable=False)  # 'YYYY-MM-DD' (UTC)
-    tokens_used = db.Column(db.Integer, default=0)
-    updated_at  = db.Column(db.DateTime, default=datetime.utcnow)
-
-    __table_args__ = (db.UniqueConstraint('ip_hash', 'date_key', name='_guest_ip_date_uc'),)
-
-class GuestGlobalUsage(db.Model):
-    """
-    Sitewide daily token usage across ALL guests combined.
-    This is the circuit breaker: per-IP limits alone can be bypassed by
-    rotating IPs/VPNs, but a determined abuser still can't blow past this
-    sitewide ceiling before guest access shuts off for the day.
-    """
-    __tablename__ = 'guest_global_usage'
-    id          = db.Column(db.Integer, primary_key=True)
-    date_key    = db.Column(db.String(10), unique=True, nullable=False)
-    tokens_used = db.Column(db.Integer, default=0)
-    updated_at  = db.Column(db.DateTime, default=datetime.utcnow)
-
-class CallRequest(db.Model):
-    """
-    A request from a user (typically inside Afghanistan, where mainstream
-    online payment processors aren't available) asking to be called about
-    upgrading their plan. Lets staff follow up proactively instead of only
-    waiting for the user to call in themselves.
-    """
-    __tablename__ = 'call_requests'
-    id              = db.Column(db.Integer, primary_key=True)
-    user_id         = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    name            = db.Column(db.String(120), nullable=False)
-    phone           = db.Column(db.String(30), nullable=False)
-    requested_plan  = db.Column(db.String(20), nullable=False)
-    status          = db.Column(db.String(20), default='pending')  # pending | contacted | done
-    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
 
 def json_loads_safe(val):
     try:
