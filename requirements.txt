@@ -9,3 +9,4 @@ bcrypt
 psycopg2-binary
 PyMuPDF
 python-docx
+psycopg[binary]
