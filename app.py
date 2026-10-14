@@ -1914,111 +1914,137 @@ def complete_topic():
         "badge":           None
     })
 
+# Step 4: server-scored quizzes; never trust browser-submitted scores or answer keys.
+def _quiz_claim_table():
+    with db.engine.begin() as conn:
+        conn.execute(sql_text("""CREATE TABLE IF NOT EXISTS tutor_quiz_claims (
+            attempt_id VARCHAR(36) PRIMARY KEY, user_id INTEGER NOT NULL,
+            subject VARCHAR(40) NOT NULL, level INTEGER NOT NULL,
+            score INTEGER NOT NULL, xp_earned INTEGER NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"""))
+
 @app.route("/api/tutor/generate-quiz", methods=["POST"])
-
+@login_required
 def generate_quiz():
-    """Generates a fresh quiz for a level using GPT."""
-    data    = request.get_json()
-    subject = data.get("subject")
-    level   = int(data.get("level", 1))
-
-    subject_data = CURRICULUM.get(subject, {})
-    level_data   = subject_data.get('levels', {}).get(level, {})
-    topics       = level_data.get('topics', [])
-    topic_titles = [t['title'] for t in topics]
-    subject_name = subject_data.get('name', subject)
-    level_title  = level_data.get('title', '')
-
-    quiz_prompt = f"""یک کوییز ۸ سوالی برای این مضمون و سطح بساز:
-
-مضمون: {subject_name}
-سطح: {level_title}
-موضوعات پوشش داده شده: {', '.join(topic_titles)}
-
-قوانین کوییز:
-- ۸ سوال چهار گزینه‌ای
-- سوالات متنوع و در سطوح مختلف سختی
-- برای هر سوال یک توضیح کوتاه چرا جواب درست است
-- سوالات باید واقعاً امتحان کنند که دانش‌آموز چقدر یاد گرفته
-
-فرمت خروجی — فقط JSON خالص بدون هیچ متن دیگری:
-{{
-  "questions": [
-    {{
-      "q": "متن سوال به دری",
-      "options": ["گزینه الف", "گزینه ب", "گزینه ج", "گزینه د"],
-      "correct": 0,
-      "explanation": "توضیح چرا این جواب درست است"
-    }}
-  ]
-}}
-
-correct باید index گزینه درست باشد (0، 1، 2 یا 3)."""
-
+    data = request.get_json(silent=True) or {}
+    subject = str(data.get('subject') or '')
+    try: level = int(data.get('level', 1))
+    except (ValueError, TypeError): return jsonify(error='Invalid level'), 400
+    level_data = CURRICULUM.get(subject, {}).get('levels', {}).get(level)
+    if not level_data: return jsonify(error='Invalid lesson'), 400
+    practice = data.get('practice') is True
+    topic_key = str(data.get('topic_key') or '')
+    topic = next((t for t in level_data['topics'] if t['key'] == topic_key), None)
+    if practice and not topic: return jsonify(error='Invalid practice topic'), 400
+    count = 1 if practice else 8
+    titles = topic['title'] if practice else ', '.join(t['title'] for t in level_data['topics'])
+    prompt = f"""برای مضمون {CURRICULUM[subject]['name']} سطح {level_data['title']}، {count} سوال چهارگزینه‌ای مستقل به دری افغانستان بساز. موضوع: {titles}.
+سوال‌ها دقیق، بدون ابهام، و دارای چهار گزینه باشند. فقط JSON خالص به شکل
+{{"questions":[{{"q":"سوال","options":["الف","ب","ج","د"],"correct":0,"explanation":"دلیل"}}]}}
+مقدار correct عدد صحیح 0 تا 3 باشد. دقیقا {count} سوال بساز."""
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-5.4-mini",
-            messages=[{"role": "user", "content": quiz_prompt}],
-            max_completion_tokens=2000,
-            temperature=0.8
-        )
-        raw = response.choices[0].message.content.strip()
-        # clean up any markdown fences
-        raw = raw.replace('```json', '').replace('```', '').strip()
-        quiz_data = json.loads(raw)
-        return jsonify(quiz_data)
-    except Exception as e:
-        print(f"Quiz generation error: {e}")
-        return jsonify({"error": "خطا در ساخت کوییز"}), 500
+            model='gpt-5.4-mini', messages=[{'role':'user','content':prompt}],
+            max_completion_tokens=2400)
+        raw = (response.choices[0].message.content or '').replace('```json','').replace('```','').strip()
+        questions = json.loads(raw)['questions']
+        if len(questions) != count: raise ValueError('Wrong question count')
+        clean = []
+        for q in questions:
+            if not isinstance(q['q'], str) or len(q['options']) != 4 or not all(isinstance(x,str) for x in q['options']):
+                raise ValueError('Invalid question')
+            correct = int(q['correct'])
+            if correct not in range(4): raise ValueError('Invalid answer')
+            clean.append({'q':q['q'][:700], 'options':[x[:300] for x in q['options']],
+                          'correct':correct, 'explanation':str(q.get('explanation',''))[:700]})
+        # Signed answer key, short lived; browser receives questions without answers.
+        attempt_id = str(uuid.uuid4())
+        token = URLSafeTimedSerializer(app.secret_key).dumps(
+            {'uid':current_user.id,'subject':subject,'level':level,
+             'practice':practice,'topic_key':topic_key,'attempt_id':attempt_id,
+             'questions':clean}, salt='khayyam-quiz-v4')
+        public = [{k:q[k] for k in ('q','options')} for q in clean]
+        return jsonify(questions=public, quiz_token=token, practice=practice)
+    except Exception:
+        app.logger.exception('Quiz generation failed')
+        return jsonify(error='خطا در ساخت کوییز؛ دوباره تلاش کنید'), 502
 
-@app.route("/api/tutor/submit-quiz", methods=["POST"])
+@app.route('/api/tutor/submit-quiz', methods=['POST'])
+@login_required
 def submit_quiz():
-    """Saves quiz result and awards XP."""
-    data      = request.get_json()
-    subject   = data.get("subject")
-    level     = int(data.get("level", 1))
-    score     = int(data.get("score", 0))
-    passed    = score >= 70
+    data = request.get_json(silent=True) or {}
+    try:
+        payload = URLSafeTimedSerializer(app.secret_key).loads(
+            str(data.get('quiz_token') or ''), salt='khayyam-quiz-v4', max_age=7200)
+    except (BadSignature, SignatureExpired, TypeError, ValueError):
+        return jsonify(error='Quiz expired or invalid'), 403
+    if payload.get('uid') != current_user.id or payload.get('practice'):
+        return jsonify(error='Invalid graded quiz'), 403
+    answers = data.get('answers')
+    questions = payload['questions']
+    if not isinstance(answers, list) or len(answers) != len(questions) or any(type(a) is not int or a not in range(4) for a in answers):
+        return jsonify(error='Invalid answers'), 400
+    subject, level = payload['subject'], payload['level']
+    if level not in CURRICULUM.get(subject, {}).get('levels', {}):
+        return jsonify(error='Invalid subject'), 400
+    score = round(100 * sum(a == q['correct'] for a,q in zip(answers,questions)) / len(questions))
+    passed = score >= 70
+    quiz_key = f'{subject}_level{level}'
+    attempt_id = payload['attempt_id']
+    try:
+        _quiz_claim_table()
+        # Serialize awards for the user across simultaneous submissions (PostgreSQL).
+        lock = ' FOR UPDATE' if db.engine.dialect.name == 'postgresql' else ''
+        db.session.execute(sql_text('SELECT id FROM users WHERE id=:uid' + lock), {'uid':current_user.id}).first()
+        existing = db.session.execute(sql_text('SELECT score,xp_earned FROM tutor_quiz_claims WHERE attempt_id=:aid'), {'aid':attempt_id}).mappings().first()
+        if existing:
+            db.session.rollback()
+            return jsonify(passed=existing['score'] >= 70, score=existing['score'], xp_earned=existing['xp_earned'],
+                           total_xp=db.session.get(User,current_user.id).total_xp or 0, already_submitted=True)
+        progress = TutorProgress.query.filter_by(user_id=current_user.id, subject=subject).first()
+        if not progress:
+            progress = TutorProgress(user_id=current_user.id, subject=subject)
+            db.session.add(progress)
+            db.session.flush()
+        completed = json.loads(progress.completed_quizzes or '[]')
+        xp = 0
+        if passed and quiz_key not in completed:
+            xp = XP_REWARDS['quiz_perfect'] if score == 100 else XP_REWARDS['quiz_pass']
+            completed.append(quiz_key)
+            progress.completed_quizzes = json.dumps(completed)
+            user = db.session.get(User,current_user.id)
+            user.total_xp = (user.total_xp or 0) + xp
+            progress.subject_xp = (progress.subject_xp or 0) + xp
+            if score == 100 and not StudentBadge.query.filter_by(user_id=current_user.id, badge_key='quiz_perfect', subject=subject).first():
+                db.session.add(StudentBadge(user_id=current_user.id, badge_key='quiz_perfect',
+                                            badge_title=BADGES['quiz_perfect']['title'],
+                                            badge_emoji=BADGES['quiz_perfect']['emoji'],subject=subject))
+        db.session.add(QuizResult(user_id=current_user.id,subject=subject,level=level,quiz_key=quiz_key,
+                                 score=score,passed=passed,xp_earned=xp))
+        db.session.execute(sql_text('INSERT INTO tutor_quiz_claims (attempt_id,user_id,subject,level,score,xp_earned) VALUES (:aid,:uid,:sub,:lvl,:score,:xp)'),
+                           {'aid':attempt_id,'uid':current_user.id,'sub':subject,'lvl':level,'score':score,'xp':xp})
+        db.session.commit()
+        return jsonify(passed=passed,score=score,xp_earned=xp,total_xp=db.session.get(User,current_user.id).total_xp or 0,
+                       review=[{'correct':q['correct'],'explanation':q['explanation']} for q in questions])
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Quiz submission failed')
+        return jsonify(error='Could not save quiz result'), 500
 
-    quiz_key  = f"{subject}_level{level}"
-    xp_earned = 0
-
-    if passed:
-        xp_earned = XP_REWARDS['quiz_perfect'] if score == 100 else XP_REWARDS['quiz_pass']
-        award_xp(current_user.id, xp_earned, subject)
-
-        if score == 100:
-            award_badge(current_user.id, 'quiz_perfect', subject)
-
-        # mark quiz as completed in progress
-        progress = get_or_create_progress(current_user.id, subject)
-        completed_quizzes = json.loads(progress.completed_quizzes or '[]')
-        if quiz_key not in completed_quizzes:
-            completed_quizzes.append(quiz_key)
-            progress.completed_quizzes = json.dumps(completed_quizzes)
-            db.session.commit()
-
-    # save quiz result
-    result = QuizResult(
-        user_id=current_user.id,
-        subject=subject,
-        level=level,
-        quiz_key=quiz_key,
-        score=score,
-        passed=passed,
-        xp_earned=xp_earned
-    )
-    db.session.add(result)
-    db.session.commit()
-
-    user = User.query.get(current_user.id)
-    return jsonify({
-        "passed":    passed,
-        "score":     score,
-        "xp_earned": xp_earned,
-        "total_xp":  user.total_xp or 0,
-        "message":   "احسنت! سطح بعدی باز شد." if passed else "دوباره امتحان کن — می‌توانی بهتر کنی!"
-    })
+@app.route('/api/tutor/check-practice', methods=['POST'])
+@login_required
+def check_practice():
+    data = request.get_json(silent=True) or {}
+    try:
+        payload = URLSafeTimedSerializer(app.secret_key).loads(str(data.get('quiz_token') or ''),salt='khayyam-quiz-v4',max_age=7200)
+    except (BadSignature, SignatureExpired, ValueError, TypeError):
+        return jsonify(error='Practice expired'), 403
+    if payload.get('uid') != current_user.id or not payload.get('practice'):
+        return jsonify(error='Invalid practice'), 403
+    answer = data.get('answer')
+    if type(answer) is not int or answer not in range(4): return jsonify(error='Invalid answer'),400
+    q = payload['questions'][0]
+    return jsonify(correct=answer == q['correct'], correct_index=q['correct'], explanation=q['explanation'],xp_earned=0)
 
 @app.route("/api/tutor/placement-test", methods=["POST"])
 

@@ -448,6 +448,7 @@
 
   <!-- SCREEN 4: QUIZ -->
   <div class="screen quiz-screen-wrap" id="screen-quiz">
+    <div style="padding:12px;text-align:center"><button class="btn-dim" onclick="openLiveVoiceTutor()">🎙 شروع / پایان صدای استاد</button></div>
     <div class="quiz-card" id="quiz-card"></div>
   </div>
 
@@ -483,6 +484,11 @@
   let quizCurrent   = 0;
   let quizScore     = 0;
   let quizAnswered  = false;
+  let quizToken = null;
+  let quizAnswers = [];
+  let practiceToken = null;
+  let practiceQuestion = null;
+  let voicePracticeCount = 0;
   let placementAnswers = [];
 
   // ── LOADING ──
@@ -842,7 +848,7 @@
     try {
       const res  = await fetch('/api/tutor/generate-quiz', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({subject:currentSubject, level:currentLevel, count:1})
+        body: JSON.stringify({subject:currentSubject, level:currentLevel, topic_key:currentTopic.key, practice:true})
       });
       const data = await res.json();
       if (!data.questions || data.questions.length === 0) {
@@ -850,72 +856,56 @@
         return;
       }
 
+      practiceToken = data.quiz_token;
       const q = data.questions[0];
+      practiceQuestion = q;
       showInlineQuiz(q);
     } catch(e) {
       inlineQuizActive = false;
     }
   }
 
+  function safeHTML(value) {
+    return String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
   function showInlineQuiz(q) {
-    const messagesEl = document.getElementById('messages');
-    const wrapper    = document.createElement('div');
+    const wrapper = document.createElement('div');
     wrapper.className = 'inline-quiz';
-    wrapper.id        = 'inline-quiz-' + Date.now();
-
-    wrapper.innerHTML = `
-      <div class="inline-quiz-title">🎯 سوال سریع</div>
-      <div class="inline-quiz-q">${q.q}</div>
-      <div class="inline-quiz-opts">
-        ${q.options.map((opt,i) => `
-          <button class="inline-opt" onclick="answerInline(this,${i},${q.correct},'${wrapper.id}','${escapeStr(q.explanation)}')">
-            ${opt}
-          </button>
-        `).join('')}
-      </div>
-      <div class="inline-explanation" id="exp-${wrapper.id}">💡 ${q.explanation}</div>
-    `;
-
-    messagesEl.appendChild(wrapper);
+    wrapper.id = 'practice-card-' + Date.now();
+    wrapper.innerHTML = `<div class="inline-quiz-title">🎯 تمرین کوتاه · بدون XP</div>
+      <div class="inline-quiz-q">${safeHTML(q.q)}</div>
+      <div class="inline-quiz-opts">${q.options.map((opt,i)=>`<button class="inline-opt" onclick="answerInline(${i})">${safeHTML(opt)}</button>`).join('')}</div>
+      <div class="inline-explanation"></div>
+      <button class="btn-dim" onclick="skipPractice()" style="margin-top:10px">رد کردن تمرین</button>`;
+    document.getElementById('messages').appendChild(wrapper);
     scrollToBottom();
+    window.KhayyamInlineVoice?.say?.('یک تمرین کوتاه روی صفحه ظاهر شده است. ' + q.q + ' گزینه‌ها: ' + q.options.map((x,i)=>['الف','ب','ج','د'][i]+' '+x).join('، ') + '. جواب را بگو یا روی گزینه بزن.');
   }
-
-  function escapeStr(s) {
-    return s.replace(/'/g,"&#39;").replace(/"/g,'&quot;');
+  function skipPractice() {
+    inlineQuizActive = false;
+    practiceToken = null;
+    document.querySelector('.inline-quiz:last-of-type .inline-quiz-opts')?.querySelectorAll('button').forEach(b=>b.disabled=true);
   }
-
-  function answerInline(btn, selected, correct, wrapId, explanation) {
-    const opts = btn.closest('.inline-quiz-opts').querySelectorAll('.inline-opt');
-    opts.forEach(o => o.classList.add('answered'));
-    opts.forEach((o,i) => {
-      if (i === correct) o.classList.add('correct');
-      else if (i === selected && selected !== correct) o.classList.add('wrong');
-    });
-
-    const expEl = document.getElementById(`exp-${wrapId}`);
-    if (expEl) expEl.classList.add('show');
-
-    const correct_ans = selected === correct;
-    scrollToBottom();
-
-    // award small XP for inline quiz
-    if (correct_ans && currentUser) {
-      totalXP += 5;
-      updateXPBar(totalXP);
-      showXPPopup(5);
-    }
-
-    // after 2 seconds, allow more messages and send feedback to AI
-    setTimeout(() => {
-      inlineQuizActive = false;
-      const feedback = correct_ans
-        ? 'احسنت! جواب درست دادم.'
-        : `اشتباه کردم. جواب درست "${correct}" بود. لطفاً این را بیشتر توضیح بده.`;
-      // send feedback to tutor AI so it knows where student is
-      if (!correct_ans) {
-        sendToAPI(feedback, false);
-      }
-    }, 2000);
+  async function answerInline(selected) {
+    if (!inlineQuizActive || !practiceToken) return;
+    const token = practiceToken;
+    practiceToken = null;
+    const wrapper = [...document.querySelectorAll('.inline-quiz')].at(-1);
+    const opts = wrapper?.querySelectorAll('.inline-opt') || [];
+    opts.forEach(b=>b.disabled=true);
+    try {
+      const res = await fetch('/api/tutor/check-practice',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({quiz_token:token,answer:selected})});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Practice failed');
+      opts.forEach((b,i)=>{b.classList.add('answered'); if(i===data.correct_index)b.classList.add('correct');else if(i===selected)b.classList.add('wrong');});
+      const feedback = (data.correct?'آفرین! ':'این بار درست نبود. ') + data.explanation;
+      wrapper.querySelector('.inline-explanation').textContent = '💡 ' + feedback;
+      wrapper.querySelector('.inline-explanation').classList.add('show');
+      window.KhayyamInlineVoice?.say?.(feedback);
+      if (!data.correct && !window.KhayyamInlineVoice?.isActive()) await sendToAPI('در تمرین این درس اشتباه کردم: '+practiceQuestion.q+' لطفاً با یک مثال دیگر توضیح بده.',false);
+    } catch(err) { wrapper.querySelector('.inline-explanation').textContent = 'ذخیره تمرین ناموفق بود.'; wrapper.querySelector('.inline-explanation').classList.add('show'); }
+    inlineQuizActive=false;
   }
 
   // ── COMPLETE TOPIC ──
@@ -982,6 +972,8 @@
       });
       const data = await res.json();
       if (!data.questions) { showScreen('topic'); return; }
+      quizToken = data.quiz_token;
+      quizAnswers = [];
       quizQuestions = data.questions;
       quizCurrent   = 0;
       quizScore     = 0;
@@ -1003,70 +995,56 @@
         </div>
         <div class="quiz-track"><div class="quiz-fill" style="width:${pct}%"></div></div>
       </div>
-      <div class="quiz-q">${q.q}</div>
+      <div class="quiz-q">${safeHTML(q.q)}</div>
       <div class="quiz-opts">
-        ${q.options.map((opt,i)=>`<button class="quiz-opt" onclick="answerQ(${i})">${opt}</button>`).join('')}
+        ${q.options.map((opt,i)=>`<button class="quiz-opt" onclick="answerQ(${i})">${safeHTML(opt)}</button>`).join('')}
       </div>
-      <div class="quiz-explanation" id="qexp">💡 ${q.explanation}</div>
+      <div class="quiz-explanation" id="qexp">پاسخ ثبت شد.</div>
       <button class="quiz-next" id="qnext" onclick="nextQ()">
         ${quizCurrent+1 < quizQuestions.length ? 'سوال بعدی →' : 'نتیجه را ببین →'}
       </button>
     `;
+    window.KhayyamInlineVoice?.say?.('سوال '+(quizCurrent+1)+': '+q.q+'. '+q.options.map((x,i)=>['الف','ب','ج','د'][i]+' '+x).join('، '));
   }
 
   function answerQ(idx) {
-    if (quizAnswered) return;
-    quizAnswered = true;
-    const q    = quizQuestions[quizCurrent];
-    const opts = document.querySelectorAll('.quiz-opt');
-    opts.forEach(o => o.classList.add('answered'));
-    if (idx === q.correct) { opts[idx].classList.add('correct'); quizScore++; }
-    else { opts[idx].classList.add('wrong'); opts[q.correct].classList.add('correct'); }
+    if (quizAnswered || !Number.isInteger(idx) || idx<0 || idx>3) return;
+    quizAnswered=true;
+    quizAnswers[quizCurrent]=idx;
+    document.querySelectorAll('#quiz-card .quiz-opt').forEach((o,i)=>{o.classList.add('answered');if(i===idx)o.classList.add('correct');});
     document.getElementById('qexp').classList.add('show');
     document.getElementById('qnext').classList.add('show');
   }
-
   function nextQ() {
-    quizAnswered = false;
+    if (!quizAnswered) return;
+    quizAnswered=false;
     quizCurrent++;
     renderQuizQ();
   }
-
   async function renderQuizResult() {
-    const score  = Math.round((quizScore/quizQuestions.length)*100);
-    const passed = score >= 70;
-    let xpEarned = 0;
-
-    if (currentUser) {
-      try {
-        const res  = await fetch('/api/tutor/submit-quiz', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({subject:currentSubject, level:currentLevel, score})
-        });
-        const data = await res.json();
-        xpEarned   = data.xp_earned || 0;
-        updateXPBar(data.total_xp);
-        if (xpEarned > 0) showXPPopup(xpEarned);
-
-        const progRes  = await fetch(`/api/tutor/progress/${currentSubject}`);
-        const progData = await progRes.json();
-        userProgress[currentSubject] = progData;
-      } catch(e) {}
+    if (!quizToken || quizAnswers.length !== quizQuestions.length) return;
+    document.getElementById('quiz-card').textContent='در حال بررسی جواب‌ها...';
+    try {
+      const res=await fetch('/api/tutor/submit-quiz',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({quiz_token:quizToken,answers:quizAnswers})});
+      const data=await res.json();
+      if(!res.ok) throw new Error(data.error||'Submission failed');
+      quizToken=null;
+      const xp=data.xp_earned||0;
+      updateXPBar(data.total_xp);
+      if(xp) showXPPopup(xp);
+      const progRes=await fetch(`/api/tutor/progress/${currentSubject}`);
+      if(progRes.ok)userProgress[currentSubject]=await progRes.json();
+      document.getElementById('quiz-card').innerHTML=`<div class="quiz-result">
+        <div class="score-big">${data.score}%</div>
+        <div class="score-label">${data.passed?'🎉 آفرین! قبول شدی!':'😊 دوباره تمرین کن!'}</div>
+        ${xp?`<div class="xp-pill">+${xp} XP ⚡</div>`:'<p>XP این سطح قبلاً دریافت شده یا هنوز قبول نشده‌ای.</p>'}
+        <div class="result-actions"><button class="btn-gold" onclick="showScreen('topic')">بازگشت به موضوعات</button>
+        <button class="btn-dim" onclick="startQuiz(${currentLevel})">کوییز جدید</button></div></div>`;
+      window.KhayyamInlineVoice?.say?.('کوییز تمام شد. نمره شما '+data.score+' فیصد است. '+(xp?'شما '+xp+' امتیاز گرفتید.':'این بار امتیاز تازه‌ای دریافت نکردید.'));
+    } catch(err) {
+      document.getElementById('quiz-card').innerHTML='<p>نتیجه ذخیره نشد. دوباره تلاش کنید.</p><button class="btn-gold" onclick="renderQuizResult()">تلاش دوباره</button>';
     }
-
-    document.getElementById('quiz-card').innerHTML = `
-      <div class="quiz-result">
-        <div class="score-big">${score}%</div>
-        <div class="score-label">${passed ? '🎉 آفرین! قبول شدی!' : '😊 دوباره امتحان کن!'}</div>
-        ${xpEarned > 0 ? `<div class="xp-pill">+${xpEarned} XP کسب کردی ⚡</div>` : ''}
-        <div class="result-actions">
-          ${passed
-            ? `<button class="btn-gold" onclick="showScreen('topic')">ادامه درس →</button>`
-            : `<button class="btn-gold" onclick="startQuiz(${currentLevel})">دوباره امتحان بده 🔄</button>`
-          }
-          <button class="btn-dim" onclick="showScreen('topic')">بازگشت به موضوعات</button>
-        </div>
-      </div>`;
   }
 
   // ── PLACEMENT TEST ──
@@ -1331,7 +1309,24 @@
     await window.KhayyamInlineVoice.toggle({mode:'tutor', subject:currentSubject,
       topic_key:currentTopic.key, level:String(currentLevel)});
   }
+  function voiceOptionIndex(text) {
+    const t=String(text).trim().toLowerCase();
+    if(!/گزینه|انتخاب|^\s*[abcd1-4]\s*$|^\s*(الف|ب|ج|د|اول|دوم|سوم|چهارم)\s*$/.test(t)) return -1;
+    const tokens=t.split(/[\s،,.!?؟:؛]+/).filter(Boolean);
+    const variants=[['الف','اول','یک','1','a'],['ب','دوم','دو','2','b'],['ج','سوم','سه','3','c'],['د','چهارم','چهار','4','d']];
+    for(let i=0;i<4;i++) if(tokens.some(x=>variants[i].includes(x))) return i;
+    return -1;
+  }
   window.khayyamVoiceRender = (role, text) => {
+    if(role==='user' && window.KhayyamInlineVoice?.isActive()) {
+      const option=voiceOptionIndex(text);
+      if(option>=0 && document.getElementById('screen-quiz').classList.contains('active') && quizToken && !quizAnswered) answerQ(option);
+      else if(option>=0 && inlineQuizActive && practiceToken) answerInline(option);
+      if(role==='user' && document.getElementById('screen-chat').classList.contains('active') && !inlineQuizActive) {
+        voicePracticeCount++;
+        if(voicePracticeCount % 4===0) triggerInlineQuiz();
+      }
+    }
     appendBubble(role === 'assistant' ? 'ai' : 'user', text);
     // Keep the in-memory lesson aligned with what was spoken and saved.
     chatHistory.push({role, content:text});
@@ -1349,6 +1344,6 @@
 
   init();
 </script>
-<script src="/static/voice_inline.js?v=3"></script>
+<script src="/static/voice_inline_step4.js?v=4"></script>
 </body>
 </html>
