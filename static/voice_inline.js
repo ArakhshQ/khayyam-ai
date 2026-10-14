@@ -7,237 +7,148 @@
   const button = () => document.getElementById('voice-record-btn');
   const note = text => { if (status()) status().textContent = text; };
   const setButton = active => {
-    const btn = button();
-    if (!btn) return;
-    btn.classList.toggle('voice-active', active);
-    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-    btn.title = active ? 'پایان گفتگوی زنده' : 'شروع گفتگوی زنده';
+    const el = button(); if (!el) return;
+    el.classList.toggle('recording', active);
+    el.textContent = active ? '⏹' : '🎙';
+    el.title = active ? 'پایان گفتگوی زنده' : 'شروع گفتگوی زنده';
+    el.setAttribute('aria-label', el.title);
   };
-  const csrfHeaders = () => ({ 'Content-Type': 'application/json' });
-
-  function appendBubble(role, content, pending = false) {
-    const wrap = document.getElementById('chat-messages') ||
-                 document.getElementById('messages') ||
-                 document.getElementById('tutor-chat-messages') ||
-                 document.querySelector('.chat-messages');
-    if (!wrap) return null;
-    const div = document.createElement('div');
-    div.className = 'message ' + (role === 'user' ? 'user' : 'assistant') + ' voice-transcript';
-    if (pending) div.classList.add('voice-pending');
-    div.textContent = content;
-    wrap.appendChild(div);
-    wrap.scrollTop = wrap.scrollHeight;
-    return div;
+  const render = (role, content) => {
+    if (!content) return;
+    if (typeof window.khayyamVoiceRender === 'function') window.khayyamVoiceRender(role, content);
+  };
+  function teardown(s) {
+    if (!s || s.closed) return;
+    s.closed = true;
+    try { s.dc?.close(); } catch (_) {}
+    try { s.pc?.close(); } catch (_) {}
+    try { s.mic?.getTracks().forEach(t => t.stop()); } catch (_) {}
+    try { s.audio?.pause(); s.audio?.remove(); } catch (_) {}
+    if (state === s) state = null;
+    setButton(false);
   }
-
-  async function saveTurn(role, text, turnId) {
-    if (!state || !text.trim()) return;
-    const s = state;
-    if (s.saved.has(turnId)) return;
-    s.saved.add(turnId);
-    const body = {
-      mode: s.mode,
-      role,
-      content: text.trim(),
-      conversation_id: s.conversationId,
-      subject: s.subject,
-      topic_key: s.topicKey,
-      turn_id: turnId
-    };
+  async function flush(s) {
+    if (s.saving || !s.receipt || !s.pending.length) return;
+    s.saving = true;
     try {
-      const res = await fetch('/api/voice/turn', {
-        method: 'POST',
-        headers: csrfHeaders(),
-        body: JSON.stringify(body),
-        credentials: 'same-origin'
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'save failed');
-      if (data.conversation_id) {
-        s.conversationId = data.conversation_id;
-        if (s.mode === 'chat') {
-          window.currentConvId = data.conversation_id;
-          if (typeof window.setCurrentConversationId === 'function')
-            window.setCurrentConversationId(data.conversation_id);
-        }
+      while (s.pending.length) {
+        const batch = s.pending.slice(0, 12);
+        const response = await fetch('/api/voice/save', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({receipt: s.receipt, turns: batch.map(t => ({role:t.role, content:t.content}))})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not save voice messages');
+        s.pending.splice(0, batch.length);
+        if (result.conversation_id && typeof window.khayyamVoiceSavedConversation === 'function')
+          window.khayyamVoiceSavedConversation(result.conversation_id);
       }
+      if (s.ending) note('گفتگوی صوتی پایان یافت.');
     } catch (err) {
-      console.warn('Voice transcript save failed:', err);
-      s.saved.delete(turnId);
-      note('گفتگو ادامه دارد؛ ذخیرهٔ یک پیام ناموفق بود.');
+      console.error('Voice save:', err);
+      note('ذخیره بعضی پیام‌های صوتی ناموفق بود. برای تلاش دوباره میکروفون را بزنید.');
+    } finally {
+      s.saving = false;
     }
   }
-
-  function getMode() {
-    const cfg = window.KHAYYAM_VOICE_CONFIG || {};
-    return {
-      mode: cfg.mode === 'tutor' ? 'tutor' : 'chat',
-      conversationId: typeof cfg.getConversationId === 'function'
-        ? cfg.getConversationId() : (cfg.conversationId || null),
-      subject: typeof cfg.getSubject === 'function'
-        ? cfg.getSubject() : (cfg.subject || ''),
-      topicKey: typeof cfg.getTopicKey === 'function'
-        ? cfg.getTopicKey() : (cfg.topicKey || '')
-    };
+  function complete(s, role, key, text) {
+    text = String(text || '').trim();
+    if (!text || s.completed.has(role + ':' + key)) return;
+    s.completed.add(role + ':' + key);
+    render(role, text);
+    s.pending.push({role, content:text});
+    flush(s);
   }
-
-  function onEvent(ev) {
-    if (!state) return;
-    const s = state;
-    if (ev.type === 'input_audio_buffer.speech_started') {
-      note('در حال شنیدن صدای شما...');
+  function onEvent(s, d) {
+    if (d.type === 'input_audio_buffer.speech_started') note('در حال شنیدن...');
+    if (d.type === 'conversation.item.input_audio_transcription.completed') {
+      complete(s, 'user', d.item_id || 'u' + (++s.seq), d.transcript);
     }
-    if (ev.type === 'input_audio_buffer.speech_stopped') {
-      note('در حال آماده‌سازی پاسخ...');
+    if (d.type === 'response.created') note('خیام در حال پاسخ دادن است...');
+    if (d.type === 'response.output_audio_transcript.delta' || d.type === 'response.audio_transcript.delta') {
+      const id = d.response_id || 'current';
+      s.assistantDrafts.set(id, (s.assistantDrafts.get(id) || '') + (d.delta || ''));
     }
-    if (ev.type === 'conversation.item.input_audio_transcription.completed') {
-      const text = (ev.transcript || '').trim();
-      if (!text) return;
-      const id = 'user:' + (ev.item_id || Date.now());
-      appendBubble('user', text);
-      saveTurn('user', text, id);
+    if (d.type === 'response.output_audio_transcript.done' || d.type === 'response.audio_transcript.done') {
+      const id = d.response_id || 'current';
+      s.assistantDrafts.set(id, d.transcript || s.assistantDrafts.get(id) || '');
     }
-    if (ev.type === 'response.created') {
-      note('خیام در حال پاسخ دادن است...');
+    if (d.type === 'response.done') {
+      const id = d.response?.id || 'a' + (++s.seq);
+      const fromOutput = (d.response?.output || []).flatMap(o => o.content || [])
+        .map(c => c.transcript || c.text || '').filter(Boolean).join(' ');
+      const text = fromOutput || s.assistantDrafts.get(id) || '';
+      // A cancelled/interrupted reply may be partial. Save only if there is actual text.
+      if (text) complete(s, 'assistant', id, text);
+      note('متصل است — صحبت کنید.');
     }
-    if (ev.type === 'response.output_audio_transcript.delta' ||
-        ev.type === 'response.audio_transcript.delta') {
-      const id = ev.item_id || ev.response_id || 'current';
-      if (!s.assistantTurns.has(id)) {
-        s.assistantTurns.set(id, { text: '', element: appendBubble('assistant', '', true) });
-      }
-      const turn = s.assistantTurns.get(id);
-      turn.text += ev.delta || '';
-      if (turn.element) turn.element.textContent = turn.text;
-    }
-    if (ev.type === 'response.output_audio_transcript.done' ||
-        ev.type === 'response.audio_transcript.done') {
-      const id = ev.item_id || ev.response_id || 'current';
-      const existing = s.assistantTurns.get(id);
-      const text = (ev.transcript || (existing && existing.text) || '').trim();
-      if (!text) return;
-      if (existing && existing.element) {
-        existing.element.textContent = text;
-        existing.element.classList.remove('voice-pending');
-      } else {
-        appendBubble('assistant', text);
-      }
-      saveTurn('assistant', text, 'assistant:' + id);
-      s.assistantTurns.delete(id);
-    }
-    if (ev.type === 'response.done') {
-      note('می‌توانید صحبت کنید.');
-    }
-    if (ev.type === 'error') {
-      console.warn('Realtime event error:', ev.error);
-      note('یک خطا در گفتگوی صوتی رخ داد.');
+    if (d.type === 'error') {
+      console.error('Realtime:', d.error);
+      note('خطای صوتی رخ داد. اتصال را بررسی کنید.');
     }
   }
-
-  async function start() {
-    if (state) return;
-    const config = getMode();
-    state = {
-      ...config,
-      saved: new Set(),
-      assistantTurns: new Map(),
-      pc: null,
-      dc: null,
-      stream: null,
-      audio: null,
-      stopping: false
-    };
-    const s = state;
+  async function start(context) {
+    const s = {closed:false, ending:false, saving:false, pending:[], completed:new Set(),
+      assistantDrafts:new Map(), seq:0, receipt:null, pc:null, dc:null, mic:null, audio:null};
+    state = s;
     setButton(true);
     note('در حال اتصال...');
     try {
-      const res = await fetch('/api/voice/session', {
-        method: 'POST',
-        headers: csrfHeaders(),
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          mode: s.mode,
-          subject: s.subject,
-          topic_key: s.topicKey,
-          conversation_id: s.conversationId
-        })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.value) throw new Error(data.error || 'No session token');
-
+      s.mic = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
+      if (s.closed) return;
+      const response = await fetch('/api/voice/session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(context)});
+      const session = await response.json();
+      if (!response.ok || !session.value || !session.receipt) throw new Error(session.error || 'Voice session unavailable');
+      if (s.closed) return;
+      s.receipt = session.receipt;
       s.pc = new RTCPeerConnection();
       s.audio = document.createElement('audio');
       s.audio.autoplay = true;
-      s.audio.style.display = 'none';
       document.body.appendChild(s.audio);
-      s.pc.ontrack = event => {
-        s.audio.srcObject = event.streams[0];
-        s.audio.play().catch(console.warn);
-      };
+      s.pc.ontrack = event => { s.audio.srcObject = event.streams[0]; s.audio.play().catch(console.warn); };
       s.pc.onconnectionstatechange = () => {
-        if (state !== s) return;
-        if (['failed', 'closed', 'disconnected'].includes(s.pc.connectionState)) {
-          stop();
-        }
+        if (s.closed) return;
+        if (['failed','disconnected','closed'].includes(s.pc.connectionState)) note('اتصال صوتی قطع شد. برای پایان میکروفون را بزنید.');
       };
-      s.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true }
-      });
-      s.stream.getTracks().forEach(track => s.pc.addTrack(track, s.stream));
+      s.mic.getTracks().forEach(track => s.pc.addTrack(track, s.mic));
       s.dc = s.pc.createDataChannel('oai-events');
-      s.dc.onopen = () => {
-        if (state !== s) return;
-        note('وصل شدید. صحبت کنید!');
-      };
-      s.dc.onmessage = event => {
-        try { onEvent(JSON.parse(event.data)); }
-        catch (err) { console.warn('Voice event parsing failed', err); }
-      };
+      s.dc.onopen = () => { if (!s.closed) note('متصل شد — صحبت کنید.'); };
+      s.dc.onmessage = e => { if (!s.closed) { try { onEvent(s, JSON.parse(e.data)); } catch (err) { console.warn(err); } } };
       const offer = await s.pc.createOffer();
       await s.pc.setLocalDescription(offer);
       const answer = await fetch('https://api.openai.com/v1/realtime/calls', {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + data.value,
-          'Content-Type': 'application/sdp'
-        },
-        body: offer.sdp
+        method:'POST', headers:{Authorization:'Bearer ' + session.value,'Content-Type':'application/sdp'}, body:offer.sdp
       });
-      if (!answer.ok) throw new Error('WebRTC connection failed: ' + answer.status);
-      await s.pc.setRemoteDescription({ type: 'answer', sdp: await answer.text() });
-      note('وصل شدید. صحبت کنید!');
+      if (!answer.ok) throw new Error('Realtime connection failed: ' + answer.status);
+      const sdp = await answer.text();
+      if (s.closed) return;
+      await s.pc.setRemoteDescription({type:'answer',sdp});
+      if (!s.closed) note('متصل شد — صحبت کنید.');
     } catch (err) {
-      console.error('Inline Live Voice failed:', err);
-      stop();
-      note('اتصال برقرار نشد. دوباره تلاش کنید.');
+      console.error('Live Voice:', err);
+      teardown(s);
+      note('اتصال برقرار نشد: ' + err.message);
     }
   }
-
-  function stop() {
-    if (!state) return;
-    const s = state;
-    if (s.stopping) return;
-    s.stopping = true;
-    state = null;
-    try { if (s.dc) s.dc.close(); } catch (_) {}
-    try { if (s.pc) s.pc.close(); } catch (_) {}
-    try { if (s.stream) s.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
-    try {
-      if (s.audio) {
-        s.audio.pause();
-        s.audio.srcObject = null;
-        s.audio.remove();
-      }
-    } catch (_) {}
-    setButton(false);
-    note('گفتگوی صوتی پایان یافت.');
+  async function stop(s) {
+    if (!s || s.ending) return;
+    s.ending = true;
+    note('در حال پایان گفتگو...');
+    // Give the transcription service a short opportunity to finish the last utterance.
+    if (s.dc?.readyState === 'open') await new Promise(resolve => setTimeout(resolve, 1000));
+    teardown(s);
+    await flush(s);
+    if (s.pending.length) note('بعضی پیام‌ها ذخیره نشدند. برای تلاش دوباره میکروفون را بزنید.');
+    else note('گفتگوی صوتی پایان یافت.');
   }
-
-  function toggle() {
-    if (state) stop();
-    else start();
-  }
-
-  window.KhayyamLiveVoice = { start, stop, toggle, isActive: () => !!state };
-  window.addEventListener('pagehide', stop);
+  window.KhayyamInlineVoice = {
+    toggle: async context => {
+      if (state) { await stop(state); return; }
+      await start(context);
+    },
+    isActive: () => !!state,
+    retrySave: () => { if (state) return flush(state); },
+    stop: () => state ? stop(state) : Promise.resolve()
+  };
+  window.addEventListener('pagehide', () => { if (state) teardown(state); });
 })();
