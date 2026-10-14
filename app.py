@@ -673,13 +673,13 @@ def extract_text_from_file(file_bytes, filename):
 @app.route("/register")
 def register_page():
     if current_user.is_authenticated:
-        return redirect(url_for('chat_page'))
+        return redirect(url_for('chat_page') if current_user.email_verified else url_for('check_email_page'))
     return render_template("register.html")
 
 @app.route("/login")
 def login_page():
     if current_user.is_authenticated:
-        return redirect(url_for('chat_page'))
+        return redirect(url_for('chat_page') if current_user.email_verified else url_for('check_email_page'))
     return render_template("login.html")
 
 @app.route("/logout")
@@ -699,42 +699,72 @@ def pricing_page():
 
 @app.route("/api/register", methods=["POST"])
 def api_register():
-    data     = request.get_json(silent=True) or {}
-    username = data.get("username", "").strip()
-    password = data.get("password", "").strip()
-    email    = (data.get("email") or "").strip().lower()
-    phone    = None
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username") or "").strip()
+    email = str(data.get("email") or "").strip().lower()
+    password = str(data.get("password") or "")
+    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email) or len(email) > 150:
+        return jsonify(success=False, error="آدرس ایمیل معتبر وارد کنید."), 400
+    if len(username) < 3 or len(username) > 80:
+        return jsonify(success=False, error="نام کاربری باید بین ۳ و ۸۰ نویسه باشد."), 400
+    if not 8 <= len(password) <= 128:
+        return jsonify(success=False, error="رمز عبور باید بین ۸ و ۱۲۸ نویسه باشد."), 400
 
-    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
-        return jsonify({"success": False, "error": "ایمیل معتبر وارد کنید"}), 400
-    if len(username) < 3:
-        return jsonify({"success": False, "error": "نام کاربری باید حداقل ۳ حرف باشد"})
-    if len(password) < 8:
-        return jsonify({"success": False, "error": "رمز عبور باید حداقل ۶ حرف باشد"})
-
-    user, error = register_user(username, password, email, phone)
+    user, error = register_user(username, password, email, None)
     if error:
-        return jsonify({"success": False, "error": error})
+        return jsonify(success=False, error=error), 400
 
-    login_user(user)
+    user.email_verified = False
+    db.session.commit()
     try:
-        send_account_email(user, 'verify')
+        sent = send_account_email(user, "verify")
     except Exception:
-        app.logger.exception('Verification email delivery failed')
-    return jsonify({"success": True, "verification_email_sent": bool(os.getenv('SMTP_HOST') and os.getenv('SMTP_USER') and os.getenv('SMTP_PASSWORD') and os.getenv('SMTP_FROM'))})
+        app.logger.exception("Verification email delivery failed")
+        sent = False
+
+    return jsonify(success=True, verification_required=True,
+                   verification_email_sent=sent, redirect="/check-email")
+
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
-    data       = request.get_json(silent=True) or {}
-    identifier = (data.get("email") or data.get("identifier") or "").strip().lower()
-    password   = data.get("password", "").strip()
-
-    user, error = login_user_by_email(identifier, password)
-    if error:
-        return jsonify({"success": False, "error": error})
-
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email") or data.get("identifier") or "").strip().lower()
+    password = str(data.get("password") or "")
+    user, error = login_user_by_email(email, password)
+    if error or user is None:
+        return jsonify(success=False, error="ایمیل یا رمز عبور نادرست است."), 401
+    if not user.email_verified:
+        return jsonify(success=False, verification_required=True,
+                       error="لطفاً ابتدا ایمیل خود را تأیید کنید."), 403
     login_user(user)
-    return jsonify({"success": True})
+    return jsonify(success=True)
+
+
+@app.route("/check-email")
+def check_email_page():
+    return render_template("check_email.html")
+
+
+@app.before_request
+def require_verified_email():
+    if not current_user.is_authenticated or current_user.email_verified:
+        return None
+    # Keep recovery, verification, logout, and static files accessible.
+    allowed = {
+        "static", "home", "login_page", "register_page", "logout",
+        "check_email_page", "verify_email", "resend_verification",
+        "forgot_password_page", "reset_password_page",
+        "api_forgot_password", "api_reset_password",
+        "api_login", "api_register",
+    }
+    if request.endpoint in allowed:
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify(success=False, verification_required=True,
+                       error="لطفاً ابتدا ایمیل خود را تأیید کنید."), 403
+    return redirect(url_for("check_email_page"))
+
 
 # Signed, expiring tokens. Password-reset tokens become invalid after password changes.
 def account_token(user, purpose):
@@ -777,6 +807,27 @@ def send_account_email(user, purpose):
     message['To'] = user.email
     message['Subject'] = subject
     message.set_content(body)
+    from html import escape
+    heading = "تأیید آدرس ایمیل" if purpose == "verify" else "بازیابی رمز عبور"
+    description = ("برای فعال‌سازی حساب خیام، روی دکمه زیر کلیک کنید."
+                   if purpose == "verify" else
+                   "برای انتخاب رمز عبور جدید، روی دکمه زیر کلیک کنید.")
+    button_label = "تأیید ایمیل" if purpose == "verify" else "تعیین رمز عبور جدید"
+    validity = "۲۴ ساعت" if purpose == "verify" else "۳۰ دقیقه"
+    safe_link = escape(link, quote=True)
+    message.add_alternative(f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:32px 14px;background:#0f0e0c;color:#ede8df;font-family:Tahoma,Arial,sans-serif">
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:520px;margin:auto;background:#1a1814;border:1px solid #2e2a22;border-radius:16px">
+<tr><td style="padding:36px 28px;text-align:center">
+<div style="color:#c9a84c;font-size:29px;font-weight:bold;margin-bottom:22px">خیام</div>
+<h1 style="font-size:22px;color:#ede8df">{heading}</h1>
+<p style="color:#b5ab99;font-size:14px;line-height:2;margin-bottom:28px">{description}</p>
+<a href="{safe_link}" style="display:inline-block;background:#c9a84c;color:#0f0e0c;padding:14px 28px;border-radius:9px;text-decoration:none;font-weight:bold">{button_label}</a>
+<p style="color:#8b8170;font-size:12px;line-height:2;margin-top:28px">اعتبار لینک: {validity}</p>
+<p style="color:#8b8170;font-size:12px;line-height:2">اگر این درخواست را انجام نداده‌اید، این ایمیل را نادیده بگیرید.</p>
+<p style="color:#8b8170;font-size:12px;border-top:1px solid #2e2a22;padding-top:20px">Khayyam AI</p>
+</td></tr></table></body></html>""", subtype="html")
     if port == 465:
         with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=15) as smtp:
             smtp.login(username, password)
@@ -834,22 +885,31 @@ def api_reset_password():
 @app.route('/verify-email/<token>')
 def verify_email(token):
     user = token_user(token, 'verify', 86400)
-    if not user: return render_template('email_result.html', message='لینک تأیید نامعتبر یا منقضی شده است.')
+    if not user:
+        return render_template('email_result.html', success=False,
+                               message='لینک تأیید نامعتبر یا منقضی شده است.'), 400
     user.email_verified = True
     db.session.commit()
-    return render_template('email_result.html', message='ایمیل شما با موفقیت تأیید شد!')
+    return render_template('email_result.html', success=True,
+                           message='ایمیل شما با موفقیت تأیید شد!')
+
 
 @app.route('/api/resend-verification', methods=['POST'])
-@login_required
 def resend_verification():
-    if current_user.email_verified: return jsonify({'success':True, 'message':'ایمیل قبلاً تأیید شده است.'})
-    if email_throttled(current_user.email or '', 'verify'): return jsonify({'error':'لطفاً یک دقیقه صبر کنید.'}), 429
-    try:
-        if not send_account_email(current_user, 'verify'): return jsonify({'error':'ارسال ایمیل هنوز تنظیم نشده است.'}), 503
-    except Exception:
-        app.logger.exception('Resend verification failed')
-        return jsonify({'error':'ارسال ایمیل ناموفق بود.'}), 502
-    return jsonify({'success':True})
+    data = request.get_json(silent=True) or {}
+    email = str(data.get('email') or '').strip().lower()
+    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email) or len(email) > 150:
+        return jsonify(error='آدرس ایمیل معتبر وارد کنید.'), 400
+    message = 'اگر حسابی با این ایمیل در انتظار تأیید باشد، لینک جدید ارسال خواهد شد.'
+    if not email_throttled(email, 'verify'):
+        user = User.query.filter_by(email=email).first()
+        if user and not user.email_verified:
+            try:
+                send_account_email(user, 'verify')
+            except Exception:
+                app.logger.exception('Resend verification failed')
+    return jsonify(success=True, message=message)
+
 
 @app.route("/api/me")
 def api_me():

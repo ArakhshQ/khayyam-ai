@@ -1,185 +1,124 @@
+
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
   <title>ورود — خیام</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  <style>
-   
-    
-    body {
-      background: var(--bg); color: var(--text);
-      font-family: 'Vazirmatn', sans-serif;
-      min-height: 100vh; display: flex; flex-direction: column;
-    }
-   
-    nav {
-      position: relative; z-index: 10;
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0 24px; height: 56px;
-      background: var(--surface); border-bottom: 1px solid var(--border);
-    }
-    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
-    .logo-mark {
-      width: 30px; height: 30px; border: 1.5px solid var(--gold);
-      border-radius: 7px; display: flex; align-items: center;
-      justify-content: center; font-size: 14px; font-weight: 700; color: var(--gold);
-    }
-    .logo-text { font-size: 16px; font-weight: 700; color: var(--gold); }
-    .nav-link {
-      color: var(--text-dim); text-decoration: none; font-size: 13px;
-      padding: 5px 12px; border-radius: 7px; border: 1px solid var(--border);
-      transition: all 0.2s;
-    }
-    .nav-link:hover { color: var(--text); background: var(--surface2); }
-    .page {
-      position: relative; z-index: 1; flex: 1;
-      display: flex; align-items: center; justify-content: center;
-      padding: 40px 16px;
-    }
-    .card {
-      width: 100%; max-width: 400px;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 16px; padding: 36px 32px;
-      animation: fadeUp 0.5s ease both;
-    }
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(16px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .card-top { text-align: center; margin-bottom: 28px; }
-    .card-icon { font-size: 36px; display: block; margin-bottom: 12px; }
-    .card-top h1 { font-size: 22px; font-weight: 700; color: var(--gold); margin-bottom: 6px; }
-    .card-top p  { font-size: 13px; color: var(--text-dim); line-height: 1.7; }
-    .form-group  { margin-bottom: 16px; }
-    .form-label  {
-      display: block; font-size: 12px; font-weight: 500;
-      color: var(--text-dim); margin-bottom: 7px; letter-spacing: 0.05em;
-    }
-    .form-input {
-      width: 100%; padding: 11px 14px;
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 9px; color: var(--text);
-      font-family: 'Vazirmatn', sans-serif;
-      font-size: 14px; outline: none; transition: border-color 0.2s; direction: rtl;
-    }
-    .form-input:focus { border-color: var(--gold-dim); }
-    .form-input::placeholder { color: var(--text-dim); }
-    .submit-btn {
-      width: 100%; padding: 13px;
-      background: var(--gold); color: #0f0e0c;
-      border: none; border-radius: 9px;
-      font-family: 'Vazirmatn', sans-serif;
-      font-size: 15px; font-weight: 700;
-      cursor: pointer; transition: all 0.2s; margin-top: 4px;
-    }
-    .submit-btn:hover { background: #e0bb60; transform: translateY(-1px); }
-    .submit-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
-    .error-box {
-      background: var(--red); border: 1px solid #6a2a2a;
-      border-radius: 8px; padding: 10px 14px;
-      font-size: 13px; color: var(--red-lt);
-      margin-bottom: 16px; display: none;
-    }
-    .hint {
-      font-size: 12px; color: var(--text-dim);
-      margin-top: 5px; padding-right: 4px;
-    }
-    .footer-link {
-      text-align: center; margin-top: 20px;
-      font-size: 13px; color: var(--text-dim);
-    }
-    .footer-link a { color: var(--gold); text-decoration: none; }
-    .footer-link a:hover { text-decoration: underline; }
-  </style>
+  <link rel="stylesheet" href="/static/auth.css">
 </head>
-<body>
-  <nav>
+<body class="auth-body">
+  <nav class="auth-nav">
     <a href="/" class="logo">
-      <div class="logo-mark">خ</div>
+      <span class="logo-mark">خ</span>
       <span class="logo-text">خیام</span>
     </a>
-    <a href="/register" class="nav-link">ثبت‌نام</a>
+    <a href="/register" class="auth-nav-link">
+      ایجاد حساب
+    </a>
   </nav>
 
-  <div class="page">
-    <div class="card">
-      <div class="card-top">
-        <span class="card-icon">🔑</span>
+  <main class="auth-main">
+    <section class="auth-card">
+      <div class="auth-heading">
+        <div class="auth-icon" aria-hidden="true">✦</div>
         <h1>خوش آمدید</h1>
-        <p>با ایمیل وارد شوید</p>
+        <p>برای ادامه وارد حساب خیام خود شوید.</p>
       </div>
 
-      <div id="error-box" class="error-box"></div>
+      <div id="notice" class="auth-notice"
+           role="status" aria-live="polite"></div>
 
-      <div class="form-group">
-        <label class="form-label">ایمیل</label>
-        <input class="form-input" type="email" id="identifier" placeholder="example@gmail.com" style="direction:ltr"/>
-        <div class="hint">می‌توانید با ایمیل وارد شوید</div>
+      <form id="login-form">
+        <div class="auth-field">
+          <label class="auth-label" for="email">
+            آدرس ایمیل
+          </label>
+          <input class="auth-input" id="email"
+                 type="email" autocomplete="email"
+                 placeholder="example@gmail.com"
+                 required>
+        </div>
+
+        <div class="auth-field">
+          <label class="auth-label" for="password">
+            رمز عبور
+          </label>
+          <input class="auth-input" id="password"
+                 type="password"
+                 autocomplete="current-password"
+                 placeholder="رمز عبور خود را وارد کنید"
+                 required>
+        </div>
+
+        <div class="auth-help-row">
+          <a class="auth-text-link"
+             href="/forgot-password">
+            رمز عبور را فراموش کرده‌اید؟
+          </a>
+        </div>
+
+        <button class="auth-button" id="submit-btn"
+                type="submit">
+          ورود به حساب
+        </button>
+      </form>
+
+      <div class="auth-footer">
+        حساب ندارید؟
+        <a href="/register">ثبت‌نام کنید</a>
       </div>
-
-      <div class="form-group">
-        <label class="form-label">رمز عبور</label>
-        <input class="form-input" type="password" id="password" placeholder="رمز عبور خود را وارد کنید"/>
-      </div>
-
-      <p><a href="/forgot-password">رمز عبور را فراموش کرده‌اید؟</a></p>
-      <button class="submit-btn" id="submit-btn" onclick="login()">
-        ورود ←
-      </button>
-
-      <div class="footer-link">
-        حساب ندارید؟ <a href="/register">ثبت‌نام کنید</a>
-      </div>
-    </div>
-  </div>
+    </section>
+  </main>
 
   <script>
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Enter') login();
-    });
+    const form = document.getElementById('login-form');
+    const button = document.getElementById('submit-btn');
+    const notice = document.getElementById('notice');
 
-    function showError(msg) {
-      const box = document.getElementById('error-box');
-      box.textContent = msg;
-      box.style.display = 'block';
+    function showNotice(message, type = 'error') {
+      notice.textContent = message;
+      notice.className = 'auth-notice visible ' + type;
     }
 
-    async function login() {
-      const identifier = document.getElementById('identifier').value.trim();
-      const password   = document.getElementById('password').value;
-
-      if (!identifier) return showError('لطفاً ایمیل را وارد کنید');
-      if (!password)   return showError('رمز عبور الزامی است');
-
-      const btn = document.getElementById('submit-btn');
-      btn.disabled    = true;
-      btn.textContent = 'در حال ورود...';
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      notice.className = 'auth-notice';
+      button.disabled = true;
+      button.textContent = 'در حال ورود...';
 
       try {
-        const res  = await fetch('/api/login', {
+        const response = await fetch('/api/login', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier, password })
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            email: document.getElementById('email').value.trim(),
+            password: document.getElementById('password').value
+          })
         });
-        const data = await res.json();
+
+        const data = await response.json();
 
         if (data.success) {
           window.location.href = '/chat';
-        } else {
-          showError(data.error);
-          btn.disabled    = false;
-          btn.textContent = 'ورود ←';
+          return;
         }
-      } catch (err) {
-        showError('خطای اتصال. دوباره امتحان کنید.');
-        btn.disabled    = false;
-        btn.textContent = 'ورود ←';
+
+        if (data.verification_required) {
+          window.location.href = '/check-email';
+          return;
+        }
+
+        showNotice(data.error || 'ورود ناموفق بود.');
+      } catch (error) {
+        showNotice('ارتباط با سرور برقرار نشد.');
+      } finally {
+        button.disabled = false;
+        button.textContent = 'ورود به حساب';
       }
-    }
+    });
   </script>
 </body>
 </html>

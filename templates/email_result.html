@@ -1,1 +1,53 @@
-<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>خیام AI</title><style>body{font-family:Tahoma,Arial;background:#101827;color:#f4f6fb;display:grid;place-items:center;min-height:95vh}main{width:min(92vw,440px);padding:32px;border:1px solid #42516b;border-radius:18px;background:#1b2740}input,button{box-sizing:border-box;width:100%;padding:13px;margin:9px 0;border-radius:9px;border:1px solid #75809a;font-size:16px}button{background:#6e88ee;color:white;cursor:pointer}a{color:#b6c8ff}#message{min-height:28px}</style><main><h2>{{ message }}</h2><a href="/login">ورود</a></main></html>
+
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
+  <title>تأیید حساب — خیام</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/auth.css">
+</head>
+<body class="auth-body">
+  <nav class="auth-nav">
+    <a href="/" class="logo">
+      <span class="logo-mark">خ</span>
+      <span class="logo-text">خیام</span>
+    </a>
+    <a href="/login" class="auth-nav-link">ورود</a>
+  </nav>
+
+  <main class="auth-main">
+    <section class="auth-card">
+      <div class="auth-heading">
+        <div class="auth-icon" aria-hidden="true">
+          {% if success %}✓{% else %}!{% endif %}
+        </div>
+        <h1>
+          {% if success %}
+            ایمیل تأیید شد
+          {% else %}
+            تأیید ایمیل
+          {% endif %}
+        </h1>
+        <p>{{ message }}</p>
+      </div>
+
+      <div class="auth-actions">
+        {% if success %}
+        <a href="/login" class="auth-button"
+           style="text-align:center;text-decoration:none">
+          ورود به حساب
+        </a>
+        {% else %}
+        <a href="/check-email" class="auth-button"
+           style="text-align:center;text-decoration:none">
+          درخواست لینک جدید
+        </a>
+        {% endif %}
+      </div>
+    </section>
+  </main>
+</body>
+</html>
