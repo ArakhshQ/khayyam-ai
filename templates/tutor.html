@@ -694,9 +694,10 @@
 
     if (currentUser) {
       try {
-        const res  = await fetch(`/api/tutor/progress/${currentSubject}`);
+        const res  = await fetch(`/api/tutor/lesson-history/${encodeURIComponent(currentSubject)}/${encodeURIComponent(topic.key)}`);
+        if (!res.ok) throw new Error('Could not load lesson history');
         const data = await res.json();
-        chatHistory = data.chat_history || [];
+        chatHistory = data.history || [];
         hideLoading();
 
         if (chatHistory.length > 0) {

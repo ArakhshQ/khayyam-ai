@@ -1679,6 +1679,54 @@ def build_tutor_system_prompt(subject, topic_title, topic_desc, chat_history_len
 
 فقط درس بده. اگر کاربر از موضوع خارج شد، آرام او را به موضوع برگردان."""
 
+# Step 3: durable per-topic history shared by text and realtime voice.
+# The old TutorProgress.chat_history remains untouched for compatibility.
+def _ensure_lesson_storage():
+    with db.engine.begin() as conn:
+        conn.execute(sql_text("""CREATE TABLE IF NOT EXISTS tutor_lesson_histories (
+            user_id INTEGER NOT NULL,
+            subject VARCHAR(60) NOT NULL,
+            topic_key VARCHAR(100) NOT NULL,
+            history TEXT NOT NULL DEFAULT '[]',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, subject, topic_key)
+        )"""))
+
+
+def _lesson_history(user_id, subject, topic_key, lock=False):
+    _ensure_lesson_storage()
+    suffix = ' FOR UPDATE' if lock and db.engine.dialect.name == 'postgresql' else ''
+    row = db.session.execute(sql_text("""SELECT history FROM tutor_lesson_histories
+        WHERE user_id=:uid AND subject=:subject AND topic_key=:topic""" + suffix),
+        {'uid': user_id, 'subject': subject, 'topic': topic_key}).first()
+    if not row:
+        return []
+    try:
+        result = json.loads(row[0] or '[]')
+        return result if isinstance(result, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _save_lesson_history(user_id, subject, topic_key, history):
+    _ensure_lesson_storage()
+    data = json.dumps(history[-80:], ensure_ascii=False)
+    # Postgres + SQLite compatible upsert; use DB atomic write.
+    db.session.execute(sql_text("""INSERT INTO tutor_lesson_histories
+        (user_id, subject, topic_key, history, updated_at)
+        VALUES (:uid, :subject, :topic, :history, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, subject, topic_key) DO UPDATE SET
+        history=EXCLUDED.history, updated_at=CURRENT_TIMESTAMP"""),
+        {'uid': user_id, 'subject': subject, 'topic': topic_key, 'history': data})
+
+
+def _topic_info(subject, level, topic_key):
+    if subject not in CURRICULUM:
+        return None
+    return next((t for t in CURRICULUM[subject]['levels'].get(level, {}).get('topics', [])
+                 if t['key'] == topic_key), None)
+
+
 # ══════════════════════════════════════════
 # ── TUTOR API ROUTES ──
 # ══════════════════════════════════════════
@@ -1713,6 +1761,16 @@ def get_tutor_progress(subject):
         'badges':     [b.to_dict() for b in badges],
         'chat_history': json.loads(progress.chat_history or '[]')
     })
+
+@app.route('/api/tutor/lesson-history/<subject>/<topic_key>')
+@login_required
+def get_tutor_lesson_history(subject, topic_key):
+    if subject not in CURRICULUM or not any(
+        t['key'] == topic_key for level in CURRICULUM[subject]['levels'].values()
+        for t in level['topics']):
+        return jsonify(error='Lesson not found'), 404
+    return jsonify(history=_lesson_history(current_user.id, subject, topic_key))
+
 
 @app.route("/api/tutor/start-topic", methods=["POST"])
 def start_topic():
@@ -1749,7 +1807,7 @@ def start_topic():
     return jsonify({
         "topic":   topic_info,
         "badge":   badge,
-        "history": json.loads(progress.chat_history or '[]')
+        "history": _lesson_history(current_user.id, subject, topic_key)
     })
 @app.route("/api/tutor/chat", methods=["POST"])
 def tutor_chat_new():
@@ -1772,10 +1830,15 @@ def tutor_chat_new():
         return jsonify({"error": "موضوع پیدا نشد"}), 400
 
     progress     = get_or_create_progress(current_user.id, subject)
-    chat_history = json.loads(progress.chat_history or '[]')
+    chat_history = _lesson_history(current_user.id, subject, topic_key)
     system_prompt = build_tutor_system_prompt(
         subject, topic_info['title'], topic_info['desc'], len(chat_history)
     )
+    completed = json.loads(progress.completed_topics or '[]')
+    if topic_key in completed:
+        system_prompt += '\nاین موضوع قبلاً تکمیل شده؛ در صورت نیاز مرور و تمرین ارائه کن.'
+    elif chat_history:
+        system_prompt += '\nاین درس قبلاً شروع شده؛ از گفتگوهای قبلی همین موضوع ادامه بده.'
     plan = getattr(current_user, 'plan', 'free') or 'free'
 
     try:
@@ -1804,6 +1867,7 @@ def tutor_chat_new():
     if len(chat_history) > 60:
         chat_history = chat_history[-60:]
 
+    _save_lesson_history(current_user.id, subject, topic_key, chat_history)
     progress.chat_history     = json.dumps(chat_history, ensure_ascii=False)
     progress.last_activity    = datetime.utcnow()
     progress.last_topic_title = topic_info['title']
@@ -2091,7 +2155,7 @@ def _voice_context(data):
     if not topic:
         raise ValueError("Unknown lesson")
     progress = get_or_create_progress(current_user.id, subject)
-    history = json.loads(progress.chat_history or "[]")[-12:]
+    history = _lesson_history(current_user.id, subject, topic_key)[-12:]
     prompt = build_tutor_system_prompt(subject, topic["title"], topic["desc"], len(history))
     prompt += ("\nYou are now teaching in a LIVE VOICE lesson. Be a patient, engaging teacher. "
                "Explain one concept at a time, check comprehension, and stay on this subject. "
@@ -2287,10 +2351,16 @@ def save_live_voice_transcript():
             result = {"saved": len(new_turns), "conversation_id": conv.id if conv else None, "mode": mode}
         else:
             if new_turns:
-                progress = get_or_create_progress(current_user.id, subject)
-                history = json.loads(progress.chat_history or "[]")
+                progress = TutorProgress.query.filter_by(user_id=current_user.id, subject=subject).first()
+                if not progress:
+                    progress = TutorProgress(user_id=current_user.id, subject=subject)
+                    db.session.add(progress)
+                    db.session.flush()
+                history = _lesson_history(current_user.id, subject, topic_key, lock=True)
                 history.extend({"role": t["role"], "content": t["content"]} for t in new_turns)
+                _save_lesson_history(current_user.id, subject, topic_key, history)
                 progress.chat_history = json.dumps(history[-60:], ensure_ascii=False)
+                progress.last_topic_title = _topic_info(subject, level, topic_key)['title']
                 progress.last_activity = datetime.utcnow()
             result = {"saved": len(new_turns), "mode": mode}
         db.session.commit()
