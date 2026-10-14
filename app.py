@@ -2040,8 +2040,67 @@ def placement_result():
 
 
 # ---------------------------------------------------------------------------
-# Khayyam Live Voice — isolated beta (existing Chat/Tutor voice is unchanged)
+# Khayyam Live Voice v2 — Chat and Tutor share one realtime engine,
+# but have different prompts and save transcripts to different histories.
 # ---------------------------------------------------------------------------
+from itsdangerous import URLSafeSerializer
+
+
+def _voice_context(data):
+    mode = data.get("mode", "chat")
+    if mode not in ("chat", "tutor"):
+        raise ValueError("Invalid voice mode")
+    if mode == "chat":
+        conv_id = data.get("conversation_id")
+        conv = None
+        if conv_id not in (None, "", 0):
+            try:
+                conv_id = int(conv_id)
+            except (TypeError, ValueError):
+                raise ValueError("Invalid conversation")
+            conv = Conversation.query.filter_by(id=conv_id, user_id=current_user.id).first()
+            if not conv:
+                raise ValueError("Conversation not found")
+        history = []
+        if conv:
+            history = Message.query.filter_by(conversation_id=conv.id).order_by(Message.id.desc()).limit(12).all()
+            history.reverse()
+        prompt = (
+            "You are Khayyam AI in GENERAL CONVERSATION mode, not a tutor. "
+            "Be a natural, warm, intelligent conversation partner. Follow the user's interests, "
+            "ask questions only when helpful, and do not turn ordinary conversations into lessons. "
+            "Respond in the user's language; when using Dari, prefer Afghan Dari vocabulary. "
+            "Keep speech conversational and fairly concise. "
+        )
+        if history:
+            context = "\n".join(f"{m.role}: {m.content[:800]}" for m in history)
+            prompt += "\nRecent chat context (do not read aloud):\n" + context
+        return mode, {"conversation_id": conv.id if conv else None}, prompt
+
+    subject = str(data.get("subject") or "")
+    topic_key = str(data.get("topic_key") or "")
+    try:
+        level = int(data.get("level", 1))
+    except (TypeError, ValueError):
+        raise ValueError("Invalid level")
+    if subject not in CURRICULUM:
+        raise ValueError("Unknown subject")
+    topics = CURRICULUM[subject]["levels"].get(level, {}).get("topics", [])
+    topic = next((t for t in topics if t["key"] == topic_key), None)
+    if not topic:
+        raise ValueError("Unknown lesson")
+    progress = get_or_create_progress(current_user.id, subject)
+    history = json.loads(progress.chat_history or "[]")[-12:]
+    prompt = build_tutor_system_prompt(subject, topic["title"], topic["desc"], len(history))
+    prompt += ("\nYou are now teaching in a LIVE VOICE lesson. Be a patient, engaging teacher. "
+               "Explain one concept at a time, check comprehension, and stay on this subject. "
+               "Speak in the student's language; prefer Afghan Dari vocabulary when speaking Dari. ")
+    if history:
+        prompt += "\nRecent lesson context (do not read aloud):\n" + "\n".join(
+            f"{m.get('role')}: {str(m.get('content', ''))[:700]}" for m in history)
+    return mode, {"subject": subject, "topic_key": topic_key, "level": level}, prompt
+
+
 @app.route("/voice")
 @login_required
 def live_voice_page():
@@ -2055,29 +2114,25 @@ def live_voice_page():
 def create_live_voice_session():
     if not current_user.email_verified:
         return jsonify(error="Email verification required"), 403
-
     if os.getenv("LIVE_VOICE_ENABLED", "false").lower() != "true":
         return jsonify(error="Live Voice is not enabled"), 503
-
     test_user_id = os.getenv("LIVE_VOICE_TEST_USER_ID", "").strip()
     if not test_user_id or str(current_user.id) != test_user_id:
         return jsonify(error="Live Voice beta is restricted to a test account"), 403
-
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return jsonify(error="Voice service unavailable"), 503
+
+    data = request.get_json(silent=True) or {}
+    try:
+        mode, context, instructions = _voice_context(data)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
     import urllib.request
     import urllib.error
     import hashlib
 
-    instructions = (
-        "You are Khayyam AI, a friendly, thoughtful voice assistant. "
-        "Respond in the language the user speaks. For Afghan Dari, prefer "
-        "natural Afghan Dari vocabulary where possible. Do not claim perfect "
-        "dialect pronunciation. Speak concisely and naturally. When tutoring, "
-        "teach step by step, checking understanding with one question at a time."
-    )
     payload = {
         "expires_after": {"anchor": "created_at", "seconds": 60},
         "session": {
@@ -2086,40 +2141,100 @@ def create_live_voice_session():
             "instructions": instructions,
             "output_modalities": ["audio"],
             "audio": {
-                "output": {"voice": "marin"},
+                "output": {"voice": "echo"},
                 "input": {
+                    "transcription": {"model": "gpt-4o-mini-transcribe"},
                     "turn_detection": {
-                        "type": "server_vad",
-                        "create_response": True,
+                        "type": "server_vad", "create_response": True,
                         "interrupt_response": True
                     }
                 }
             }
         }
     }
-    user_hash = hashlib.sha256(
-        f"khayyam:{current_user.id}".encode("utf-8")
-    ).hexdigest()
+    user_hash = hashlib.sha256(f"khayyam:{current_user.id}".encode()).hexdigest()
     req = urllib.request.Request(
         "https://api.openai.com/v1/realtime/client_secrets",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "OpenAI-Safety-Identifier": user_hash,
-        },
-        method="POST",
-    )
+        data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+                 "OpenAI-Safety-Identifier": user_hash},
+        method="POST")
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        return jsonify(value=result["value"], expires_at=result.get("expires_at"))
+            result = json.loads(response.read().decode())
+        # The receipt binds the save operation to this account and mode.
+        receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").dumps(
+            {"uid": current_user.id, "mode": mode, "context": context,
+             "issued": int(time.time())})
+        return jsonify(value=result["value"], expires_at=result.get("expires_at"),
+                       receipt=receipt, mode=mode)
     except urllib.error.HTTPError as exc:
         app.logger.error("Realtime session creation failed: HTTP %s", exc.code)
         return jsonify(error="Could not start voice session"), 502
     except Exception:
         app.logger.exception("Realtime session creation failed")
         return jsonify(error="Voice service temporarily unavailable"), 503
+
+
+@app.route("/api/voice/save", methods=["POST"])
+@login_required
+def save_live_voice_transcript():
+    if not current_user.email_verified:
+        return jsonify(error="Email verification required"), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").loads(
+            str(data.get("receipt") or ""))
+    except (BadSignature, ValueError, TypeError):
+        return jsonify(error="Invalid voice session"), 403
+    if receipt.get("uid") != current_user.id or int(time.time()) - receipt.get("issued", 0) > 7200:
+        return jsonify(error="Voice session expired"), 403
+    mode, context = receipt["mode"], receipt["context"]
+    turns = data.get("turns", [])
+    if not isinstance(turns, list) or len(turns) > 150:
+        return jsonify(error="Invalid transcript"), 400
+    clean = []
+    for turn in turns:
+        if not isinstance(turn, dict) or turn.get("role") not in ("user", "assistant"):
+            return jsonify(error="Invalid transcript turn"), 400
+        content = turn.get("content")
+        if not isinstance(content, str) or len(content) > 5000:
+            return jsonify(error="Invalid transcript content"), 400
+        if content.strip():
+            clean.append({"role": turn["role"], "content": content.strip()})
+    if not clean:
+        return jsonify(saved=0, conversation_id=context.get("conversation_id"))
+    if mode == "chat":
+        conv_id = context.get("conversation_id")
+        conv = (Conversation.query.filter_by(id=conv_id, user_id=current_user.id).first()
+                if conv_id else None)
+        if conv_id and not conv:
+            return jsonify(error="Conversation not found"), 404
+        if not conv:
+            first_user = next((t["content"] for t in clean if t["role"] == "user"), "گفتگوی صوتی")
+            conv = Conversation(user_id=current_user.id, title=first_user[:60])
+            db.session.add(conv)
+            db.session.flush()
+        for turn in clean:
+            db.session.add(Message(conversation_id=conv.id, role=turn["role"],
+                                   content=turn["content"]))
+        conv.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify(saved=len(clean), conversation_id=conv.id, mode="chat")
+    if mode == "tutor":
+        subject, topic_key, level = context["subject"], context["topic_key"], context["level"]
+        if subject not in CURRICULUM or not any(
+            t["key"] == topic_key for t in CURRICULUM[subject]["levels"].get(level, {}).get("topics", [])):
+            return jsonify(error="Lesson not found"), 400
+        progress = get_or_create_progress(current_user.id, subject)
+        history = json.loads(progress.chat_history or "[]")
+        history.extend(clean)
+        progress.chat_history = json.dumps(history[-60:], ensure_ascii=False)
+        progress.last_activity = datetime.utcnow()
+        db.session.commit()
+        return jsonify(saved=len(clean), mode="tutor")
+    return jsonify(error="Invalid mode"), 400
+
 
 if __name__ == "__main__":
     app.run(debug=True)

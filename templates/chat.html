@@ -436,13 +436,11 @@
 <input type="file" id="camera-input" accept="image/*" capture="environment"
   style="display:none" onchange="handleFileSelect(this, 'image')"/>
         <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
-        <button type="button" id="voice-record-btn" class="voice-action-btn" onclick="toggleVoiceRecording()" title="ضبط پیام صوتی" aria-label="ضبط پیام صوتی">🎙</button>
-        <button type="button" id="voice-upload-btn" class="voice-action-btn" onclick="document.getElementById('voice-file-input').click()" title="بارگذاری فایل صوتی" aria-label="بارگذاری فایل صوتی">📁</button>
-        <input type="file" id="voice-file-input" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg,.mp4" hidden onchange="handleVoiceFile(this)" />
+        <button type="button" id="voice-record-btn" class="voice-action-btn" onclick="openLiveVoiceChat()" title="گفتگوی صوتی زنده" aria-label="گفتگوی صوتی زنده">🎙</button>
         <button id="send-btn" onclick="sendMessage()">↑</button>
       </div>
       <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
-      <p id="voice-status" class="voice-status" aria-live="polite">با ضبط صدا، فایل برای تبدیل به متن به OpenAI فرستاده می‌شود.</p>
+      <p id="voice-status" class="voice-status" aria-live="polite">برای گفتگوی صوتی زنده روی 🎙 بزنید. گفتگو پس از پایان در همین چت ذخیره می‌شود.</p>
       <p class="voice-disclosure">صدای پاسخ‌ها توسط هوش مصنوعی تولید می‌شود.</p>
     </div>
   </div>
@@ -955,151 +953,18 @@
     input.focus();
   }
 
-  // ── VOICE INPUT: browser recording -> Flask -> OpenAI transcription ──
-  let khayyamRecorder = null;
-  let khayyamMicStream = null;
-  let khayyamAudioChunks = [];
-  let khayyamIsRecording = false;
-  let khayyamIsTranscribing = false;
-
-  function setVoiceStatus(message, isError = false) {
-    const status = document.getElementById('voice-status');
-    if (!status) return;
-    status.textContent = message || '';
-    status.classList.toggle('error', Boolean(isError));
-  }
-
-  function getRecordingMimeType() {
-    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
-    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg'];
-    return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
-  }
-
-  async function toggleVoiceRecording() {
-    if (khayyamIsTranscribing) return;
-    if (khayyamIsRecording && khayyamRecorder) {
-      setVoiceStatus('ضبط متوقف شد؛ در حال تبدیل صدا به متن...');
-      try { khayyamRecorder.stop(); } catch (error) { console.error(error); }
+  // Live Voice opens the dedicated full-screen conversation view.
+  // Returning from voice restores this exact conversation and its transcript.
+  function openLiveVoiceChat() {
+    if (!currentUser) {
+      window.location.href = '/login';
       return;
     }
-
-    if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-      setVoiceStatus('برای دسترسی به میکروفون، سایت باید با HTTPS باز شود. در Render از آدرس https استفاده کنید.', true);
-      return;
-    }
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setVoiceStatus('این مرورگر اجازه ضبط مستقیم نمی‌دهد. از دکمه 📁 برای انتخاب فایل صوتی استفاده کنید.', true);
-      return;
-    }
-    if (!window.MediaRecorder) {
-      setVoiceStatus('ضبط مستقیم در این مرورگر پشتیبانی نمی‌شود. از دکمه 📁 برای انتخاب فایل صوتی استفاده کنید.', true);
-      return;
-    }
-
-    const recordBtn = document.getElementById('voice-record-btn');
-    recordBtn.disabled = true;
-    setVoiceStatus('در انتظار اجازه میکروفون...');
-    try {
-      khayyamMicStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false
-      });
-      const mimeType = getRecordingMimeType();
-      khayyamRecorder = new MediaRecorder(khayyamMicStream, mimeType ? { mimeType } : undefined);
-      khayyamAudioChunks = [];
-      khayyamRecorder.ondataavailable = event => {
-        if (event.data && event.data.size > 0) khayyamAudioChunks.push(event.data);
-      };
-      khayyamRecorder.onerror = event => {
-        console.error('MediaRecorder error:', event.error || event);
-        setVoiceStatus('هنگام ضبط خطا رخ داد. اجازه میکروفون و تنظیمات مرورگر را بررسی کنید.', true);
-        finishRecordingCleanup();
-      };
-      khayyamRecorder.onstop = async () => {
-        const actualType = khayyamRecorder && khayyamRecorder.mimeType ? khayyamRecorder.mimeType : (mimeType || 'audio/webm');
-        const blob = new Blob(khayyamAudioChunks, { type: actualType });
-        finishRecordingCleanup();
-        if (blob.size < 1000) {
-          setVoiceStatus('ضبط خیلی کوتاه یا خالی است. چند ثانیه صحبت کنید و دوباره امتحان کنید.', true);
-          return;
-        }
-        const ext = actualType.includes('mp4') ? 'mp4' : actualType.includes('ogg') ? 'ogg' : 'webm';
-        await transcribeVoiceBlob(blob, `khayyam-recording.${ext}`);
-      };
-      khayyamRecorder.start(250);
-      khayyamIsRecording = true;
-      recordBtn.classList.add('recording');
-      recordBtn.textContent = '⏹';
-      recordBtn.title = 'توقف ضبط';
-      recordBtn.setAttribute('aria-label', 'توقف ضبط');
-      setVoiceStatus('در حال ضبط... برای پایان، دوباره روی دکمه میکروفون بزنید.');
-    } catch (error) {
-      console.error('Microphone access failed:', error);
-      const messages = {
-        NotAllowedError: 'اجازه میکروفون رد شد. روی آیکون قفل کنار آدرس سایت بزنید و Microphone را Allow کنید.',
-        PermissionDeniedError: 'اجازه میکروفون رد شد. تنظیمات مجوز مرورگر را بررسی کنید.',
-        NotFoundError: 'میکروفونی پیدا نشد. میکروفون را وصل کنید و دوباره تلاش کنید.',
-        NotReadableError: 'میکروفون در برنامه دیگری استفاده می‌شود. برنامه‌های دیگر را ببندید.'
-      };
-      setVoiceStatus(messages[error.name] || 'دسترسی به میکروفون ناموفق بود. مجوز مرورگر و اتصال میکروفون را بررسی کنید.', true);
-      finishRecordingCleanup();
-    } finally {
-      recordBtn.disabled = false; // Keep Stop clickable while recording
-    }
-  }
-
-  function finishRecordingCleanup() {
-    khayyamIsRecording = false;
-    const btn = document.getElementById('voice-record-btn');
-    if (btn) {
-      btn.disabled = false;
-      btn.classList.remove('recording');
-      btn.textContent = '🎙';
-      btn.title = 'ضبط پیام صوتی';
-      btn.setAttribute('aria-label', 'ضبط پیام صوتی');
-    }
-    if (khayyamMicStream) {
-      khayyamMicStream.getTracks().forEach(track => track.stop());
-      khayyamMicStream = null;
-    }
-    khayyamRecorder = null;
-  }
-
-  function handleVoiceFile(input) {
-    const file = input.files && input.files[0];
-    input.value = '';
-    if (file) transcribeVoiceBlob(file, file.name || 'voice-recording.webm');
-  }
-
-  async function transcribeVoiceBlob(blob, filename) {
-    if (khayyamIsTranscribing) return;
-    khayyamIsTranscribing = true;
-    const recordBtn = document.getElementById('voice-record-btn');
-    const uploadBtn = document.getElementById('voice-upload-btn');
-    if (recordBtn) recordBtn.disabled = true;
-    if (uploadBtn) uploadBtn.disabled = true;
-    setVoiceStatus('در حال ارسال صدا و تبدیل آن به متن...');
-    try {
-      const formData = new FormData();
-      formData.append('audio', blob, filename);
-      const response = await fetch('/api/transcribe', { method: 'POST', body: formData });
-      let data = {};
-      try { data = await response.json(); } catch (_) {}
-      if (!response.ok) throw new Error(data.error || `خطای سرور (${response.status})`);
-      const transcript = (data.text || '').trim();
-      if (!transcript) throw new Error('متنی از صدا تشخیص داده نشد. دوباره ضبط کنید.');
-      const input = document.getElementById('user-input');
-      input.value = input.value.trim() ? `${input.value.trim()} ${transcript}` : transcript;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.focus();
-      setVoiceStatus('متن آماده است. آن را بررسی یا ویرایش کنید و سپس دکمه ارسال را بزنید.');
-    } catch (error) {
-      console.error('Khayyam transcription error:', error);
-      setVoiceStatus(error.message || 'تبدیل صدا به متن ناموفق بود. دوباره امتحان کنید.', true);
-    } finally {
-      khayyamIsTranscribing = false;
-      if (recordBtn) recordBtn.disabled = false;
-      if (uploadBtn) uploadBtn.disabled = false;
-    }
+    if (isLoading) return;
+    const url = new URL('/voice', window.location.origin);
+    url.searchParams.set('mode', 'chat');
+    if (currentConvId) url.searchParams.set('conversation_id', String(currentConvId));
+    window.location.href = url.toString();
   }
 
   // ── INPUT BEHAVIOR ──
