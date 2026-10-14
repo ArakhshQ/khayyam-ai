@@ -14,6 +14,7 @@ import base64
 import smtplib
 import ssl
 import time
+import uuid
 from email.message import EmailMessage
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import text as sql_text
@@ -2109,6 +2110,24 @@ def live_voice_page():
     return render_template("live_voice.html")
 
 
+# Durable voice-session mapping and turn-level deduplication. Additive schema only.
+# Created lazily so existing user data and conversation tables are untouched.
+def _ensure_voice_storage():
+    with db.engine.begin() as connection:
+        connection.execute(sql_text("""CREATE TABLE IF NOT EXISTS voice_save_sessions (
+            session_id VARCHAR(36) PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            mode VARCHAR(12) NOT NULL,
+            conversation_id INTEGER,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"""))
+        connection.execute(sql_text("""CREATE TABLE IF NOT EXISTS voice_saved_turns (
+            session_id VARCHAR(36) NOT NULL,
+            turn_id VARCHAR(160) NOT NULL,
+            PRIMARY KEY (session_id, turn_id)
+        )"""))
+
+
 @app.route("/api/voice/session", methods=["POST"])
 @login_required
 def create_live_voice_session():
@@ -2163,10 +2182,18 @@ def create_live_voice_session():
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
             result = json.loads(response.read().decode())
-        # The receipt binds the save operation to this account and mode.
+        # Persist the session before issuing a receipt; all batches use one conversation.
+        _ensure_voice_storage()
+        session_id = str(uuid.uuid4())
+        db.session.execute(sql_text("""INSERT INTO voice_save_sessions
+            (session_id, user_id, mode, conversation_id)
+            VALUES (:sid, :uid, :mode, :cid)"""),
+            {"sid": session_id, "uid": current_user.id, "mode": mode,
+             "cid": context.get("conversation_id") if mode == "chat" else None})
+        db.session.commit()
         receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").dumps(
             {"uid": current_user.id, "mode": mode, "context": context,
-             "issued": int(time.time())})
+             "sid": session_id, "issued": int(time.time())})
         return jsonify(value=result["value"], expires_at=result.get("expires_at"),
                        receipt=receipt, mode=mode)
     except urllib.error.HTTPError as exc:
@@ -2180,61 +2207,98 @@ def create_live_voice_session():
 @app.route("/api/voice/save", methods=["POST"])
 @login_required
 def save_live_voice_transcript():
+    """Idempotent, session-bound voice saves, safe to retry after lost responses."""
     if not current_user.email_verified:
         return jsonify(error="Email verification required"), 403
     data = request.get_json(silent=True) or {}
     try:
         receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").loads(
             str(data.get("receipt") or ""))
-    except (BadSignature, ValueError, TypeError):
+        issued = int(receipt.get("issued", 0))
+        if receipt.get("uid") != current_user.id or not 0 <= time.time() - issued <= 7200:
+            return jsonify(error="Voice session expired"), 403
+        sid = str(receipt.get("sid") or "")
+        if not re.fullmatch(r"[0-9a-f-]{36}", sid):
+            return jsonify(error="Unsupported voice session; please restart voice"), 403
+        mode = receipt["mode"]
+        context = receipt["context"]
+    except (BadSignature, ValueError, TypeError, KeyError, AttributeError):
         return jsonify(error="Invalid voice session"), 403
-    if receipt.get("uid") != current_user.id or int(time.time()) - receipt.get("issued", 0) > 7200:
-        return jsonify(error="Voice session expired"), 403
-    mode, context = receipt["mode"], receipt["context"]
+
     turns = data.get("turns", [])
-    if not isinstance(turns, list) or len(turns) > 150:
+    if not isinstance(turns, list) or len(turns) > 30:
         return jsonify(error="Invalid transcript"), 400
     clean = []
     for turn in turns:
         if not isinstance(turn, dict) or turn.get("role") not in ("user", "assistant"):
             return jsonify(error="Invalid transcript turn"), 400
-        content = turn.get("content")
-        if not isinstance(content, str) or len(content) > 5000:
-            return jsonify(error="Invalid transcript content"), 400
+        content, turn_id = turn.get("content"), turn.get("turn_id")
+        if not isinstance(content, str) or len(content) > 5000 or not isinstance(turn_id, str) or not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", turn_id):
+            return jsonify(error="Invalid transcript content or turn ID"), 400
         if content.strip():
-            clean.append({"role": turn["role"], "content": content.strip()})
-    if not clean:
-        return jsonify(saved=0, conversation_id=context.get("conversation_id"))
-    if mode == "chat":
-        conv_id = context.get("conversation_id")
-        conv = (Conversation.query.filter_by(id=conv_id, user_id=current_user.id).first()
-                if conv_id else None)
-        if conv_id and not conv:
-            return jsonify(error="Conversation not found"), 404
-        if not conv:
-            first_user = next((t["content"] for t in clean if t["role"] == "user"), "گفتگوی صوتی")
-            conv = Conversation(user_id=current_user.id, title=first_user[:60])
-            db.session.add(conv)
-            db.session.flush()
+            clean.append({"role": turn["role"], "content": content.strip(), "turn_id": turn_id})
+    try:
+        _ensure_voice_storage()
+        # PostgreSQL row lock serializes concurrent saves for the same session.
+        lock = " FOR UPDATE" if db.engine.dialect.name == "postgresql" else ""
+        row = db.session.execute(sql_text("""SELECT session_id, user_id, mode, conversation_id
+            FROM voice_save_sessions WHERE session_id = :sid""" + lock), {"sid": sid}).mappings().first()
+        if not row or row["user_id"] != current_user.id or row["mode"] != mode:
+            db.session.rollback()
+            return jsonify(error="Voice session not found"), 403
+        conv_id = row["conversation_id"]
+        if mode == "chat":
+            conv = Conversation.query.filter_by(id=conv_id, user_id=current_user.id).first() if conv_id else None
+            if conv_id and not conv:
+                db.session.rollback()
+                return jsonify(error="Conversation not found"), 404
+        elif mode == "tutor":
+            subject, topic_key, level = context["subject"], context["topic_key"], context["level"]
+            if subject not in CURRICULUM or not any(t["key"] == topic_key for t in CURRICULUM[subject]["levels"].get(level, {}).get("topics", [])):
+                db.session.rollback()
+                return jsonify(error="Lesson not found"), 400
+        else:
+            db.session.rollback()
+            return jsonify(error="Invalid mode"), 400
+
+        # Claim each turn ID inside the same transaction as its message insert.
+        new_turns = []
         for turn in clean:
-            db.session.add(Message(conversation_id=conv.id, role=turn["role"],
-                                   content=turn["content"]))
-        conv.updated_at = datetime.utcnow()
+            exists = db.session.execute(sql_text("""SELECT 1 FROM voice_saved_turns
+                WHERE session_id=:sid AND turn_id=:tid"""), {"sid": sid, "tid": turn["turn_id"]}).first()
+            if exists:
+                continue
+            db.session.execute(sql_text("""INSERT INTO voice_saved_turns (session_id, turn_id)
+                VALUES (:sid, :tid)"""), {"sid": sid, "tid": turn["turn_id"]})
+            new_turns.append(turn)
+
+        if mode == "chat":
+            if new_turns and not conv:
+                title = next((t["content"] for t in new_turns if t["role"] == "user"), "گفتگوی صوتی")
+                conv = Conversation(user_id=current_user.id, title=title[:60])
+                db.session.add(conv)
+                db.session.flush()
+                db.session.execute(sql_text("""UPDATE voice_save_sessions
+                    SET conversation_id=:cid WHERE session_id=:sid"""), {"cid": conv.id, "sid": sid})
+            if new_turns:
+                for turn in new_turns:
+                    db.session.add(Message(conversation_id=conv.id, role=turn["role"], content=turn["content"]))
+                conv.updated_at = datetime.utcnow()
+            result = {"saved": len(new_turns), "conversation_id": conv.id if conv else None, "mode": mode}
+        else:
+            if new_turns:
+                progress = get_or_create_progress(current_user.id, subject)
+                history = json.loads(progress.chat_history or "[]")
+                history.extend({"role": t["role"], "content": t["content"]} for t in new_turns)
+                progress.chat_history = json.dumps(history[-60:], ensure_ascii=False)
+                progress.last_activity = datetime.utcnow()
+            result = {"saved": len(new_turns), "mode": mode}
         db.session.commit()
-        return jsonify(saved=len(clean), conversation_id=conv.id, mode="chat")
-    if mode == "tutor":
-        subject, topic_key, level = context["subject"], context["topic_key"], context["level"]
-        if subject not in CURRICULUM or not any(
-            t["key"] == topic_key for t in CURRICULUM[subject]["levels"].get(level, {}).get("topics", [])):
-            return jsonify(error="Lesson not found"), 400
-        progress = get_or_create_progress(current_user.id, subject)
-        history = json.loads(progress.chat_history or "[]")
-        history.extend(clean)
-        progress.chat_history = json.dumps(history[-60:], ensure_ascii=False)
-        progress.last_activity = datetime.utcnow()
-        db.session.commit()
-        return jsonify(saved=len(clean), mode="tutor")
-    return jsonify(error="Invalid mode"), 400
+        return jsonify(result)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Voice transcript save failed")
+        return jsonify(error="Voice save failed; please retry"), 503
 
 
 if __name__ == "__main__":
