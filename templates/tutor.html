@@ -678,6 +678,7 @@
 
   // ── START TOPIC ──
   async function startTopic(topic, level) {
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
     currentTopic      = topic;
     currentLevel      = level;
     switchNoticeShown = false;
@@ -728,6 +729,7 @@
     const input = document.getElementById('user-input');
     const text  = input.value.trim();
     if (!text || isLoading || inlineQuizActive) return;
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
 
     isLoading = true;
     document.getElementById('send-btn').disabled = true;
@@ -1330,6 +1332,9 @@
   }
   window.khayyamVoiceRender = (role, text) => {
     appendBubble(role === 'assistant' ? 'ai' : 'user', text);
+    // Keep the in-memory lesson aligned with what was spoken and saved.
+    chatHistory.push({role, content:text});
+    if (chatHistory.length > 60) chatHistory = chatHistory.slice(-60);
   };
 
   const inputEl = document.getElementById('user-input');
@@ -1343,6 +1348,6 @@
 
   init();
 </script>
-<script src="/static/voice_inline.js?v=2"></script>
+<script src="/static/voice_inline.js?v=3"></script>
 </body>
 </html>

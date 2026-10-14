@@ -584,6 +584,7 @@
 
   async function loadConversation(id) {
     if (!currentUser) return;
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
     try {
       const res  = await fetch(`/api/conversations/${id}`);
       const conv = await res.json();
@@ -616,7 +617,8 @@
     else await loadSidebar();
   }
 
-  function newChat() {
+  async function newChat() {
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
     currentConvId = null;
     history       = [];
     document.getElementById('messages').innerHTML = `
@@ -856,6 +858,8 @@
     const input = document.getElementById('user-input');
     const text  = input.value.trim();
     if ((!text && !selectedFile) || isLoading) return;
+    // Finish and persist the voice session before sending a text turn.
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
 
     isLoading = true;
     document.getElementById('send-btn').disabled = true;
@@ -979,6 +983,6 @@
 
   init();
 </script>
-<script src="/static/voice_inline.js?v=2"></script>
+<script src="/static/voice_inline.js?v=3"></script>
 </body>
 </html>
