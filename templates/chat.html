@@ -440,8 +440,7 @@
         <button id="send-btn" onclick="sendMessage()">↑</button>
       </div>
       <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
-      <p id="voice-status" class="voice-status" aria-live="polite">برای شروع گفتگوی زنده روی 🎙 بزنید؛ پیام‌ها در همین صفحه ذخیره می‌شوند.</p>
-      <p class="voice-disclosure">صدای پاسخ‌ها توسط هوش مصنوعی تولید می‌شود.</p>
+      <p id="voice-status" class="voice-status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;"></p>
     </div>
   </div>
 
@@ -980,6 +979,6 @@
 
   init();
 </script>
-<script src="/static/voice_inline.js?v=1"></script>
+<script src="/static/voice_inline.js?v=2"></script>
 </body>
 </html>
