@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>گفتگوی زنده — خیام</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg, #0f0e0c); color: var(--text, #eee9de); font-family: Vazirmatn, Tahoma, sans-serif; }
+    .page { max-width: 560px; min-height: 100vh; margin: auto; padding: 36px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 20px; }
+    h1 { color: var(--gold, #c9a84c); margin: 0; }
+    p { color: var(--text-dim, #aaa); line-height: 1.9; }
+    .orb { width: 160px; height: 160px; border-radius: 50%; display: grid; place-items: center; background: radial-gradient(circle, #c9a84c44, #c9a84c08); border: 1px solid #c9a84c88; font-size: 48px; }
+    .orb.active { animation: pulse 1.7s infinite alternate; }
+    @keyframes pulse { to { transform: scale(1.08); } }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    button, .back { padding: 13px 24px; border-radius: 10px; font: inherit; text-decoration: none; cursor: pointer; }
+    button { border: 0; background: var(--gold, #c9a84c); color: #111; font-weight: bold; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .back { border: 1px solid #504638; color: var(--text, #eee); }
+    #status { min-height: 28px; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>گفتگوی زنده با خیام</h1>
+    <p>بدون فشردن دکمه ارسال، طبیعی صحبت کنید و پاسخ را بشنوید.</p>
+    <div id="orb" class="orb" aria-hidden="true">✦</div>
+    <p id="status" role="status" aria-live="polite">برای شروع، دکمه زیر را فشار دهید.</p>
+    <div class="actions">
+      <button id="start" type="button">شروع گفتگو</button>
+      <button id="stop" type="button" disabled>پایان گفتگو</button>
+      <a class="back" href="/chat">بازگشت به چت</a>
+    </div>
+  </main>
+  <script>
+    const startButton = document.getElementById('start');
+    const stopButton = document.getElementById('stop');
+    const status = document.getElementById('status');
+    const orb = document.getElementById('orb');
+    let pc = null, stream = null, channel = null, remoteAudio = null;
+    let attempt = 0;
+
+    function setStatus(text) { status.textContent = text; }
+    function cleanup() {
+      attempt++;
+      if (channel) channel.close();
+      if (pc) pc.close();
+      if (stream) stream.getTracks().forEach(track => track.stop());
+      if (remoteAudio) {
+        remoteAudio.pause();
+        remoteAudio.srcObject = null;
+        remoteAudio.remove();
+      }
+      channel = null;
+      pc = null;
+      stream = null;
+      remoteAudio = null;
+      orb.classList.remove('active');
+      startButton.disabled = false;
+      stopButton.disabled = true;
+    }
+
+    startButton.addEventListener('click', async () => {
+      const thisAttempt = ++attempt;
+      startButton.disabled = true;
+      stopButton.disabled = false;
+      setStatus('در حال اتصال...');
+      try {
+        // Ask for permission immediately from the user's click.
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true }
+        });
+        if (thisAttempt !== attempt) return;
+
+        const response = await fetch('/api/voice/session', { method: 'POST' });
+        const session = await response.json();
+        if (!response.ok || !session.value) {
+          throw new Error(session.error || 'Session failed');
+        }
+        if (thisAttempt !== attempt) return;
+
+        pc = new RTCPeerConnection();
+        remoteAudio = document.createElement('audio');
+        remoteAudio.autoplay = true;
+        document.body.appendChild(remoteAudio);
+        pc.ontrack = event => {
+          remoteAudio.srcObject = event.streams[0];
+          remoteAudio.play().catch(console.warn);
+        };
+        pc.onconnectionstatechange = () => {
+          if (!pc || thisAttempt !== attempt) return;
+          if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+            cleanup();
+            setStatus('ارتباط پایان یافت.');
+          }
+        };
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+        channel = pc.createDataChannel('oai-events');
+        channel.onopen = () => {
+          if (thisAttempt !== attempt) return;
+          setStatus('متصل شدید. صحبت کنید!');
+          orb.classList.add('active');
+        };
+        channel.onmessage = event => {
+          if (thisAttempt !== attempt) return;
+          let data;
+          try { data = JSON.parse(event.data); } catch { return; }
+          if (data.type === 'input_audio_buffer.speech_started') setStatus('خیام گوش می‌دهد...');
+          if (data.type === 'response.created') setStatus('خیام در حال پاسخ دادن است...');
+          if (data.type === 'response.done') setStatus('می‌توانید صحبت کنید.');
+          if (data.type === 'error') {
+            console.error('Realtime error:', data.error);
+            setStatus('خطایی در گفتگوی صوتی رخ داد.');
+          }
+        };
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const sdpResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + session.value,
+            'Content-Type': 'application/sdp'
+          },
+          body: offer.sdp
+        });
+        if (!sdpResponse.ok) throw new Error('WebRTC connection failed: ' + sdpResponse.status);
+        const answer = await sdpResponse.text();
+        if (thisAttempt !== attempt) return;
+        await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+        if (thisAttempt !== attempt) return;
+        setStatus('متصل شدید. صحبت کنید!');
+      } catch (error) {
+        if (thisAttempt !== attempt) return;
+        console.error('Live Voice connection:', error);
+        cleanup();
+        setStatus('اتصال برقرار نشد. دوباره تلاش کنید.');
+      }
+    });
+    stopButton.addEventListener('click', () => {
+      cleanup();
+      setStatus('گفتگو پایان یافت.');
+    });
+    window.addEventListener('pagehide', cleanup);
+  </script>
+</body>
+</html>
