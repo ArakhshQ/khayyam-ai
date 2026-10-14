@@ -2143,7 +2143,8 @@ def create_live_voice_session():
             "audio": {
                 "output": {"voice": "echo"},
                 "input": {
-                    "transcription": {"model": "gpt-4o-mini-transcribe"},
+                    "transcription": {"model": "gpt-4o-mini-transcribe",
+                                      "prompt": "The speaker may use Afghan Dari (دری افغانستان), Persian script, and occasional English words. Transcribe the words actually spoken; do not translate or invent text."},
                     "turn_detection": {
                         "type": "server_vad", "create_response": True,
                         "interrupt_response": True

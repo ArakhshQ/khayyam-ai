@@ -1315,20 +1315,23 @@
   }
 
   // ── INPUT ──
-  // Live voice uses the selected Tutor subject, level, and lesson.
-  function openLiveVoiceTutor() {
+  // Tutor Live Voice stays on the lesson page and uses its selected topic.
+  async function openLiveVoiceTutor() {
+    if (window.KhayyamInlineVoice.isActive()) {
+      await window.KhayyamInlineVoice.toggle({});
+      return;
+    }
     if (!currentSubject || !currentTopic || !currentTopic.key) {
       const el = document.getElementById('voice-status');
       if (el) el.textContent = 'اول یک درس را انتخاب کنید.';
       return;
     }
-    const url = new URL('/voice', window.location.origin);
-    url.searchParams.set('mode', 'tutor');
-    url.searchParams.set('subject', currentSubject);
-    url.searchParams.set('topic_key', currentTopic.key);
-    url.searchParams.set('level', String(currentLevel));
-    window.location.href = url.toString();
+    await window.KhayyamInlineVoice.toggle({mode:'tutor', subject:currentSubject,
+      topic_key:currentTopic.key, level:String(currentLevel)});
   }
+  window.khayyamVoiceRender = (role, text) => {
+    appendBubble(role === 'assistant' ? 'ai' : 'user', text);
+  };
 
   const inputEl = document.getElementById('user-input');
   inputEl.addEventListener('input', () => {
@@ -1341,5 +1344,6 @@
 
   init();
 </script>
+<script src="/static/voice_inline.js?v=1"></script>
 </body>
 </html>

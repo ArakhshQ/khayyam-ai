@@ -440,7 +440,7 @@
         <button id="send-btn" onclick="sendMessage()">↑</button>
       </div>
       <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
-      <p id="voice-status" class="voice-status" aria-live="polite">برای گفتگوی صوتی زنده روی 🎙 بزنید. گفتگو پس از پایان در همین چت ذخیره می‌شود.</p>
+      <p id="voice-status" class="voice-status" aria-live="polite">برای شروع گفتگوی زنده روی 🎙 بزنید؛ پیام‌ها در همین صفحه ذخیره می‌شوند.</p>
       <p class="voice-disclosure">صدای پاسخ‌ها توسط هوش مصنوعی تولید می‌شود.</p>
     </div>
   </div>
@@ -953,19 +953,20 @@
     input.focus();
   }
 
-  // Live Voice opens the dedicated full-screen conversation view.
-  // Returning from voice restores this exact conversation and its transcript.
-  function openLiveVoiceChat() {
-    if (!currentUser) {
-      window.location.href = '/login';
-      return;
-    }
+  // Live Voice runs directly inside this conversation, without navigating away.
+  async function openLiveVoiceChat() {
+    if (!currentUser) { window.location.href = '/login'; return; }
     if (isLoading) return;
-    const url = new URL('/voice', window.location.origin);
-    url.searchParams.set('mode', 'chat');
-    if (currentConvId) url.searchParams.set('conversation_id', String(currentConvId));
-    window.location.href = url.toString();
+    await window.KhayyamInlineVoice.toggle({mode:'chat', conversation_id:currentConvId || null});
   }
+  window.khayyamVoiceRender = (role, text) => {
+    appendBubble(role === 'assistant' ? 'ai' : 'user', text);
+    history.push({role, content:text});
+  };
+  window.khayyamVoiceSavedConversation = id => {
+    currentConvId = id;
+    loadSidebar().catch(err => console.warn('Voice sidebar refresh:', err));
+  };
 
   // ── INPUT BEHAVIOR ──
   const inputEl = document.getElementById('user-input');
@@ -979,5 +980,6 @@
 
   init();
 </script>
+<script src="/static/voice_inline.js?v=1"></script>
 </body>
 </html>
