@@ -703,7 +703,7 @@ def api_register():
     username = str(data.get("username") or "").strip()
     email = str(data.get("email") or "").strip().lower()
     password = str(data.get("password") or "")
-    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email) or len(email) > 150:
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 150:
         return jsonify(success=False, error="آدرس ایمیل معتبر وارد کنید."), 400
     if len(username) < 3 or len(username) > 80:
         return jsonify(success=False, error="نام کاربری باید بین ۳ و ۸۰ نویسه باشد."), 400
@@ -898,7 +898,7 @@ def verify_email(token):
 def resend_verification():
     data = request.get_json(silent=True) or {}
     email = str(data.get('email') or '').strip().lower()
-    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email) or len(email) > 150:
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 150:
         return jsonify(error='آدرس ایمیل معتبر وارد کنید.'), 400
     message = 'اگر حسابی با این ایمیل در انتظار تأیید باشد، لینک جدید ارسال خواهد شد.'
     if not email_throttled(email, 'verify'):
@@ -2037,6 +2037,89 @@ def placement_result():
             } for lvl in [1, 2, 3, 4]
         }
     })
+
+
+# ---------------------------------------------------------------------------
+# Khayyam Live Voice — isolated beta (existing Chat/Tutor voice is unchanged)
+# ---------------------------------------------------------------------------
+@app.route("/voice")
+@login_required
+def live_voice_page():
+    if not current_user.email_verified:
+        return redirect(url_for("check_email_page"))
+    return render_template("live_voice.html")
+
+
+@app.route("/api/voice/session", methods=["POST"])
+@login_required
+def create_live_voice_session():
+    if not current_user.email_verified:
+        return jsonify(error="Email verification required"), 403
+
+    if os.getenv("LIVE_VOICE_ENABLED", "false").lower() != "true":
+        return jsonify(error="Live Voice is not enabled"), 503
+
+    test_user_id = os.getenv("LIVE_VOICE_TEST_USER_ID", "").strip()
+    if not test_user_id or str(current_user.id) != test_user_id:
+        return jsonify(error="Live Voice beta is restricted to a test account"), 403
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return jsonify(error="Voice service unavailable"), 503
+
+    import urllib.request
+    import urllib.error
+    import hashlib
+
+    instructions = (
+        "You are Khayyam AI, a friendly, thoughtful voice assistant. "
+        "Respond in the language the user speaks. For Afghan Dari, prefer "
+        "natural Afghan Dari vocabulary where possible. Do not claim perfect "
+        "dialect pronunciation. Speak concisely and naturally. When tutoring, "
+        "teach step by step, checking understanding with one question at a time."
+    )
+    payload = {
+        "expires_after": {"anchor": "created_at", "seconds": 60},
+        "session": {
+            "type": "realtime",
+            "model": "gpt-realtime",
+            "instructions": instructions,
+            "output_modalities": ["audio"],
+            "audio": {
+                "output": {"voice": "marin"},
+                "input": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "create_response": True,
+                        "interrupt_response": True
+                    }
+                }
+            }
+        }
+    }
+    user_hash = hashlib.sha256(
+        f"khayyam:{current_user.id}".encode("utf-8")
+    ).hexdigest()
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/realtime/client_secrets",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "OpenAI-Safety-Identifier": user_hash,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        return jsonify(value=result["value"], expires_at=result.get("expires_at"))
+    except urllib.error.HTTPError as exc:
+        app.logger.error("Realtime session creation failed: HTTP %s", exc.code)
+        return jsonify(error="Could not start voice session"), 502
+    except Exception:
+        app.logger.exception("Realtime session creation failed")
+        return jsonify(error="Voice service temporarily unavailable"), 503
 
 if __name__ == "__main__":
     app.run(debug=True)
