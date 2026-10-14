@@ -935,13 +935,19 @@
 
       if (currentUser && data.conversation_id) {
         currentConvId = data.conversation_id;
-        await loadSidebar();
+        try {
+          await loadSidebar();
+        } catch (sidebarError) {
+          console.warn('Conversation sidebar refresh failed:', sidebarError);
+        }
       }
 
     } catch (err) {
       removeTyping();
       console.error('sendMessage error:', err);
-      appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+      if (!history.length || history[history.length - 1].role !== 'assistant') {
+        appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+      }
     }
 
     isLoading = false;
