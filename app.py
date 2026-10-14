@@ -703,7 +703,7 @@ def api_register():
     username = str(data.get("username") or "").strip()
     email = str(data.get("email") or "").strip().lower()
     password = str(data.get("password") or "")
-    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email) or len(email) > 150:
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 150:
         return jsonify(success=False, error="آدرس ایمیل معتبر وارد کنید."), 400
     if len(username) < 3 or len(username) > 80:
         return jsonify(success=False, error="نام کاربری باید بین ۳ و ۸۰ نویسه باشد."), 400
@@ -898,7 +898,7 @@ def verify_email(token):
 def resend_verification():
     data = request.get_json(silent=True) or {}
     email = str(data.get('email') or '').strip().lower()
-    if not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", email) or len(email) > 150:
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 150:
         return jsonify(error='آدرس ایمیل معتبر وارد کنید.'), 400
     message = 'اگر حسابی با این ایمیل در انتظار تأیید باشد، لینک جدید ارسال خواهد شد.'
     if not email_throttled(email, 'verify'):
