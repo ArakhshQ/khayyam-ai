@@ -936,17 +936,27 @@
         scrollToBottom();
       }
 
-      appendBubble('ai', data.reply);
-      history.push({ role: 'assistant', content: data.reply });
-      clearFile();
-
+      // Commit the server-assigned conversation ID before any optional UI work.
+      // A UI exception after a successful API response must not create a false
+      // error bubble or lose the ID needed for the next message.
       if (data.conversation_id) {
         currentConvId = Number(data.conversation_id);
         window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
-        if (currentUser) {
-          try { await loadSidebar(); }
-          catch (sidebarError) { console.warn('Conversation sidebar refresh failed:', sidebarError); }
-        }
+      }
+      history.push({ role: 'assistant', content: data.reply });
+      try { appendBubble('ai', data.reply); }
+      catch (renderError) {
+        console.error('AI message rendering failed:', renderError);
+        const fallback = document.createElement('div');
+        fallback.className = 'message ai';
+        fallback.textContent = data.reply;
+        document.getElementById('messages').appendChild(fallback);
+      }
+      try { clearFile(); }
+      catch (uiError) { console.warn('Attachment UI reset failed:', uiError); }
+      if (data.conversation_id && currentUser) {
+        try { await loadSidebar(); }
+        catch (sidebarError) { console.warn('Conversation sidebar refresh failed:', sidebarError); }
       }
 
     } catch (err) {
