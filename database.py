@@ -5,7 +5,6 @@ import json
 
 db = SQLAlchemy()
 
-
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
 
@@ -15,12 +14,9 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
-
-    # Account verification
     is_verified = db.Column(db.Boolean, default=False)
     email_verified = db.Column(db.Boolean, default=False)
 
-    # Existing Supabase subscription structure
     chat_plan = db.Column(db.String(20), default='free')
     chat_plan_expires_at = db.Column(db.DateTime, nullable=True)
     tutor_plan = db.Column(db.String(20), default='free')
@@ -29,8 +25,6 @@ class User(UserMixin, db.Model):
     total_xp = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Backward compatibility for existing app.py routes.
-    # The regular chat plan is the legacy default.
     @property
     def plan(self):
         return self.chat_plan or 'free'
@@ -39,47 +33,12 @@ class User(UserMixin, db.Model):
     def plan(self, value):
         self.chat_plan = value
 
-    conversations = db.relationship(
-        'Conversation',
-        backref='user',
-        lazy=True,
-        cascade='all, delete-orphan'
-    )
-
-    memories = db.relationship(
-        'Memory',
-        backref='user',
-        lazy=True,
-        cascade='all, delete-orphan'
-    )
-
-    token_usage = db.relationship(
-        'UserTokenUsage',
-        backref='user',
-        lazy=True,
-        cascade='all, delete-orphan'
-    )
-
-    tutor_progress = db.relationship(
-        'TutorProgress',
-        backref='user',
-        lazy=True,
-        cascade='all, delete-orphan'
-    )
-
-    quiz_results = db.relationship(
-        'QuizResult',
-        backref='user',
-        lazy=True,
-        cascade='all, delete-orphan'
-    )
-
-    badges = db.relationship(
-        'StudentBadge',
-        backref='user',
-        lazy=True,
-        cascade='all, delete-orphan'
-    )
+    conversations = db.relationship('Conversation', backref='user', lazy=True, cascade='all, delete-orphan')
+    memories = db.relationship('Memory', backref='user', lazy=True, cascade='all, delete-orphan')
+    token_usage = db.relationship('UserTokenUsage', backref='user', lazy=True, cascade='all, delete-orphan')
+    tutor_progress = db.relationship('TutorProgress', backref='user', lazy=True, cascade='all, delete-orphan')
+    quiz_results = db.relationship('QuizResult', backref='user', lazy=True, cascade='all, delete-orphan')
+    badges = db.relationship('StudentBadge', backref='user', lazy=True, cascade='all, delete-orphan')
 
 class Conversation(db.Model):
     __tablename__ = 'conversations'

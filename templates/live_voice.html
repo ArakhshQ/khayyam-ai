@@ -64,6 +64,7 @@
 
   let pc = null, mic = null, channel = null, remoteAudio = null;
   let receipt = null, turns = [], active = false, saving = false, attempt = 0;
+  let deadlineTimer = null, deadlineMs = 0, warningSeconds = 120, warned = false;
   const userItems = new Map();
   const assistantItems = new Map();
   function setStatus(value) { statusEl.textContent = value; }
@@ -90,6 +91,8 @@
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   }
   function cleanup() {
+    if (deadlineTimer) clearInterval(deadlineTimer);
+    deadlineTimer = null;
     attempt++;
     active = false;
     try { channel?.close(); } catch {}
@@ -161,6 +164,18 @@
       if (!response.ok || !session.value || !session.receipt) throw new Error(session.error || 'Session failed');
       if (run !== attempt) return;
       receipt = session.receipt;
+      deadlineMs = Number(session.allowance_deadline || 0) * 1000;
+      warningSeconds = Number(session.warning_seconds || 120);
+      warned = false;
+      deadlineTimer = setInterval(() => {
+        if (!deadlineMs || !receipt) return;
+        const remaining = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
+        if (!warned && remaining <= warningSeconds && remaining > 0) {
+          warned = true;
+          setStatus(`از سهمیه گفتگوی صوتی ${Math.ceil(remaining / 60)} دقیقه باقی مانده است.`);
+        }
+        if (!remaining) { setStatus('سهمیه صوتی تمام شد.'); finish(); }
+      }, 1000);
       pc = new RTCPeerConnection();
       remoteAudio = document.createElement('audio');
       remoteAudio.autoplay = true;
@@ -211,7 +226,15 @@
     // Allow pending transcription events to arrive before closing the data channel.
     if (active && channel?.readyState === 'open') await new Promise(resolve => setTimeout(resolve, 1100));
     cleanup();
-    const clean = turns.filter(t => t.content && t.content.trim()).map(t => ({role:t.role,content:t.content}));
+    if (receipt) {
+      try { await fetch('/api/voice/finish', {method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({receipt}),keepalive:true}); }
+      catch (err) { console.warn('Voice usage finalization:', err); }
+    }
+    const clean = turns.filter(t => t.content && t.content.trim()).map((t,i) => ({
+      role:t.role,content:t.content,
+      turn_id:(t.role+':'+String(t.key || i)).replace(/[^A-Za-z0-9:_-]/g,'_').slice(0,150)
+    }));
     if (!receipt) { location.href = returnUrl; return; }
     try {
       const res = await fetch('/api/voice/save', {
@@ -238,7 +261,14 @@
       finish();
     }
   });
-  window.addEventListener('pagehide', cleanup);
+  window.addEventListener('pagehide', () => {
+    if (receipt) {
+      try { navigator.sendBeacon('/api/voice/finish',
+        new Blob([JSON.stringify({receipt})],{type:'application/json'})); }
+      catch (_) {}
+    }
+    cleanup();
+  });
 </script>
 </body>
 </html>

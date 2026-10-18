@@ -19,6 +19,10 @@ from email.message import EmailMessage
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import text as sql_text
 from io import BytesIO
+import hashlib
+from metering import (VOICE_PLANS, ensure_storage as ensure_api_meter, reserve as reserve_api,
+    finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
+    tutor_tier as active_tutor_tier, voice_tier as active_voice_tier, usd_micro)
 
 load_dotenv()
 
@@ -48,41 +52,55 @@ PLAN_CONFIG = {
     'free': [
         {'model': 'gpt-5.4-mini',                              'tier': 1, 'limit': 5000,    'reset': 'daily'},
         {'model': 'gpt-5.4-nano',                              'tier': 2, 'limit': 10000,   'reset': 'daily'},
-        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None,    'reset': None},
+        {'model': 'openai/gpt-oss-20b', 'tier': 3, 'limit': 35000, 'reset': 'monthly'},
     ],
     'basic': [
         {'model': 'gpt-5.4-mini',                              'tier': 1, 'limit': 300000,  'reset': 'monthly'},
         {'model': 'gpt-5.4-nano',                              'tier': 2, 'limit': 200000,  'reset': 'monthly'},
-        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None,    'reset': None},
+        {'model': 'openai/gpt-oss-20b', 'tier': 3, 'limit': 35000, 'reset': 'monthly'},
     ],
     'pro': [
         {'model': 'gpt-5.4-mini',                              'tier': 1, 'limit': 500000,  'reset': 'monthly'},
         {'model': 'gpt-5.4-nano',                              'tier': 2, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 3, 'limit': None,    'reset': None},
+        {'model': 'openai/gpt-oss-20b', 'tier': 3, 'limit': 35000, 'reset': 'monthly'},
     ],
     'premium': [
         {'model': 'gpt-5.4',                                   'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
         {'model': 'gpt-5.4-mini',                              'tier': 2, 'limit': 500000,  'reset': 'monthly'},
         {'model': 'gpt-5.4-nano',                              'tier': 3, 'limit': 300000,  'reset': 'monthly'},
-        {'model': 'meta-llama/llama-4-scout-17b-16e-instruct', 'tier': 4, 'limit': None,    'reset': None},
+        {'model': 'openai/gpt-oss-20b', 'tier': 4, 'limit': 50000, 'reset': 'monthly'},
     ],
 }
 
 PLAN_NAMES = {
     'free':    'رایگان',
-    'basic':   'پایه — $10',
-    'pro':     'حرفه‌ای — $20',
-    'premium': 'پریمیوم — $40',
+    'basic':   'پایه — $12',
+    'pro':     'حرفه‌ای — $25',
+    'premium': 'پریمیوم — $49',
+    'tutor_pro': 'استاد حرفه‌ای — $69',
 }
 
 with app.app_context():
     db.create_all()
-    # Additive migration: keep existing users and their data intact.
+    # Idempotent additive migration, compatible with older `users.plan` deployments.
     from sqlalchemy import inspect
-    columns = {c['name'] for c in inspect(db.engine).get_columns('users')}
-    if 'email_verified' not in columns:
-        with db.engine.begin() as conn:
-            conn.execute(sql_text('ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE'))
+    columns={c['name'] for c in inspect(db.engine).get_columns('users')}
+    with db.engine.begin() as conn:
+        additions={
+          'is_verified':'BOOLEAN DEFAULT FALSE',
+          'email_verified':'BOOLEAN DEFAULT FALSE',
+          'chat_plan':"VARCHAR(20) DEFAULT 'free'",
+          'chat_plan_expires_at':'TIMESTAMP',
+          'tutor_plan':"VARCHAR(20) DEFAULT 'free'",
+          'tutor_plan_expires_at':'TIMESTAMP',
+        }
+        for name,typ in additions.items():
+            if name not in columns:
+                conn.execute(sql_text(f'ALTER TABLE users ADD COLUMN {name} {typ}'))
+        # Old DB's `plan` was the only subscription record; preserve it verbatim.
+        if 'plan' in columns and 'chat_plan' not in columns:
+            conn.execute(sql_text("UPDATE users SET chat_plan=COALESCE(plan,'free')"))
+    ensure_api_meter(db)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -138,41 +156,21 @@ def get_reset_timestamp(reset_at, period):
     return reset_time.replace(tzinfo=timezone.utc).timestamp()
 
 def pick_model_and_update(user_id, plan, tokens_to_use):
-    cascade = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
-    usage   = get_or_create_usage(user_id)
-
+    # Legacy compatibility (actual dispatch goes through metered_smart_chat).
+    # Never pre-charge legacy counters or provide an uncapped fallback.
+    usage = get_or_create_usage(user_id)
     if usage is None:
-        first = cascade[0]
-        return first['model'], first['tier'], None, False
-
-    for i, tier_config in enumerate(cascade):
-        model  = tier_config['model']
-        limit  = tier_config['limit']
-        period = tier_config['reset']
-        t      = tier_config['tier']
-
-        if limit is None:
-            return model, t, None, i > 0
-
-        tokens_used = getattr(usage, f'tier{t}_tokens', 0) or 0
-        reset_at    = getattr(usage, f'tier{t}_reset', None) or datetime.utcnow()
-
-        if should_reset(reset_at, period):
-            setattr(usage, f'tier{t}_tokens', 0)
-            setattr(usage, f'tier{t}_reset', datetime.utcnow())
-            tokens_used = 0
-            reset_at    = datetime.utcnow()
-
-        if tokens_used < limit:
-            new_count = min(tokens_used + tokens_to_use, limit)
-            setattr(usage, f'tier{t}_tokens', new_count)
-            usage.updated_at = datetime.utcnow()
-            db.session.commit()
-            reset_ts = get_reset_timestamp(reset_at, period)
-            return model, t, reset_ts, i > 0
-
-    last = cascade[-1]
-    return last['model'], last['tier'], None, True
+        return None, None, None, True
+    for item in PLAN_CONFIG.get(plan, PLAN_CONFIG['free']):
+        col = f"tier{item['tier']}_tokens"
+        resetcol = f"tier{item['tier']}_reset"
+        if not hasattr(usage, col):
+            continue
+        ts = getattr(usage, resetcol) or datetime.utcnow()
+        used = (getattr(usage, col) or 0) if not should_reset(ts, item['reset']) else 0
+        if used + tokens_to_use <= item['limit']:
+            return item['model'], item['tier'], get_reset_timestamp(ts,item['reset']), False
+    return None,None,None,True
 
 def get_usage_summary(user_id, plan):
     cascade = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
@@ -220,73 +218,123 @@ TUTOR_PLAN_CONFIG = {
 }
 
 def pick_tutor_model(user_id, plan, tokens_to_use):
-    """
-    Returns (model, reset_ts, is_limited)
-    is_limited=True means hard stop — no fallback, show upgrade message
-    """
-    cascade = TUTOR_PLAN_CONFIG.get(plan, TUTOR_PLAN_CONFIG['free'])
-    usage   = get_or_create_usage(user_id)
-    if not usage:
-        return cascade[0]['model'], None, False
+    # Compatibility helper. Dispatch and charging happen in smart_tutor_chat.
+    for item in TUTOR_PLAN_CONFIG.get(plan,TUTOR_PLAN_CONFIG['free']):
+        return item['model'], None, False
+    return None,None,True
 
-    for tier in cascade:
-        model  = tier['model']
-        limit  = tier['limit']
-        period = tier['reset']
-        col    = tier['col']
+def _usage_pair(response):
+    """Only trust provider-reported billable counts, not guessed tokens."""
+    usage = getattr(response, 'usage', None)
+    if usage is None:
+        return None
+    inp = getattr(usage, 'prompt_tokens', None)
+    out = getattr(usage, 'completion_tokens', None)
+    if inp is None or out is None:
+        return None
+    return (max(0, int(inp)), max(0, int(out)))
 
-        tokens_attr = f'{col}_tokens'
-        reset_attr  = f'{col}_reset'
-        tokens_used = getattr(usage, tokens_attr, 0) or 0
-        reset_at    = getattr(usage, reset_attr, None) or datetime.utcnow()
 
-        if should_reset(reset_at, period):
-            setattr(usage, tokens_attr, 0)
-            setattr(usage, reset_attr, datetime.utcnow())
-            tokens_used = 0
-            reset_at    = datetime.utcnow()
+def _actual_legacy_tokens(user_id, feature, tier, plan, total):
+    # Display-only legacy counters, written AFTER a successful provider response.
+    if user_id is None or tier > 3: return
+    usage=get_or_create_usage(user_id)
+    if usage is None: return
+    if feature == 'chat':
+        spec=next((x for x in PLAN_CONFIG.get(plan,[]) if x['tier']==tier),None)
+        prefix=f'tier{tier}'
+    else:
+        spec=next((x for x in TUTOR_PLAN_CONFIG.get(plan,[]) if x.get('tier',1)==tier),None)
+        prefix=f'tutor_tier{tier}'
+    if spec is None: return
+    resetcol=prefix+'_reset'; tokencol=prefix+'_tokens'
+    if not hasattr(usage,tokencol):return
+    ts=getattr(usage,resetcol) or datetime.utcnow()
+    if should_reset(ts,spec['reset']):
+        setattr(usage,tokencol,0); setattr(usage,resetcol,datetime.utcnow())
+    setattr(usage,tokencol,(getattr(usage,tokencol) or 0)+int(total))
+    usage.updated_at=datetime.utcnow()
+    db.session.commit()
 
-        if tokens_used < limit:
-            setattr(usage, tokens_attr, min(tokens_used + tokens_to_use, limit))
-            usage.updated_at = datetime.utcnow()
-            db.session.commit()
-            reset_ts = get_reset_timestamp(reset_at, period)
-            return model, reset_ts, False
 
-        # this tier is exhausted — hard stop
-        reset_ts = get_reset_timestamp(reset_at, period)
-        return None, reset_ts, True
-
-    return None, None, True
-def smart_tutor_chat(system_prompt, history, user_message, user_id=None, plan='free', temperature=0.7):
-    """
-    Returns (reply, is_limited, reset_ts)
-    is_limited=True means token limit hit — frontend shows upgrade message
-    """
-    messages         = history + [{"role": "user", "content": user_message}]
-    estimated_tokens = len(user_message) // 4 + 400
-
-    if user_id is None:
-        # guest — use nano with no tracking, limited responses
-        try:
-            reply, _ = call_openai_model('gpt-5.4-nano', system_prompt, messages, temperature)
-            return reply, False, None
-        except Exception as e:
-            print(f"Tutor guest error: {e}")
-            return "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید.", False, None
-
-    model, reset_ts, is_limited = pick_tutor_model(user_id, plan, estimated_tokens)
-    print(f"TUTOR: user={user_id} plan={plan} model={model} limited={is_limited}")
-
-    if is_limited:
-        return None, True, reset_ts
-
+def _metered_completion(feature, system_prompt, messages, user_id, plan,
+                        temperature=.7, image_b64=None, image_type=None,
+                        max_output=1000):
+    from metering import reserve, finalize
+    ensure_api_meter(db)
+    user_key = hashlib.sha256((app.secret_key + ':' + request.remote_addr).encode()).hexdigest() if user_id is None else None
+    config = PLAN_CONFIG.get(plan, PLAN_CONFIG['free']) if feature=='chat' else TUTOR_PLAN_CONFIG.get(plan,TUTOR_PLAN_CONFIG['free'])
+    options = []
+    for index,spec in enumerate(config):
+        if image_b64 and spec['model'].startswith('openai/gpt-oss'):
+            continue
+        options.append({'model':spec['model'], 'limit':spec['limit'],
+            'reset':spec['reset'],'tier':index+1})
+    # Limit very long prompts; reserve for SYSTEM + all history + user and images.
+    payload_size=len(system_prompt)+sum(len(str(m.get('content',''))) for m in messages)
+    if payload_size > 30000: raise ValueError('Message history is too long')
+    estimated=max(200,int(payload_size*1.5)+200+(8000 if image_b64 else 0))
+    if estimated > 19000: raise ValueError('Input is too long for the allowed request budget')
+    grant,idx=reserve_api(db,user_id,feature,plan,options,estimated,max_output,guest_key=user_key)
+    if not grant: return None, True, None, None
+    model=grant['model']; switched=(idx>0)
     try:
-        reply, _ = call_openai_model(model, system_prompt, messages, temperature)
-        return reply, False, reset_ts
-    except Exception as e:
-        print(f"Tutor OpenAI error with {model}: {e}")
-        return "متأسفم، مشکلی پیش آمد. لطفاً دوباره امتحان کنید.", False, reset_ts
+        if model.startswith('openai/gpt-oss'):
+            if image_b64:
+                finalize_api(db,grant,0,0)  # no image support on text-only fallback
+                return None,True,None,None
+            reply, response=call_groq_model(system_prompt,messages,temperature,model=model,return_response=True)
+        else:
+            reply, response=call_openai_model(model,system_prompt,messages,temperature,
+                                               image_b64,image_type,return_response=True,
+                                               max_output=max_output)
+        if not reply or not reply.strip():
+            raise RuntimeError('Provider returned no visible answer')
+        usage = _usage_pair(response)
+        if usage is None:
+            finalize_api(db,grant,uncertain=True)
+        else:
+            i,o=usage
+            finalize_api(db,grant,i,o)
+            try: _actual_legacy_tokens(user_id,feature,idx+1,plan,int(i)+int(o))
+            except Exception: app.logger.exception('Legacy token display update failed')
+        return reply,switched,None,model
+    except Exception:
+        app.logger.exception('Metered provider call failed (%s)',model)
+        try: finalize_api(db,grant,uncertain=True) # provider may have billed an errored request
+        except Exception: db.session.rollback(); app.logger.exception('Unable to finalize uncertain API charge')
+        # Failure-only bounded provider fallback, fresh quota reservation; never fall back when budget exhausted.
+        if model.startswith('openai/gpt-oss') or image_b64:
+            return None,False,None,None
+        fallback={'model':os.getenv('GROQ_FALLBACK_MODEL','openai/gpt-oss-20b'),
+                  'limit':int(os.getenv('GROQ_FALLBACK_TOKENS_MONTHLY','25000')),
+                  'reset':'monthly','tier':8}
+        if fallback['model'] not in ('openai/gpt-oss-20b','openai/gpt-oss-120b'):
+            return None,False,None,None
+        alt,_=reserve_api(db,user_id,feature,plan,[fallback],estimated,650,guest_key=user_key)
+        if not alt: return None,False,None,None
+        try:
+            reply,response=call_groq_model(system_prompt,messages,temperature,
+                                            model=fallback['model'],return_response=True)
+            if not reply or not reply.strip():
+                raise RuntimeError('Fallback returned no visible answer')
+            usage=_usage_pair(response)
+            if usage is None: finalize_api(db,alt,uncertain=True)
+            else: finalize_api(db,alt,*usage)
+            return reply,True,None,fallback['model']
+        except Exception:
+            app.logger.exception('Bounded Groq fallback failed')
+            try:finalize_api(db,alt,uncertain=True)
+            except Exception:db.session.rollback()
+            return None,False,None,None
+
+
+def smart_tutor_chat(system_prompt, history, user_message, user_id=None, plan='free', temperature=0.7):
+    messages=history+[{'role':'user','content':user_message}]
+    reply,switched,reset_ts,model = _metered_completion('tutor',system_prompt,messages,user_id,
+        plan,temperature,max_output=900)
+    return reply, (reply is None), reset_ts
+
 # ── KNOWLEDGE (DATABASE BACKED) ──
 def load_knowledge():
     try:
@@ -366,44 +414,26 @@ def extract_and_save_memory(user_id, user_message):
 اگر چیزی برای ذخیره نیست فقط بنویس: NONE
 فقط یک جمله یا NONE."""
 
+    
     memory_text = None
-
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-5.4-nano",
-            messages=[{"role": "user", "content": extraction_prompt}],
-            max_completion_tokens=80,
-            temperature=0.1
-        )
-        memory_text = response.choices[0].message.content.strip()
-        print(f"Memory extraction (OpenAI): '{memory_text}'")
-    except Exception as e:
-        print(f"Memory OpenAI failed, trying Groq: {e}")
+        memory_text,_,_,_ = _metered_completion(
+            'chat','Extract a single factual memory or NONE.',
+            [{'role':'user','content':extraction_prompt}], user_id,
+            active_chat_plan(db.session.get(User,user_id)),max_output=80)
+        if memory_text: memory_text=memory_text.strip()
+    except Exception:
+        app.logger.exception('Metered memory extraction failed')
+        return
+    if memory_text and memory_text.upper() != 'NONE' and len(memory_text)>3:
         try:
-            response = groq_client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
-                messages=[{"role": "user", "content": extraction_prompt}],
-                max_tokens=80,
-                temperature=0.1
-            )
-            memory_text = response.choices[0].message.content.strip()
-            print(f"Memory extraction (Groq): '{memory_text}'")
-        except Exception as e2:
-            print(f"Memory extraction failed completely: {e2}")
-            return
-
-    if memory_text and memory_text.upper() != "NONE" and len(memory_text) > 3:
-        try:
-            existing = Memory.query.filter_by(
-                user_id=user_id, content=memory_text
-            ).first()
-            if not existing:
-                db.session.add(Memory(user_id=user_id, content=memory_text))
+            exists=Memory.query.filter_by(user_id=user_id,content=memory_text).first()
+            if not exists:
+                db.session.add(Memory(user_id=user_id,content=memory_text))
                 db.session.commit()
-                print(f"Memory saved for user {user_id}: {memory_text}")
-        except Exception as e:
-            print(f"Memory DB save error: {e}")
+        except Exception:
             db.session.rollback()
+            app.logger.exception('Memory save failed')
 
 # ── PROMPTS ──
 def build_system_prompt(user_memories=None):
@@ -546,106 +576,43 @@ def build_tutor_prompt(subject, grade):
 - جواب غلط: با مهربانی تصحیح کن و دوباره توضیح بده"""
 
 # ── CHAT FUNCTIONS ──
-def call_openai_model(model, system_prompt, messages, temperature=0.7,
-                      image_b64=None, image_type=None):
-    formatted = []
+def call_openai_model(model, system_prompt, messages, temperature=.7,
+                      image_b64=None, image_type=None, return_response=False,
+                      max_output=1000):
+    formatted=[]
     for m in messages:
-        if m["role"] == "user" and image_b64 and m == messages[-1]:
-            formatted.append({
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": m["content"]},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:{image_type};base64,{image_b64}"
-                    }}
-                ]
-            })
-        else:
-            formatted.append(m)
+        if m.get('role')=='user' and image_b64 and m is messages[-1]:
+            formatted.append({'role':'user','content':[
+              {'type':'text','text':m['content']},
+              {'type':'image_url','image_url':{'url':f'data:{image_type};base64,{image_b64}'}}]})
+        else: formatted.append(m)
+    is_reasoning=any(x in model for x in ('gpt-5','o1','o3','o4'))
+    kwargs={'model':model,'messages':[{'role':'system','content':system_prompt}]+formatted,
+            'max_completion_tokens' if is_reasoning else 'max_tokens':max_output}
+    if not is_reasoning:kwargs['temperature']=temperature
+    response=openai_client.chat.completions.create(**kwargs)
+    reply=response.choices[0].message.content or ''
+    return (reply,response) if return_response else (reply,getattr(response.usage,'total_tokens',0))
 
-    is_new_model = any(x in model for x in ['gpt-5', 'o1', 'o3', 'o4'])
-    token_param  = 'max_completion_tokens' if is_new_model else 'max_tokens'
 
-    kwargs = {
-        'model':    model,
-        'messages': [{"role": "system", "content": system_prompt}] + formatted,
-        token_param: 1000,
-    }
-    if not is_new_model:
-        kwargs['temperature'] = temperature
+def call_groq_model(system_prompt, messages, temperature=.7,
+                    model='openai/gpt-oss-20b',return_response=False):
+    if model not in ('openai/gpt-oss-20b','openai/gpt-oss-120b'):
+        raise ValueError('Unsupported fallback model')
+    response=groq_client.chat.completions.create(model=model,
+        messages=[{'role':'system','content':system_prompt}]+messages,
+        temperature=temperature,max_tokens=650)
+    reply=response.choices[0].message.content or ''
+    return (reply,response) if return_response else (reply,getattr(response.usage,'total_tokens',0))
 
-    response    = openai_client.chat.completions.create(**kwargs)
-    reply       = response.choices[0].message.content
-    tokens_used = response.usage.total_tokens
-    return reply, tokens_used
-
-def call_groq_model(system_prompt, messages, temperature=0.7):
-    msgs = [{"role": "system", "content": system_prompt}] + messages
-    for model in [
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "openai/gpt-oss-120b",
-        "llama-3.1-8b-instant"
-    ]:
-        try:
-            response = groq_client.chat.completions.create(
-                model=model,
-                messages=msgs,
-                temperature=temperature,
-                max_tokens=800,
-                top_p=0.9
-            )
-            return response.choices[0].message.content, 0
-        except Exception as e:
-            if "rate_limit" in str(e).lower() or "429" in str(e) or "404" in str(e):
-                continue
-            raise e
-    return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", 0
 
 def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
-               temperature=0.7, image_b64=None, image_type=None):
-    messages         = history + [{"role": "user", "content": user_message}]
-    estimated_tokens = len(user_message) // 4 + 400
-
-    if user_id is None:
-        try:
-            reply, _ = call_openai_model(
-                'gpt-5.4-nano', system_prompt, messages,
-                temperature, image_b64, image_type
-            )
-            return reply, False, None, 'gpt-5.4-nano'
-        except Exception as e:
-            print(f"Guest OpenAI error: {e}")
-            reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, False, None, 'llama-4-scout'
-
-    model, tier, reset_ts, switched = pick_model_and_update(
-        user_id, plan, estimated_tokens
-    )
-    print(f"DEBUG: user={user_id} plan={plan} model={model} switched={switched} reset_ts={reset_ts}")
-
-    if 'llama' in model or 'gpt-oss' in model or 'qwen' in model:
-        try:
-            reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, switched, reset_ts, model
-        except Exception as e:
-            print(f"Groq error: {e}")
-            return "متأسفم، سرور مصروف است. لطفاً دوباره امتحان کنید.", switched, reset_ts, model
-
-    try:
-        reply, _ = call_openai_model(
-            model, system_prompt, messages,
-            temperature, image_b64, image_type
-        )
-        print(f"DEBUG: OpenAI replied with {model}")
-        return reply, switched, reset_ts, model
-    except Exception as e:
-        print(f"OpenAI error with {model}: {e} — falling back to Groq")
-        try:
-            reply, _ = call_groq_model(system_prompt, messages, temperature)
-            return reply, switched, reset_ts, 'llama-4-scout'
-        except Exception as e2:
-            print(f"Groq fallback failed: {e2}")
-            return "متأسفم، در حال حاضر سرور مصروف است. لطفاً چند دقیقه دیگر امتحان کنید.", switched, reset_ts, 'error'
+               temperature=.7, image_b64=None, image_type=None):
+    messages=history+[{'role':'user','content':user_message}]
+    reply,switched,reset_ts,model = _metered_completion('chat',system_prompt,messages,
+        user_id,plan,temperature,image_b64,image_type,max_output=900)
+    if reply is None: return 'محدودیت استفاده تکمیل شده یا سرویس موقتاً در دسترس نیست. بعداً دوباره تلاش کنید.', True, reset_ts, 'limited'
+    return reply,switched,reset_ts,model
 
 # ── DOCUMENT EXTRACTION ──
 def extract_text_from_file(file_bytes, filename):
@@ -928,11 +895,16 @@ def api_me():
 @app.route("/api/usage")
 @login_required
 def api_usage():
-    summary = get_usage_summary(current_user.id, current_user.plan)
-    return jsonify({
-        "plan":    current_user.plan,
-        "summary": summary
-    })
+    ensure_api_meter(db)
+    plan = active_chat_plan(current_user)
+    from metering import tier_summary
+    summary=tier_summary(db,current_user.id,'chat',PLAN_CONFIG[plan])
+    return jsonify({'plan':plan,'tutor_plan':active_tutor_tier(current_user),
+      'summary':summary,
+      'tutor_summary':tier_summary(db,current_user.id,'tutor',TUTOR_PLAN_CONFIG[active_tutor_tier(current_user)]),
+      'actual_api_usage':api_meter_summary(db,current_user.id),
+      'voice_plan':active_voice_tier(current_user),
+      'voice_quotas':VOICE_PLANS[active_voice_tier(current_user)]})
 
 # ── MAIN ROUTES ──
 @app.route("/")
@@ -959,10 +931,13 @@ def admin_panel():
 
 # ── CHAT API ──
 @app.route("/api/transcribe", methods=["POST"])
+@login_required
 def transcribe_audio():
     """Receive a browser-recorded audio file and return its transcription."""
-    if not os.getenv("OPENAI_API_KEY"):
-        return jsonify({"error": "سرویس صدا تنظیم نشده است. لطفاً OPENAI_API_KEY را در تنظیمات سرور بررسی کنید."}), 503
+    if not current_user.email_verified:
+        return jsonify(error='Email verification required'),403
+    if not os.getenv('OPENAI_API_KEY'):
+        return jsonify(error='Voice service unavailable'),503
 
     audio = request.files.get("audio")
     if audio is None or not audio.filename:
@@ -997,9 +972,14 @@ def transcribe_audio():
     if len(audio_bytes) > 20 * 1024 * 1024:
         return jsonify({"error": "فایل صوتی بیش از حد بزرگ است. یک ضبط کوتاه‌تر بفرستید."}), 413
 
+    # This upload is for dictation and uses a small, fixed charge against voice
+    # minutes. Separate transcription is not required for live Realtime itself.
+    seconds = max(5, min(120, (len(audio_bytes)+23999)//24000))
+    sid,quota=_reserve_voice_seconds(current_user.id,seconds,kind='dictation')
+    if not sid:return jsonify(error='Voice allowance exhausted',quota=quota),429
     try:
         transcription = openai_client.audio.transcriptions.create(
-            model=os.getenv("STT_MODEL", "gpt-4o-mini-transcribe"),
+            model=os.getenv("STT_MODEL", "gpt-transcribe"),
             file=(f"recording.{extension}", BytesIO(audio_bytes), mime),
             prompt=(
                 "Transcribe the speech in its original language and script. The speaker may use Afghan Dari "
@@ -1015,44 +995,63 @@ def transcribe_audio():
         return jsonify({"error": "تبدیل صدا به متن ناموفق شد. تنظیمات API و لاگ‌های Render را بررسی کنید."}), 502
 
 
-@app.route("/api/tts", methods=["POST"])
+def _owns_spoken_reply(user_id, spoken):
+    # Prevent turning this protected TTS endpoint into a general text-audio service.
+    def norm(s): return ' '.join(str(s or '').split())
+    spoken=norm(spoken)
+    rows=db.session.query(Message.content).join(Conversation).filter(
+       Conversation.user_id==user_id,Message.role=='assistant').order_by(Message.id.desc()).limit(50).all()
+    if any(norm(s)==spoken for (s,) in rows):return True
+    _ensure_lesson_storage()
+    raw=db.session.execute(sql_text('''SELECT history FROM tutor_lesson_histories
+       WHERE user_id=:uid ORDER BY updated_at DESC LIMIT 30'''),{'uid':user_id}).all()
+    for (value,) in raw:
+        try:
+            if any(m.get('role')=='assistant' and norm(m.get('content'))==spoken
+                   for m in json.loads(value or '[]')):return True
+        except (ValueError,TypeError):pass
+    # Legacy Tutor messages existed before per-topic storage.
+    for progress in TutorProgress.query.filter_by(user_id=user_id).all():
+        try:
+            if any(m.get('role')=='assistant' and norm(m.get('content'))==spoken
+                   for m in json.loads(progress.chat_history or '[]')):return True
+        except (TypeError,ValueError):pass
+    return False
+
+
+@app.route('/api/tts', methods=['POST'])
+@login_required
 def text_to_speech():
-    """Generate user-requested speech for Khayyam's Persian/Dari replies."""
-    if not os.getenv("OPENAI_API_KEY"):
-        return jsonify({"error": "سرویس صدا تنظیم نشده است. لطفاً OPENAI_API_KEY را در تنظیمات سرور بررسی کنید."}), 503
-
-    payload = request.get_json(silent=True) or {}
-    text = str(payload.get("text", "")).strip()
-    if not text:
-        return jsonify({"error": "متنی برای خواندن فرستاده نشده است."}), 400
-    if len(text) > 4000:
-        return jsonify({"error": "این پاسخ برای خواندن صوتی طولانی است. لطفاً بخش کوتاه‌تری را انتخاب کنید."}), 400
-
+    if not current_user.email_verified:
+        return jsonify(error='Email verification required'),403
+    if not os.getenv('OPENAI_API_KEY'):
+        return jsonify(error='Voice service unavailable'),503
+    payload=request.get_json(silent=True) or {}
+    content=payload.get('text')
+    if not isinstance(content,str) or not content.strip() or len(content)>2000:
+        return jsonify(error='Invalid reply text (max 2000 characters)'),400
+    content=' '.join(content.split())
+    if not _owns_spoken_reply(current_user.id,content):
+        return jsonify(error='You can only play your own saved replies'),403
+    # Conservative speech-time charge, shared with live voice. Audio is not generated
+    # before the quota reservation commits, preventing concurrent overuse.
+    seconds=max(8,min(250,(len(content)+7)//8+5))
+    sid,quota=_reserve_voice_seconds(current_user.id,seconds,kind='listen')
+    if not sid: return jsonify(error='Voice allowance exhausted',quota=quota),429
     try:
-        speech = openai_client.audio.speech.create(
-            model=os.getenv("TTS_MODEL", "gpt-4o-mini-tts"),
-            voice=os.getenv("TTS_VOICE", "coral"),
-            input=text,
-            instructions=(
-                "Speak in Persian as naturally as possible, aiming for clear Afghan Dari "
-                "pronunciation rather than an exaggerated Iranian accent. Use a warm, calm, "
-                "patient teacher's voice. Read Persian text only; pronounce English technical "
-                "terms clearly. Keep a moderate pace."
-            ),
-            response_format="mp3",
-        )
-        audio_bytes = speech.read()
-        return send_file(
-            BytesIO(audio_bytes),
-            mimetype="audio/mpeg",
-            as_attachment=False,
-            download_name="khayyam-reply.mp3",
-            max_age=0,
-        )
-    except Exception as exc:
-        app.logger.exception("Text-to-speech generation failed")
-        return jsonify({"error": "ساخت صدا ناموفق بود. لطفاً دوباره امتحان کنید."}), 502
-
+        speech=openai_client.audio.speech.create(
+            model=os.getenv('TTS_MODEL','gpt-4o-mini-tts'),
+            voice=os.getenv('KHAYYAM_VOICE','cedar'),input=content,
+            instructions=('Read this text faithfully in warm, natural Afghan Dari, with a calm '
+                          'teacher style and moderate pace; no extra words.'),response_format='mp3')
+        audio=speech.read()
+        if not audio: raise RuntimeError('Empty speech response')
+        return send_file(BytesIO(audio),mimetype='audio/mpeg',as_attachment=False,
+                         download_name='khayyam-reply.mp3',max_age=0)
+    except Exception:
+        # Unknown provider billing state; retain quota charge to avoid abuse.
+        app.logger.exception('Text playback failed')
+        return jsonify(error='Voice generation failed; retry later'),502
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
@@ -1067,8 +1066,12 @@ def chat():
         if 'image' in request.files:
             img          = request.files['image']
             img_bytes    = img.read()
+            if len(img_bytes) > 4 * 1024 * 1024:
+                return jsonify(error='Image too large (4MB limit)'),413
+            image_type = img.content_type or 'image/jpeg'
+            if image_type not in ('image/jpeg','image/png','image/webp'):
+                return jsonify(error='Unsupported image format'),415
             image_b64    = base64.b64encode(img_bytes).decode('utf-8')
-            image_type   = img.content_type or 'image/jpeg'
             user_message = user_message or "این تصویر را به دری توضیح بده"
 
         if 'document' in request.files:
@@ -1085,9 +1088,14 @@ def chat():
         image_b64    = None
         image_type   = None
 
+    if not isinstance(history,list):
+        return jsonify(error='Invalid conversation history'),400
+    history=[{'role':str(m.get('role')),'content':str(m.get('content',''))[:6000]}
+             for m in history[-10:] if isinstance(m,dict) and m.get('role') in ('user','assistant')]
+    if not isinstance(user_message,str) or len(user_message)>15000:
+        return jsonify(error='Message too long'),400
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = getattr(current_user, 'plan', 'free') or 'free' \
-              if current_user.is_authenticated else 'free'
+    plan    = active_chat_plan(current_user if current_user.is_authenticated else None)
 
     user_memories = get_user_memories(user_id) if user_id else None
 
@@ -1108,8 +1116,10 @@ def chat():
 
     if not reply:
         reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
+    if model_used == 'limited':
+        return jsonify({'reply':reply,'limited':True,'switch_notice':False}),429
 
-    if user_id:
+    if user_id and model_used != 'limited':
         extract_and_save_memory(user_id, user_message)
 
     response_data = {"reply": reply}
@@ -1153,10 +1163,15 @@ def persona_chat():
     user_message   = data.get("message", "")
     history        = data.get("history", [])
     persona_prompt = data.get("persona_prompt", "")
+    if not isinstance(persona_prompt,str) or len(persona_prompt)>10000 or not isinstance(history,list):
+        return jsonify(error='Invalid input'),400
+    history=[{'role':str(m.get('role')),'content':str(m.get('content',''))[:6000]}
+             for m in history[-10:] if isinstance(m,dict) and m.get('role') in ('user','assistant')]
+    if not isinstance(user_message,str) or len(user_message)>15000:
+        return jsonify(error='Message too long'),400
 
     user_id = current_user.id if current_user.is_authenticated else None
-    plan    = getattr(current_user, 'plan', 'free') or 'free' \
-              if current_user.is_authenticated else 'free'
+    plan    = active_chat_plan(current_user if current_user.is_authenticated else None)
 
     try:
         reply, _, _, _ = smart_chat(
@@ -1247,7 +1262,8 @@ def get_users():
         "email":      u.email,
         "phone":      u.phone,
         "is_admin":   u.is_admin,
-        "plan":       u.plan,
+        "plan":       active_chat_plan(u),
+        "tutor_plan": active_tutor_tier(u),
         "created_at": u.created_at.isoformat()
     } for u in users])
 
@@ -1255,14 +1271,22 @@ def get_users():
 @login_required
 @admin_required
 def update_user_plan(user_id):
-    data = request.get_json()
-    plan = data.get("plan", "free")
-    if plan not in PLAN_CONFIG:
-        return jsonify({"success": False, "error": "پلان نامعتبر"})
-    user = User.query.get_or_404(user_id)
-    user.plan = plan
+    data=request.get_json(silent=True) or {}
+    plan=str(data.get('plan') or 'free')
+    kind=str(data.get('kind') or ('tutor' if plan=='tutor_pro' else 'chat'))
+    if kind=='chat' and plan not in PLAN_CONFIG:return jsonify(success=False,error='Invalid chat plan'),400
+    if kind=='tutor' and plan not in ('free','tutor_pro'):return jsonify(success=False,error='Invalid tutor plan'),400
+    user=User.query.get_or_404(user_id)
+    if kind=='chat':user.chat_plan=plan
+    else:user.tutor_plan=plan
+    # Optional expiration date; no automatic revocation or involuntary plan edits.
+    if 'expires_at' in data:
+        try: expires=datetime.fromisoformat(data['expires_at']) if data['expires_at'] else None
+        except (TypeError,ValueError):return jsonify(success=False,error='Invalid expiration'),400
+        if kind=='chat':user.chat_plan_expires_at=expires
+        else:user.tutor_plan_expires_at=expires
     db.session.commit()
-    return jsonify({"success": True})
+    return jsonify(success=True,chat_plan=active_chat_plan(user),tutor_plan=active_tutor_tier(user))
 
 @app.route("/api/admin/knowledge", methods=["GET"])
 @login_required
@@ -1749,6 +1773,7 @@ def get_curriculum():
     return jsonify(result)
 
 @app.route("/api/tutor/progress/<subject>")
+@login_required
 def get_tutor_progress(subject):
     """Returns student's progress for a specific subject."""
     progress = get_or_create_progress(current_user.id, subject)
@@ -1773,6 +1798,7 @@ def get_tutor_lesson_history(subject, topic_key):
 
 
 @app.route("/api/tutor/start-topic", methods=["POST"])
+@login_required
 def start_topic():
     """Student starts or resumes a topic."""
     data       = request.get_json()
@@ -1810,6 +1836,7 @@ def start_topic():
         "history": _lesson_history(current_user.id, subject, topic_key)
     })
 @app.route("/api/tutor/chat", methods=["POST"])
+@login_required
 def tutor_chat_new():
     data      = request.get_json()
     subject   = data.get("subject")
@@ -1839,7 +1866,7 @@ def tutor_chat_new():
         system_prompt += '\nاین موضوع قبلاً تکمیل شده؛ در صورت نیاز مرور و تمرین ارائه کن.'
     elif chat_history:
         system_prompt += '\nاین درس قبلاً شروع شده؛ از گفتگوهای قبلی همین موضوع ادامه بده.'
-    plan = getattr(current_user, 'plan', 'free') or 'free'
+    plan = active_tutor_tier(current_user)
 
     try:
         reply, is_limited, reset_ts = smart_tutor_chat(
@@ -1875,6 +1902,7 @@ def tutor_chat_new():
 
     return jsonify({"reply": reply})
 @app.route("/api/tutor/complete-topic", methods=["POST"])
+@login_required
 def complete_topic():
     """Student marks a topic as complete."""
     data      = request.get_json()
@@ -1943,10 +1971,11 @@ def generate_quiz():
 {{"questions":[{{"q":"سوال","options":["الف","ب","ج","د"],"correct":0,"explanation":"دلیل"}}]}}
 مقدار correct عدد صحیح 0 تا 3 باشد. دقیقا {count} سوال بساز."""
     try:
-        response = openai_client.chat.completions.create(
-            model='gpt-5.4-mini', messages=[{'role':'user','content':prompt}],
-            max_completion_tokens=2400)
-        raw = (response.choices[0].message.content or '').replace('```json','').replace('```','').strip()
+        answer,_,_,_=_metered_completion('tutor','Generate valid educational quiz JSON.',
+            [{'role':'user','content':prompt}],current_user.id,
+            active_tutor_tier(current_user),max_output=2400)
+        if not answer:return jsonify(error='Tutor allowance exhausted'),429
+        raw=answer.replace('```json','').replace('```','').strip()
         questions = json.loads(raw)['questions']
         if len(questions) != count: raise ValueError('Wrong question count')
         clean = []
@@ -2047,7 +2076,7 @@ def check_practice():
     return jsonify(correct=answer == q['correct'], correct_index=q['correct'], explanation=q['explanation'],xp_earned=0)
 
 @app.route("/api/tutor/placement-test", methods=["POST"])
-
+@login_required
 def placement_test():
     """Generates a placement test for a subject."""
     data    = request.get_json()
@@ -2080,13 +2109,11 @@ def placement_test():
 }}"""
 
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-5.4-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=2000,
-            temperature=0.7
-        )
-        raw = response.choices[0].message.content.strip()
+        answer,_,_,_=_metered_completion('tutor','Generate a placement-test JSON object.',
+            [{'role':'user','content':prompt}],current_user.id,
+            active_tutor_tier(current_user),max_output=2000)
+        if not answer:return jsonify(error='Tutor allowance exhausted'),429
+        raw = answer.strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
         return jsonify(json.loads(raw))
     except Exception as e:
@@ -2094,7 +2121,7 @@ def placement_test():
         return jsonify({"error": "خطا در ساخت تست"}), 500
 
 @app.route("/api/tutor/placement-result", methods=["POST"])
-
+@login_required
 def placement_result():
     """Calculates recommended level from placement test answers."""
     data    = request.get_json()
@@ -2218,6 +2245,161 @@ def _ensure_voice_storage():
         )"""))
 
 
+# UTC day and calendar-month quotas shared by Chat, Tutor, Listen, Dictation.
+VOICE_WARNING_SECONDS = 120
+VOICE_MODEL=os.getenv('REALTIME_MODEL','gpt-realtime-2.1-mini')
+
+def _voice_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+def _voice_day():
+    return _voice_now().date().isoformat()
+
+def _ensure_voice_quota_storage():
+    with db.engine.begin() as conn:
+        conn.execute(sql_text('''CREATE TABLE IF NOT EXISTS voice_daily_usage (
+            user_id INTEGER NOT NULL, usage_day VARCHAR(10) NOT NULL,
+            used_seconds INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, usage_day))'''))
+        conn.execute(sql_text('''CREATE TABLE IF NOT EXISTS voice_quota_sessions (
+            session_id VARCHAR(36) PRIMARY KEY, user_id INTEGER NOT NULL,
+            usage_day VARCHAR(10) NOT NULL, started_at TIMESTAMP NOT NULL,
+            reserved_seconds INTEGER NOT NULL, ended_at TIMESTAMP,
+            charged_seconds INTEGER, kind VARCHAR(12) NOT NULL DEFAULT 'live'
+        )'''))
+        from sqlalchemy import inspect
+        columns={c['name'] for c in inspect(conn).get_columns('voice_quota_sessions')}
+        if 'kind' not in columns:
+            conn.execute(sql_text("ALTER TABLE voice_quota_sessions ADD COLUMN kind VARCHAR(12) NOT NULL DEFAULT 'live'"))
+        conn.execute(sql_text('''CREATE TABLE IF NOT EXISTS voice_monthly_locks (
+            user_id INTEGER NOT NULL, month_key VARCHAR(7) NOT NULL,
+            PRIMARY KEY(user_id,month_key))'''))
+
+def _voice_quota_lock(uid,day):
+    month=day[:7]
+    db.session.execute(sql_text('''INSERT INTO voice_monthly_locks(user_id,month_key)
+        VALUES (:uid,:m) ON CONFLICT(user_id,month_key) DO NOTHING'''),{'uid':uid,'m':month})
+    db.session.execute(sql_text('''INSERT INTO voice_daily_usage(user_id,usage_day,used_seconds)
+        VALUES (:uid,:day,0) ON CONFLICT(user_id,usage_day) DO NOTHING'''),{'uid':uid,'day':day})
+    lock=' FOR UPDATE' if db.engine.dialect.name=='postgresql' else ''
+    db.session.execute(sql_text('SELECT month_key FROM voice_monthly_locks WHERE user_id=:uid AND month_key=:m'+lock),{'uid':uid,'m':month}).one()
+    return db.session.execute(sql_text('SELECT used_seconds FROM voice_daily_usage WHERE user_id=:uid AND usage_day=:day'+lock),{'uid':uid,'day':day}).scalar_one()
+
+def _voice_quota_reconcile(uid,day,now):
+    # Mark abandoned sessions consumed when their reservation duration elapsed.
+    # The provider session may still be alive: see beta-mode risk in DEPLOYMENT_NOTES.
+    rows=db.session.execute(sql_text('''SELECT session_id,started_at,reserved_seconds FROM
+        voice_quota_sessions WHERE user_id=:uid AND ended_at IS NULL'''),
+        {'uid':uid}).mappings().all()
+    for row in rows:
+        elapsed=max(0,int((now - (datetime.fromisoformat(row['started_at']) if isinstance(row['started_at'],str) else row['started_at'])).total_seconds()))
+        if elapsed>=row['reserved_seconds']:
+            db.session.execute(sql_text('''UPDATE voice_quota_sessions SET ended_at=:now,
+              charged_seconds=:charged WHERE session_id=:sid AND ended_at IS NULL'''),
+              {'now':now,'charged':row['reserved_seconds'],'sid':row['session_id']})
+    result=db.session.execute(sql_text('''SELECT
+       COALESCE(SUM(CASE WHEN usage_day=:day THEN COALESCE(charged_seconds,reserved_seconds) ELSE 0 END),0) AS used_day,
+       COALESCE(SUM(COALESCE(charged_seconds,reserved_seconds)),0) AS used_month
+       FROM voice_quota_sessions WHERE user_id=:uid AND usage_day LIKE :month'''),
+       {'uid':uid,'day':day,'month':day[:7]+'%'}).mappings().first()
+    return int(result['used_day']),int(result['used_month'])
+
+def _voice_snapshot_locked(uid,now):
+    day=now.date().isoformat()
+    _voice_quota_lock(uid,day)
+    used_day,used_month=_voice_quota_reconcile(uid,day,now)
+    profile=VOICE_PLANS[active_voice_tier(db.session.get(User,uid))]
+    daily=max(0,profile['daily']-used_day)
+    monthly=max(0,profile['monthly']-used_month)
+    return {'plan':active_voice_tier(db.session.get(User,uid)),
+      'limit_seconds':profile['daily'],'monthly_limit_seconds':profile['monthly'],
+      'used_seconds':used_day,'monthly_used_seconds':used_month,
+      'daily_remaining_seconds':daily,'monthly_remaining_seconds':monthly,
+      'remaining_seconds':min(daily,monthly),
+      'warning_seconds':VOICE_WARNING_SECONDS,'reset_timezone':'UTC'}
+
+def _voice_quota_snapshot(uid):
+    _ensure_voice_quota_storage()
+    try:
+        result=_voice_snapshot_locked(uid,_voice_now())
+        db.session.commit(); return result
+    except Exception:
+        db.session.rollback();raise
+
+def _reserve_voice_seconds(uid,seconds,kind='live'):
+    _ensure_voice_quota_storage()
+    try:
+        now=_voice_now();quota=_voice_snapshot_locked(uid,now)
+        seconds=int(seconds)
+        if seconds<1 or seconds>3600 or quota['remaining_seconds']<seconds:
+            db.session.rollback(); return None,quota
+        if kind=='live':
+            exists=db.session.execute(sql_text('''SELECT 1 FROM voice_quota_sessions
+                WHERE user_id=:uid AND ended_at IS NULL LIMIT 1'''),{'uid':uid}).first()
+            if exists:
+                db.session.rollback();return None,quota
+        sid=str(uuid.uuid4())
+        db.session.execute(sql_text('''INSERT INTO voice_quota_sessions
+             (session_id,user_id,usage_day,started_at,reserved_seconds,kind,ended_at,charged_seconds)
+             VALUES(:sid,:uid,:day,:now,:seconds,:kind,:ended,:charged)'''),
+             {'sid':sid,'uid':uid,'day':now.date().isoformat(),'now':now,
+              'seconds':seconds,'kind':kind,
+              'ended':now if kind!='live' else None,
+              'charged':seconds if kind!='live' else None})
+        db.session.commit(); return sid,quota
+    except Exception:
+        db.session.rollback();raise
+
+@app.route("/api/voice/quota", methods=["GET"])
+@login_required
+def voice_quota_status():
+    if not current_user.email_verified:
+        return jsonify(error="Email verification required"), 403
+    try:
+        return jsonify(_voice_quota_snapshot(current_user.id))
+    except Exception:
+        app.logger.exception("Voice quota status failed")
+        return jsonify(error="Voice allowance temporarily unavailable"), 503
+
+
+@app.route("/api/voice/finish", methods=["POST"])
+@login_required
+def voice_quota_finish():
+    data = request.get_json(silent=True) or {}
+    try:
+        receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").loads(
+            str(data.get("receipt") or ""))
+        if receipt.get("uid") != current_user.id:
+            return jsonify(error="Invalid voice session"), 403
+        sid = str(receipt.get("sid") or "")
+        _ensure_voice_quota_storage()
+        now = _voice_now()
+        row = db.session.execute(sql_text("""SELECT user_id, started_at,
+            reserved_seconds, ended_at, usage_day FROM voice_quota_sessions
+            WHERE session_id=:sid""" +
+            (" FOR UPDATE" if db.engine.dialect.name == "postgresql" else "")),
+            {"sid":sid}).mappings().first()
+        if not row or row["user_id"] != current_user.id:
+            db.session.rollback()
+            return jsonify(error="Voice session not found"), 404
+        if row["ended_at"] is None:
+            elapsed = max(0, int((now - (datetime.fromisoformat(row["started_at"]) if isinstance(row["started_at"],str) else row["started_at"])).total_seconds()))
+            charged = min(row["reserved_seconds"], elapsed)
+            db.session.execute(sql_text("""UPDATE voice_quota_sessions
+                SET ended_at=:now, charged_seconds=:charged
+                WHERE session_id=:sid AND ended_at IS NULL"""),
+                {"now":now,"charged":charged,"sid":sid})
+        db.session.commit()
+        return jsonify(ok=True)
+    except (BadSignature, ValueError, TypeError, AttributeError):
+        db.session.rollback()
+        return jsonify(error="Invalid voice session"), 403
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Voice finish failed")
+        return jsonify(error="Could not finalize voice allowance"), 503
+
+
 @app.route("/api/voice/session", methods=["POST"])
 @login_required
 def create_live_voice_session():
@@ -2238,21 +2420,28 @@ def create_live_voice_session():
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
 
+    # Check quota before requesting a paid Realtime client secret.
+    try:
+        quota = _voice_quota_snapshot(current_user.id)
+    except Exception:
+        return jsonify(error="Voice allowance temporarily unavailable"), 503
+    if quota["remaining_seconds"] <= 0:
+        return jsonify(error="Daily voice allowance exhausted. Try again after 00:00 UTC.",
+                       quota=quota), 429
+
     import urllib.request
     import urllib.error
-    import hashlib
-
     payload = {
-        "expires_after": {"anchor": "created_at", "seconds": 60},
+        "expires_after": {"anchor": "created_at", "seconds": 30},
         "session": {
             "type": "realtime",
-            "model": "gpt-realtime",
+            "model": VOICE_MODEL,
             "instructions": instructions,
             "output_modalities": ["audio"],
             "audio": {
-                "output": {"voice": "echo"},
+                "output": {"voice": os.getenv('KHAYYAM_VOICE','cedar')},
                 "input": {
-                    "transcription": {"model": "gpt-4o-mini-transcribe",
+                    "transcription": {"model": os.getenv('REALTIME_TRANSCRIBE_MODEL','gpt-live-transcribe'),
                                       "prompt": "The speaker may use Afghan Dari (دری افغانستان), Persian script, and occasional English words. Transcribe the words actually spoken; do not translate or invent text."},
                     "turn_detection": {
                         "type": "server_vad", "create_response": True,
@@ -2274,18 +2463,37 @@ def create_live_voice_session():
             result = json.loads(response.read().decode())
         # Persist the session before issuing a receipt; all batches use one conversation.
         _ensure_voice_storage()
-        session_id = str(uuid.uuid4())
-        db.session.execute(sql_text("""INSERT INTO voice_save_sessions
-            (session_id, user_id, mode, conversation_id)
-            VALUES (:sid, :uid, :mode, :cid)"""),
-            {"sid": session_id, "uid": current_user.id, "mode": mode,
-             "cid": context.get("conversation_id") if mode == "chat" else None})
-        db.session.commit()
+        # Single atomic daily+monthly reservation, shared across all voice features.
+        now=_voice_now()
+        session_id,quota=_reserve_voice_seconds(current_user.id,
+            min(VOICE_PLANS[active_voice_tier(current_user)]['daily'],
+                quota['remaining_seconds']),kind='live')
+        if not session_id:
+            return jsonify(error='Voice allowance exhausted or another session active',quota=quota),429
+        try:
+            db.session.execute(sql_text('''INSERT INTO voice_save_sessions
+                (session_id,user_id,mode,conversation_id)
+                VALUES(:sid,:uid,:mode,:cid)'''),
+                {'sid':session_id,'uid':current_user.id,'mode':mode,
+                 'cid':context.get('conversation_id') if mode=='chat' else None})
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            # Cancel reservation locally if no session receipt is issued.
+            db.session.execute(sql_text('DELETE FROM voice_quota_sessions WHERE session_id=:sid'),
+                               {'sid':session_id})
+            db.session.commit()
+            raise
+        remaining=min(VOICE_PLANS[active_voice_tier(current_user)]['daily'],
+                      quota['remaining_seconds'])
         receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").dumps(
             {"uid": current_user.id, "mode": mode, "context": context,
              "sid": session_id, "issued": int(time.time())})
         return jsonify(value=result["value"], expires_at=result.get("expires_at"),
-                       receipt=receipt, mode=mode)
+                       receipt=receipt, mode=mode, allowance_seconds=remaining,
+                       warning_seconds=VOICE_WARNING_SECONDS,
+                       monthly_remaining_seconds=quota['monthly_remaining_seconds'],
+                       allowance_deadline=int(now.replace(tzinfo=timezone.utc).timestamp())+remaining)
     except urllib.error.HTTPError as exc:
         app.logger.error("Realtime session creation failed: HTTP %s", exc.code)
         return jsonify(error="Could not start voice session"), 502
