@@ -583,13 +583,14 @@
   }
 
   async function loadConversation(id) {
-    if (!currentUser) return;
+    if (!currentUser || isLoading) return;
     if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
     try {
       const res  = await fetch(`/api/conversations/${id}`);
       const conv = await res.json();
 
-      currentConvId = id;
+      currentConvId = Number(id);
+      window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
       history = conv.messages.map(m => ({ role: m.role, content: m.content }));
 
       const messagesEl = document.getElementById('messages');
@@ -612,14 +613,17 @@
 
   async function deleteConv(e, id) {
     e.stopPropagation();
+    if (isLoading) return;
     await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
     if (currentConvId === id) newChat();
     else await loadSidebar();
   }
 
   async function newChat() {
+    if (isLoading) return; // An unfinished reply must not land in another chat.
     if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
     currentConvId = null;
+    window.history.replaceState(null, '', '/chat');
     history       = [];
     document.getElementById('messages').innerHTML = `
       <div class="welcome" id="welcome">
@@ -869,6 +873,9 @@
     const displayText = text || (selectedFileType === 'image' ? '📷 تصویر' : '📄 فایل');
     appendBubble('user', displayText);
     showTyping();
+    // The backend appends the new user message itself. Do not send it again as
+    // part of the history; doing so increases costs and duplicates turns.
+    const priorHistory = history.slice(-10);
     history.push({ role: 'user', content: text || displayText });
 
     try {
@@ -877,7 +884,7 @@
       if (selectedFile) {
         const formData = new FormData();
         formData.append('message', text);
-        formData.append('history', JSON.stringify(history.slice(-10)));
+        formData.append('history', JSON.stringify(priorHistory));
         if (currentConvId) formData.append('conversation_id', currentConvId);
         if (selectedFileType === 'image') {
           formData.append('image', selectedFile);
@@ -891,7 +898,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message:         text,
-            history:         history.slice(-10),
+            history:         priorHistory,
             conversation_id: currentConvId
           })
         });
@@ -900,12 +907,11 @@
       const data = await res.json();
       removeTyping();
 
-      // safety check
-      if (!data.reply) {
-        appendBubble('ai', 'متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.');
-        isLoading = false;
-        document.getElementById('send-btn').disabled = false;
-        input.focus();
+      // Do not add failed/limited turns to client history as though they were
+      // completed. Display the error and let the user retry in the same chat.
+      if (!res.ok || !data.reply) {
+        if (history.length && history[history.length - 1].role === 'user') history.pop();
+        appendBubble('ai', data.error || data.reply || 'متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.');
         return;
       }
 
@@ -934,26 +940,25 @@
       history.push({ role: 'assistant', content: data.reply });
       clearFile();
 
-      if (currentUser && data.conversation_id) {
-        currentConvId = data.conversation_id;
-        try {
-          await loadSidebar();
-        } catch (sidebarError) {
-          console.warn('Conversation sidebar refresh failed:', sidebarError);
+      if (data.conversation_id) {
+        currentConvId = Number(data.conversation_id);
+        window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
+        if (currentUser) {
+          try { await loadSidebar(); }
+          catch (sidebarError) { console.warn('Conversation sidebar refresh failed:', sidebarError); }
         }
       }
 
     } catch (err) {
       removeTyping();
       console.error('sendMessage error:', err);
-      if (!history.length || history[history.length - 1].role !== 'assistant') {
-        appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
-      }
+      if (history.length && history[history.length - 1].role === 'user') history.pop();
+      appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+    } finally {
+      isLoading = false;
+      document.getElementById('send-btn').disabled = false;
+      input.focus();
     }
-
-    isLoading = false;
-    document.getElementById('send-btn').disabled = false;
-    input.focus();
   }
 
   // Live Voice runs directly inside this conversation, without navigating away.
@@ -967,7 +972,8 @@
     history.push({role, content:text});
   };
   window.khayyamVoiceSavedConversation = id => {
-    currentConvId = id;
+    currentConvId = Number(id);
+    window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
     loadSidebar().catch(err => console.warn('Voice sidebar refresh:', err));
   };
 

@@ -136,15 +136,21 @@ def reserve(db, uid, feature, plan, options, estimated_input, max_output=900, gu
     for ix, choice in enumerate(options):
         if not choice.get('limit') or choice.get('reset') not in ('daily','monthly'): continue
         model=choice['model']; provider='groq' if model.startswith('openai/gpt-oss') else 'openai'
-        estimate_tokens = estimated_input + max_output
-        reserve_cost = usd_micro(model,estimated_input,max_output)
-        if int(spent) + reserve_cost > budget_micro(plan, feature, owner): continue
         period = choice['reset']; window=_window(period,now); tier=int(choice['tier'])
         used = db.session.execute(text('''SELECT COALESCE(SUM(CASE WHEN status='reserved'
             THEN reserved_tokens ELSE input_tokens+output_tokens END),0)
             FROM api_usage_requests WHERE owner_key=:o AND feature=:f AND tier=:t
             AND window_key=:w'''),{'o':owner,'f':feature,'t':tier,'w':window}).scalar_one()
-        if int(used)+estimate_tokens > int(choice['limit']): continue
+        # Prefer the better model if a smaller but useful response fits.
+        # This is a reservation bound, NOT a post-facto token estimate.
+        remaining = int(choice['limit']) - int(used) - estimated_input
+        allocated_output = min(max_output, remaining)
+        if allocated_output < 120:
+            continue
+        estimate_tokens = estimated_input + allocated_output
+        reserve_cost = usd_micro(model, estimated_input, allocated_output)
+        if int(spent) + reserve_cost > budget_micro(plan, feature, owner):
+            continue
         rid=str(uuid.uuid4())
         db.session.execute(text('''INSERT INTO api_usage_requests
           (request_id,owner_key,feature,tier,model,provider,window_key,month_key,
@@ -152,7 +158,8 @@ def reserve(db, uid, feature, plan, options, estimated_input, max_output=900, gu
           {'id':rid,'o':owner,'f':feature,'t':tier,'model':model,'provider':provider,
            'w':window,'m':month,'rt':estimate_tokens,'rc':reserve_cost})
         db.session.commit()
-        return {'id':rid,'model':model,'tier':tier,'feature':feature,'owner':owner}, ix
+        return {'id':rid,'model':model,'tier':tier,'feature':feature,
+                'owner':owner,'max_output':allocated_output}, ix
     db.session.commit()
     return None,None
 
@@ -199,7 +206,18 @@ def tier_summary(db, uid, feature, options):
             {'owner':owner,'feature':feature,'tier':tier,'window':window}).mappings().first()
         used=int(row['used'] or 0)
         limit=int(spec['limit'])
+        # Display the real UTC rollover used by `_window`, not a null reset date.
+        if period == 'daily':
+            nxt = (now + timedelta(days=1)).replace(hour=0, minute=0,
+                                                    second=0, microsecond=0)
+        else:
+            nxt = now.replace(day=1, hour=0, minute=0, second=0,
+                              microsecond=0)
+            if nxt.month == 12:
+                nxt = nxt.replace(year=nxt.year + 1, month=1)
+            else:
+                nxt = nxt.replace(month=nxt.month + 1)
         summary.append({'model':spec['model'],'used':used,'limit':limit,
                         'period':period,'remaining':max(0,limit-used),
-                        'reset_ts':None})
+                        'reset_ts':int(nxt.replace(tzinfo=timezone.utc).timestamp())})
     return summary

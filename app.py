@@ -270,11 +270,21 @@ def _metered_completion(feature, system_prompt, messages, user_id, plan,
             continue
         options.append({'model':spec['model'], 'limit':spec['limit'],
             'reset':spec['reset'],'tier':index+1})
-    # Limit very long prompts; reserve for SYSTEM + all history + user and images.
-    payload_size=len(system_prompt)+sum(len(str(m.get('content',''))) for m in messages)
-    if payload_size > 30000: raise ValueError('Message history is too long')
-    estimated=max(200,int(payload_size*1.5)+200+(8000 if image_b64 else 0))
-    if estimated > 19000: raise ValueError('Input is too long for the allowed request budget')
+    # Count the actual request with an OpenAI-compatible tokenizer instead of
+    # treating each Dari character as 1.5 tokens. The old heuristic incorrectly
+    # skipped Free users' untouched Mini allowance on even a simple greeting.
+    # We reserve a safety margin for framing/tool metadata and image token costs.
+    from tiktoken import get_encoding
+    payload_size = len(system_prompt) + sum(len(str(m.get('content', ''))) for m in messages)
+    if payload_size > 30000:
+        raise ValueError('Message history is too long')
+    encoder = get_encoding('o200k_base')
+    measured = len(encoder.encode(system_prompt)) + 12
+    for item in messages:
+        measured += len(encoder.encode(str(item.get('content', '')))) + 12
+    estimated = max(200, int(measured * 1.12) + 128 + (8000 if image_b64 else 0))
+    if estimated > 19000:
+        raise ValueError('Input is too long for the allowed request budget')
     grant,idx=reserve_api(db,user_id,feature,plan,options,estimated,max_output,guest_key=user_key)
     if not grant: return None, True, None, None
     model=grant['model']; switched=(idx>0)
@@ -287,7 +297,7 @@ def _metered_completion(feature, system_prompt, messages, user_id, plan,
         else:
             reply, response=call_openai_model(model,system_prompt,messages,temperature,
                                                image_b64,image_type,return_response=True,
-                                               max_output=max_output)
+                                               max_output=grant['max_output'])
         if not reply or not reply.strip():
             raise RuntimeError('Provider returned no visible answer')
         usage = _usage_pair(response)
@@ -296,7 +306,7 @@ def _metered_completion(feature, system_prompt, messages, user_id, plan,
         else:
             i,o=usage
             finalize_api(db,grant,i,o)
-            try: _actual_legacy_tokens(user_id,feature,idx+1,plan,int(i)+int(o))
+            try: _actual_legacy_tokens(user_id,feature,grant['tier'],plan,int(i)+int(o))
             except Exception: app.logger.exception('Legacy token display update failed')
         return reply,switched,None,model
     except Exception:
@@ -1059,7 +1069,6 @@ def chat():
         user_message = request.form.get("message", "")
         history      = json.loads(request.form.get("history", "[]"))
         conv_id      = request.form.get("conversation_id")
-        conv_id      = int(conv_id) if conv_id else None
         image_b64    = None
         image_type   = None
 
@@ -1081,7 +1090,7 @@ def chat():
             user_message = (user_message or "این سند را خلاصه کن") + \
                            f"\n\n[محتوای فایل]:\n{doc_text}"
     else:
-        data         = request.get_json()
+        data         = request.get_json(silent=True) or {}
         user_message = data.get("message", "")
         history      = data.get("history", [])
         conv_id      = data.get("conversation_id")
@@ -1097,6 +1106,27 @@ def chat():
     user_id = current_user.id if current_user.is_authenticated else None
     plan    = active_chat_plan(current_user if current_user.is_authenticated else None)
 
+    # A follow-up must NEVER silently become a new conversation when its ID is
+    # missing or stale. For logged-in students, the database is the authoritative
+    # source of chat context; browser-side history can be outdated after reload.
+    conv = None
+    if conv_id not in (None, '', 0, '0'):
+        try:
+            conv_id = int(conv_id)
+        except (TypeError, ValueError):
+            return jsonify(error='Invalid conversation ID'), 400
+        if user_id is None:
+            return jsonify(error='Log in to continue a saved conversation'), 401
+        conv = Conversation.query.filter_by(id=conv_id, user_id=user_id).first()
+        if conv is None:
+            return jsonify(error='Conversation not found; reopen it from your history'), 404
+        prior = (Message.query.filter_by(conversation_id=conv.id)
+                 .order_by(Message.id.desc()).limit(10).all())
+        history = [{'role':m.role,'content':m.content[:6000]}
+                   for m in reversed(prior) if m.role in ('user','assistant')]
+    elif user_id is not None and history:
+        return jsonify(error='Conversation ID missing; reopen the chat before continuing'), 409
+
     user_memories = get_user_memories(user_id) if user_id else None
 
     try:
@@ -1110,9 +1140,9 @@ def chat():
             image_b64=image_b64,
             image_type=image_type
         )
-    except Exception as e:
-        print(f"smart_chat crashed: {e}")
-        return jsonify({"reply": "متأسفم، خطایی رخ داد. لطفاً دوباره امتحان کنید."})
+    except Exception:
+        app.logger.exception('Chat completion failed')
+        return jsonify(error='Chat service temporarily unavailable'), 503
 
     if not reply:
         reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
@@ -1130,12 +1160,6 @@ def chat():
             response_data["reset_ts"] = reset_ts
 
     if current_user.is_authenticated:
-        conv = None
-        if conv_id:
-            conv = Conversation.query.filter_by(
-                id=conv_id, user_id=current_user.id
-            ).first()
-
         if not conv:
             title = user_message[:60] if user_message else "گفتگوی جدید"
             conv  = Conversation(user_id=current_user.id, title=title)

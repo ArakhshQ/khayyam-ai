@@ -9,3 +9,4 @@ bcrypt
 psycopg2-binary
 PyMuPDF
 python-docx
+tiktoken>=0.9,<1
