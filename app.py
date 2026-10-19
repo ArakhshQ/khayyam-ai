@@ -227,6 +227,93 @@ with app.app_context():
         conn.execute(sql_text("UPDATE users SET tutor_plan='free' WHERE tutor_plan IS NULL"))
     ensure_api_meter(db)
 
+    def _sync_table_columns(model):
+        """Bring a table that already exists (e.g. created by an earlier build) in line with
+        the model: add missing columns, and relax NOT NULL on leftover columns we no longer
+        write. Additive and idempotent; PostgreSQL only (SQLite dev DBs are always fresh)."""
+        if db.engine.dialect.name != 'postgresql':
+            return
+        table = model.__table__
+        have = {c['name']: c for c in inspect(db.engine).get_columns(table.name)}
+        for col in table.columns:
+            if col.name in have:
+                continue
+            typ = col.type.compile(dialect=db.engine.dialect)
+            default = ''
+            arg = getattr(col.default, 'arg', None) if col.default is not None else None
+            if isinstance(arg, bool):
+                default = f" DEFAULT {'TRUE' if arg else 'FALSE'}"
+            elif isinstance(arg, (int, float)):
+                default = f' DEFAULT {arg}'
+            elif isinstance(arg, str):
+                default = " DEFAULT '" + arg.replace("'", "''") + "'"
+            elif col.name == 'created_at':
+                default = ' DEFAULT CURRENT_TIMESTAMP'
+            try:
+                with db.engine.begin() as conn:
+                    conn.execute(sql_text(f'ALTER TABLE {table.name} ADD COLUMN IF NOT EXISTS '
+                                          f'{col.name} {typ}{default}'))
+            except Exception:
+                app.logger.exception('Could not add column %s.%s', table.name, col.name)
+        for name, info in have.items():
+            if name not in table.columns and not info.get('nullable', True) and info.get('default') is None:
+                try:
+                    with db.engine.begin() as conn:
+                        conn.execute(sql_text(f'ALTER TABLE {table.name} ALTER COLUMN {name} DROP NOT NULL'))
+                except Exception:
+                    app.logger.exception('Could not relax %s.%s', table.name, name)
+
+    for _model in (CallRequest, PlanEvent):
+        _sync_table_columns(_model)
+
+    # Per-request timing (database time and query count), shown in the admin AI log.
+    from sqlalchemy import event as sa_event
+    from flask import g, has_request_context
+
+    @sa_event.listens_for(db.engine, 'before_cursor_execute')
+    def _q_start(conn, cursor, statement, parameters, context, executemany):
+        conn.info.setdefault('_qt', []).append(time.perf_counter())
+
+    @sa_event.listens_for(db.engine, 'after_cursor_execute')
+    def _q_end(conn, cursor, statement, parameters, context, executemany):
+        try:
+            started = conn.info['_qt'].pop()
+        except (KeyError, IndexError):
+            return
+        if has_request_context():
+            g.db_ms = getattr(g, 'db_ms', 0.0) + (time.perf_counter() - started) * 1000
+            g.db_n = getattr(g, 'db_n', 0) + 1
+
+@app.before_request
+def _timing_start():
+    from flask import g
+    g.t0 = time.perf_counter()
+
+@app.after_request
+def _timing_finish(resp):
+    """Record how long the whole request took and how much of it was the database."""
+    try:
+        from flask import g
+        t0 = getattr(g, 't0', None)
+        if t0 is None or not request.path.startswith('/api/'):
+            return resp
+        total = (time.perf_counter() - t0) * 1000
+        dbm, dbn = getattr(g, 'db_ms', 0.0), getattr(g, 'db_n', 0)
+        if current_user.is_authenticated and current_user.is_admin:
+            resp.headers['Server-Timing'] = f'total;dur={total:.0f}, db;dur={dbm:.0f}, queries;desc="{dbn}"'
+        rid = getattr(g, 'usage_rid', None)
+        if rid:
+            db.session.execute(sql_text('UPDATE api_usage_requests SET total_ms=:t, db_ms=:d, db_queries=:n '
+                                        'WHERE request_id=:r'),
+                               {'t': int(total), 'd': int(dbm), 'n': int(dbn), 'r': rid})
+            db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+    return resp
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -381,6 +468,12 @@ def _attempt(grant, system_prompt, messages, temperature, image_b64, image_type,
     t0 = time.monotonic()
     ms = lambda: int((time.monotonic() - t0) * 1000)
     model = grant['model']
+    try:
+        from flask import g, has_request_context
+        if has_request_context():
+            g.usage_rid = grant['id']
+    except Exception:
+        pass
     try:
         if model.startswith('openai/gpt-oss'):
             reply, response = call_groq_model(system_prompt, messages, temperature,
@@ -684,7 +777,9 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
     messages=history+[{'role':'user','content':user_message}]
     reply,switched,reset_ts,model = _metered_completion('chat',system_prompt,messages,
         user_id,plan,temperature,image_b64,image_type,max_output=intent['max_output'],
-        level=intent['level'],effort=intent.get('effort'),intent_label=intent.get('kind'))
+        level=intent['level'],effort=intent.get('effort'),
+        intent_label=(intent['level'] if intent.get('kind') in (None, '', 'chat')
+                      else f"{intent['level']}/{intent['kind']}"))
     if reply is None:
         if model == 'error':
             return 'سرویس موقتاً در دسترس نیست. چیزی از سهمیه شما کم نشد؛ لطفاً چند لحظه بعد دوباره تلاش کنید.', False, None, 'error'

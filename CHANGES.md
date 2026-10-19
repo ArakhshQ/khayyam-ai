@@ -19,7 +19,7 @@ are created automatically at startup. If your Supabase role cannot run DDL, run 
 | SITE_URL | yes | e.g. `https://khayyam-ai.onrender.com`; base of links inside emails |
 | CRON_SECRET | yes | long random string protecting `/internal/plans/sweep` |
 | ADMIN_NOTIFY_EMAIL | optional | you get an email for every new call-us request |
-| CLIENT_IP_HEADER / CLIENT_IP_HOPS | after check | which header identifies a visitor (see Guest IP) |
+| CLIENT_IP_HOPS | yes, set `2` | Render is behind Cloudflare; makes guest limits per real visitor IP (see Guest IP) |
 | GUEST_USD_PER_MONTH | optional | per-guest dollar cap (default 0.10) |
 | GUEST_GLOBAL_DAILY_USD | optional | ALL guests combined per day (default 3.0) |
 | ROUTER_CANNED | optional | `false` turns off free local greeting replies |
@@ -31,6 +31,9 @@ Guests are limited per visitor IP. Behind Render's proxy the app must read the r
 Open `/api/admin/ip-debug` as admin. If `resolved` is YOUR real IP, nothing to do.
 If it shows a proxy/Cloudflare address, set `CLIENT_IP_HEADER` to the header carrying your IP
 (`CF-Connecting-IP` or `True-Client-IP`, shown on that page), or set `CLIENT_IP_HOPS=2`.
+
+Render sits behind Cloudflare, so the right value is `CLIENT_IP_HOPS=2` (X-Forwarded-For arrives as
+`visitor, cloudflare`). Verified against a real `ip-debug` reading: with 2, `resolved` equals the visitor IP.
 
 ## Render Cron Job (plan expiry + 3-day reminders)
 Type: Cron Job, schedule `0 6 * * *`, command:

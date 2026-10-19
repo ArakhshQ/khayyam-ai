@@ -430,7 +430,7 @@
     </p>
     <div style="overflow-x:auto;"><table class="log-table"><thead><tr>
       <th>time (UTC)</th><th>who</th><th>feature</th><th>intent</th><th>model</th><th>status</th>
-      <th>user in</th><th>out</th><th>fixed prompt</th><th>USD</th><th>ms</th></tr></thead>
+      <th>user in</th><th>out</th><th>fixed prompt</th><th>USD</th><th>model ms</th><th>total ms</th><th>db ms (queries)</th></tr></thead>
       <tbody id="ailog-body"></tbody></table></div>
   </div>
 
@@ -688,7 +688,9 @@
       <td>${escapeHtml(r.at.replace('T', ' ').slice(0, 19))}</td><td>${escapeHtml(r.owner)}</td>
       <td>${escapeHtml(r.feature)}</td><td>${escapeHtml(r.intent || '')}</td><td>${escapeHtml(r.model)}</td>
       <td>${escapeHtml(r.status)}</td><td>${r.charged_in}</td><td>${r.out}</td>
-      <td>${r.overhead == null ? '' : r.overhead}</td><td>${r.usd}</td><td>${r.ms == null ? '' : r.ms}</td></tr>`).join('');
+      <td>${r.overhead == null ? '' : r.overhead}</td><td>${r.usd}</td><td>${r.ms == null ? '' : r.ms}</td>
+      <td>${r.total_ms == null ? '' : r.total_ms}</td>
+      <td>${r.db_ms == null ? '' : r.db_ms + ' (' + r.db_queries + ')'}</td></tr>`).join('');
   }
 
   // ── DIALECT ──

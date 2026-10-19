@@ -3,7 +3,9 @@ from flask_login import UserMixin
 from datetime import datetime
 import json
 
-db = SQLAlchemy()
+# expire_on_commit=False: objects (e.g. current_user) are not re-fetched from the database after
+# every commit, which saves a network round trip each time on a remote database.
+db = SQLAlchemy(session_options={'expire_on_commit': False})
 
 class User(UserMixin, db.Model):
     __tablename__ = 'users'

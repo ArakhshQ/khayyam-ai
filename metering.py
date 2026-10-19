@@ -105,11 +105,15 @@ def ensure_storage(db):
             ON api_usage_requests (created_at)'''))
     # Diagnostic columns (added once; harmless if they already exist).
     cols = {c['name'] for c in inspect(db.engine).get_columns('api_usage_requests')}
-    extra = {'intent': 'VARCHAR(16)', 'latency_ms': 'INTEGER', 'overhead_tokens': 'INTEGER'}
+    extra = {'intent': 'VARCHAR(24)', 'latency_ms': 'INTEGER', 'overhead_tokens': 'INTEGER',
+             'total_ms': 'INTEGER', 'db_ms': 'INTEGER', 'db_queries': 'INTEGER'}
     with db.engine.begin() as conn:
         for name, typ in extra.items():
             if name not in cols:
                 conn.execute(text(f'ALTER TABLE api_usage_requests ADD COLUMN {name} {typ}'))
+        if db.engine.dialect.name == 'postgresql':
+            # An earlier build created `intent` as VARCHAR(16); labels like "standard/longform" need more.
+            conn.execute(text('ALTER TABLE api_usage_requests ALTER COLUMN intent TYPE VARCHAR(24)'))
 
 
 def lock_owner(db, owner):
@@ -244,7 +248,8 @@ def finalize(db, reservation, input_tokens=None, output_tokens=None,
 def recent_requests(db, limit=60):
     """Newest first, for the admin diagnostics view."""
     rows = db.session.execute(text('''SELECT created_at, owner_key, feature, intent, model, status,
-        reserved_tokens, input_tokens, output_tokens, overhead_tokens, actual_micro, latency_ms
+        reserved_tokens, input_tokens, output_tokens, overhead_tokens, actual_micro, latency_ms,
+        total_ms, db_ms, db_queries
         FROM api_usage_requests ORDER BY created_at DESC LIMIT :n'''),{'n':int(limit)}).mappings().all()
     return [{
         'at': r['created_at'].isoformat() if hasattr(r['created_at'],'isoformat') else str(r['created_at']),
@@ -252,7 +257,8 @@ def recent_requests(db, limit=60):
         'feature': r['feature'], 'intent': r['intent'], 'model': r['model'], 'status': r['status'],
         'reserved': r['reserved_tokens'], 'charged_in': r['input_tokens'], 'out': r['output_tokens'],
         'overhead': r['overhead_tokens'], 'usd': round(int(r['actual_micro'] or 0)/1e6, 5),
-        'ms': r['latency_ms']} for r in rows]
+        'ms': r['latency_ms'], 'total_ms': r['total_ms'], 'db_ms': r['db_ms'],
+        'db_queries': r['db_queries']} for r in rows]
 
 
 def summary(db, uid):
