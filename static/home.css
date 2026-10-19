@@ -37,13 +37,7 @@ body.home { background: var(--night); }
 }
 .water::after { background: repeating-linear-gradient(94deg, transparent 0 58px, rgba(150, 230, 210, .5) 60px 61px, transparent 63px 140px); animation-duration: 23s; animation-direction: reverse; }
 
-/* orbit rings around the moon */
-.rings { position: absolute; translate: -50% -50%; width: var(--rw, 34%); aspect-ratio: 1; overflow: visible; pointer-events: none; }
-.rings g { transform-origin: 50% 50%; }
-.rings .r1 { animation: spin 90s linear infinite; }
-.rings .r2 { animation: spin 140s linear infinite reverse; }
-.rings .r3 { animation: spin 60s linear infinite; }
-
+#fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
 #stars { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
 .hero-scrim {
@@ -70,7 +64,7 @@ body.home { background: var(--night); }
 /* the five things you can do */
 .hero-features {
   position: relative; z-index: 2; margin-top: auto; padding: 22px 0 26px;
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
   border-top: 1px solid var(--line-dark);
   opacity: 0; animation: fadeIn 1.4s 2.1s var(--ease) forwards;
 }
@@ -177,7 +171,7 @@ body.home { background: var(--night); }
 @media (max-width: 860px) {
   .split, .sec-class .split { grid-template-columns: 1fr; }
   .sec-class .split > .board-wrap { order: 2; }
-  .hero-features { grid-template-columns: repeat(5, 1fr); gap: 2px; padding-block: 16px 20px; }
+  .hero-features { grid-template-columns: repeat(4, 1fr); gap: 2px; padding-block: 16px 20px; }
   .hf { padding-inline: 0; }
   .hf-icon { width: 46px; height: 46px; }
   .hf-icon svg { width: 22px; height: 22px; }
