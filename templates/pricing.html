@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="/static/main.js?v=2"></script>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>قیمت‌گذاری — خیام</title>
@@ -173,6 +175,23 @@
     .contact h2 { font-size:20px; font-weight:700; margin-bottom:10px; }
     .contact p { font-size:14px; color:var(--text-dim); margin-bottom:24px; line-height:1.8; }
 
+    .call-form { max-width:440px; margin:0 auto; text-align:right; display:grid; gap:10px; }
+    .call-form label { font-size:12px; color:var(--text-dim); display:block; margin-bottom:4px; }
+    .call-form input, .call-form select, .call-form textarea {
+      width:100%; padding:11px 13px; background:var(--surface2); border:1px solid var(--border);
+      border-radius:9px; color:var(--text); font-family:'Vazirmatn',sans-serif; font-size:14px; outline:none;
+    }
+    .call-form input:focus, .call-form select:focus, .call-form textarea:focus { border-color:var(--gold-dim); }
+    .call-form .row { display:grid; grid-template-columns:2fr 1fr; gap:10px; }
+    .call-form button {
+      padding:13px; background:var(--gold); color:#0f0e0c; border:none; border-radius:9px;
+      font-weight:700; font-size:14px; cursor:pointer; font-family:'Vazirmatn',sans-serif;
+    }
+    .call-form button:disabled { opacity:.6; cursor:not-allowed; }
+    .call-msg { font-size:13px; line-height:1.8; min-height:20px; text-align:center; }
+    .call-msg.ok { color:#7abf6a; } .call-msg.err { color:#e07a6a; }
+    .call-phone { display:inline-block; margin-top:14px; color:var(--gold); direction:ltr; font-weight:700; text-decoration:none; }
+
     @keyframes fadeUp {
       from { opacity:0; transform:translateY(16px); }
       to   { opacity:1; transform:translateY(0); }
@@ -281,7 +300,7 @@
           <div class="feature no"><span class="icon">✗</span><span class="text">بهترین کیفیت پاسخ</span></div>
         </div>
 
-        <a href="#contact" class="plan-cta cta-paid" onclick="contactForPlan('پایه — $12')">خرید پلان پایه ←</a>
+        <a href="#contact" class="plan-cta cta-paid" onclick="contactForPlan('basic')">خرید پلان پایه ←</a>
       </div>
 
       <!-- PRO $25 -->
@@ -313,7 +332,7 @@
           <div class="feature yes"><span class="icon">✓</span><span class="text">پشتیبانی اولویت‌دار</span></div>
         </div>
 
-        <a href="#contact" class="plan-cta cta-premium" onclick="contactForPlan('حرفه‌ای — $25')">خرید پلان حرفه‌ای ←</a>
+        <a href="#contact" class="plan-cta cta-premium" onclick="contactForPlan('pro')">خرید پلان حرفه‌ای ←</a>
       </div>
 
       <!-- PREMIUM $49 -->
@@ -344,7 +363,7 @@
           <div class="feature yes"><span class="icon">✓</span><span class="text">پشتیبانی اختصاصی</span></div>
         </div>
 
-        <a href="#contact" class="plan-cta cta-paid" onclick="contactForPlan('پریمیوم — $49')">خرید پلان پریمیوم ←</a>
+        <a href="#contact" class="plan-cta cta-paid" onclick="contactForPlan('premium')">خرید پلان پریمیوم ←</a>
       </div>
 
     </div>
@@ -416,7 +435,7 @@
           <div class="feature yes"><span class="icon">✓</span><span class="text">پشتیبانی اختصاصی</span></div>
         </div>
 
-        <a href="#contact" class="plan-cta cta-premium" onclick="contactForPlan('استاد حرفه‌ای — $69')">
+        <a href="#contact" class="plan-cta cta-premium" onclick="contactForPlan('tutor_pro')">
           خرید پلان استاد ←
         </a>
       </div>
@@ -466,11 +485,31 @@
   <!-- CONTACT -->
   <div class="contact" id="contact">
     <h2>برای خرید با ما تماس بگیرید</h2>
-    <p>پس از تماس، پلان شما ظرف چند ساعت فعال می‌شود.</p>
-    <a href="mailto:info@khayyam.ai" class="plan-cta cta-paid"
-       style="display:inline-block;width:auto;padding:12px 32px;">
-      تماس با ما ←
-    </a>
+    <p>فرم زیر را پر کنید تا با شما تماس بگیریم. پس از پرداخت، پلان شما ظرف چند ساعت فعال می‌شود و ایمیل تأیید دریافت می‌کنید.</p>
+    <form class="call-form" id="call-form" onsubmit="submitCallRequest(event)">
+      <div><label for="call-name">نام</label><input id="call-name" maxlength="120" autocomplete="name" required></div>
+      <div><label for="call-phone">شماره تماس (با کد کشور)</label>
+        <input id="call-phone" type="tel" dir="ltr" placeholder="+93 7X XXX XXXX" maxlength="40" autocomplete="tel" required></div>
+      <div class="row">
+        <div><label for="call-plan">پلان</label>
+          <select id="call-plan">
+            <option value="basic">پایه — $12</option>
+            <option value="pro">حرفه‌ای — $25</option>
+            <option value="premium">پریمیوم — $49</option>
+            <option value="tutor_pro">استاد حرفه‌ای — $69</option>
+          </select></div>
+        <div><label for="call-months">مدت</label>
+          <select id="call-months">
+            <option value="1">۱ ماه</option><option value="2">۲ ماه</option><option value="3">۳ ماه</option>
+            <option value="6">۶ ماه</option><option value="12">۱۲ ماه</option>
+          </select></div>
+      </div>
+      <div><label for="call-note">توضیح (اختیاری)</label><textarea id="call-note" rows="2" maxlength="500"></textarea></div>
+      <button type="submit" id="call-submit">درخواست تماس ←</button>
+      <div class="call-msg" id="call-msg"></div>
+    </form>
+    <div style="font-size:13px;color:var(--text-dim);margin-top:6px;">یا مستقیم تماس بگیرید:</div>
+    <a class="call-phone" href="tel:+93782408793">+93 78 240 8793</a>
   </div>
 
 </div>
@@ -492,10 +531,36 @@
     document.getElementById('tab-tutor').style.display   = tab === 'tutor'   ? 'block' : 'none';
   }
 
-  function contactForPlan(planName) {
-    const subject = encodeURIComponent(`درخواست پلان ${planName}`);
-    const body    = encodeURIComponent(`سلام،\nمی‌خواهم پلان ${planName} را خریداری کنم.\nنام کاربری من: `);
-    window.location.href = `mailto:info@khayyam.ai?subject=${subject}&body=${body}`;
+  function contactForPlan(planKey) {
+    document.getElementById('call-plan').value = planKey;
+    document.getElementById('contact').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => document.getElementById('call-name').focus(), 400);
+  }
+
+  async function submitCallRequest(ev) {
+    ev.preventDefault();
+    const btn = document.getElementById('call-submit');
+    const msg = document.getElementById('call-msg');
+    btn.disabled = true; msg.className = 'call-msg'; msg.textContent = '';
+    try {
+      const res  = await fetch('/api/call-request', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:   document.getElementById('call-name').value,
+          phone:  document.getElementById('call-phone').value,
+          plan:   document.getElementById('call-plan').value,
+          months: parseInt(document.getElementById('call-months').value, 10),
+          note:   document.getElementById('call-note').value
+        })
+      });
+      const data = await res.json();
+      msg.className   = 'call-msg ' + (data.success ? 'ok' : 'err');
+      msg.textContent = data.success ? data.message : (data.error || 'خطایی رخ داد. دوباره تلاش کنید.');
+      if (data.success) document.getElementById('call-form').reset();
+    } catch (e) {
+      msg.className = 'call-msg err'; msg.textContent = 'ارتباط با سرور برقرار نشد.';
+    }
+    btn.disabled = false;
   }
 
   async function checkAuth() {
@@ -503,8 +568,10 @@
       const res  = await fetch('/api/me');
       const data = await res.json();
       if (data.logged_in) {
+        const nameInput = document.getElementById('call-name');
+        if (nameInput && !nameInput.value) nameInput.value = data.username;
         document.getElementById('auth-nav').innerHTML =
-          `<a href="/profile" class="nav-btn">${data.username}</a>
+          `<a href="/profile" class="nav-btn">${escapeHtml(data.username)}</a>
            <a href="/logout" class="nav-btn">خروج</a>`;
       }
     } catch(e) {}

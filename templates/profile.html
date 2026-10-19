@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="/static/main.js?v=2"></script>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>پروفایل — خیام</title>
@@ -184,6 +186,17 @@
     .user-name { font-size: 17px; }
     .user-avatar { width: 48px; height: 48px; font-size: 20px; }
   }
+    .plans-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:16px 18px; margin-bottom:26px; }
+    .plan-row { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); font-size:14px; flex-wrap:wrap; }
+    .plan-row:last-of-type { border-bottom:none; }
+    .plan-row .pl-name { font-weight:700; }
+    .plan-row .pl-exp { font-size:12px; color:var(--text-dim); }
+    .plan-row .pl-exp.soon { color:#e0a050; }
+    .usage-line { font-size:12px; color:var(--text-dim); margin-top:6px; }
+    .usage-track { height:5px; background:var(--surface2); border-radius:3px; overflow:hidden; margin-top:4px; }
+    .usage-fill { height:100%; background:var(--gold); border-radius:3px; }
+    .plans-actions { margin-top:12px; font-size:13px; }
+    .plans-actions a { color:var(--gold); text-decoration:none; }
 </style>
 </head>
 <body>
@@ -209,8 +222,13 @@
         <div class="user-name" id="user-name">در حال بارگذاری...</div>
         <div class="user-detail" id="user-detail"></div>
       </div>
-      <span class="user-badge">رایگان</span>
+      <span class="user-badge" id="user-badge">رایگان</span>
     </div>
+
+    <!-- plans -->
+    <div class="section-title">پلان‌های من</div>
+    <div class="plans-card" id="plans-card"><div class="loading">در حال بارگذاری...</div></div>
+
     <!-- conversations -->
     <div class="section-title">گفتگوهای ذخیره شده</div>
     <div class="conv-list" id="conv-list">
@@ -282,6 +300,44 @@
       if (data.email) detail.push('📧 ' + data.email);
       if (data.phone) detail.push('📱 ' + data.phone);
       document.getElementById('user-detail').textContent = detail.join(' · ');
+      renderPlans(data);
+    }
+
+    const PLAN_LABELS = { free: 'رایگان', basic: 'پایه', pro: 'حرفه‌ای', premium: 'پریمیوم', tutor_pro: 'استاد حرفه‌ای' };
+
+    function expiryHtml(iso) {
+      if (!iso) return '';
+      const d    = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+      const days = Math.ceil((d - new Date()) / 86400000);
+      const date = d.toLocaleDateString('fa-AF');
+      if (days <= 0) return '<span class="pl-exp soon">امروز تمام می‌شود</span>';
+      return `<span class="pl-exp${days <= 3 ? ' soon' : ''}">تا ${escapeHtml(date)} · ${days} روز مانده</span>`;
+    }
+
+    function usageHtml(summary) {
+      // first tier = best model; show the window that actually limits the user
+      if (!summary || !summary.length) return '';
+      return summary.map(t => {
+        const pct  = t.limit ? Math.min(100, Math.round((t.used / t.limit) * 100)) : 0;
+        const per  = t.period === 'daily' ? 'امروز' : 'این ماه';
+        return `<div class="usage-line">${per}: ${t.used.toLocaleString('fa-AF')} از ${t.limit.toLocaleString('fa-AF')}
+          <div class="usage-track"><div class="usage-fill" style="width:${pct}%"></div></div></div>`;
+      }).join('');
+    }
+
+    async function renderPlans(me) {
+      const card = document.getElementById('plans-card');
+      document.getElementById('user-badge').textContent = PLAN_LABELS[me.chat_plan] || me.chat_plan;
+      let usage = null;
+      try { usage = await (await fetch('/api/usage')).json(); } catch (e) {}
+      card.innerHTML = `
+        <div class="plan-row"><div><span class="pl-name">گفتگو: ${escapeHtml(PLAN_LABELS[me.chat_plan] || me.chat_plan)}</span>
+          ${me.chat_plan !== 'free' ? '<br>' + expiryHtml(me.chat_plan_expires_at) : ''}</div></div>
+        ${usage ? usageHtml(usage.summary.slice(0, 2)) : ''}
+        <div class="plan-row"><div><span class="pl-name">استاد: ${escapeHtml(PLAN_LABELS[me.tutor_plan] || me.tutor_plan)}</span>
+          ${me.tutor_plan !== 'free' ? '<br>' + expiryHtml(me.tutor_plan_expires_at) : ''}</div></div>
+        ${usage ? usageHtml(usage.tutor_summary.slice(0, 1)) : ''}
+        <div class="plans-actions"><a href="/pricing#contact">تمدید یا ارتقای پلان ←</a></div>`;
     }
 
     async function loadConversations() {
@@ -308,7 +364,7 @@
           div.innerHTML = `
             <div class="conv-icon">💬</div>
             <div class="conv-body">
-              <div class="conv-title">${conv.title}</div>
+              <div class="conv-title">${escapeHtml(conv.title)}</div>
               <div class="conv-date">${formatDate(conv.updated_at)}</div>
             </div>
             <button class="conv-del" onclick="deleteConv(event, ${conv.id})">✕</button>`;

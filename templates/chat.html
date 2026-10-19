@@ -1,13 +1,16 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="/static/main.js?v=2"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>خیام</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
   <style>
     body {
       height: 100vh;
@@ -570,7 +573,7 @@
         const item     = document.createElement('div');
         item.className = 'conv-item' + (conv.id === currentConvId ? ' active' : '');
         item.innerHTML = `
-          <span class="conv-title">${conv.title}</span>
+          <span class="conv-title">${escapeHtml(conv.title)}</span>
           <span class="conv-date">${formatDate(conv.updated_at)}</span>
           <button class="conv-delete" onclick="deleteConv(event, ${conv.id})" title="حذف">✕</button>
         `;
@@ -674,7 +677,7 @@
     const content = document.createElement('div');
     content.className = 'bubble-content';
     if (role === 'ai') {
-      content.innerHTML = marked.parse(text);
+      content.innerHTML = renderMarkdown(text);
       bubble.appendChild(content);
       const speakBtn = document.createElement('button');
       speakBtn.type = 'button';

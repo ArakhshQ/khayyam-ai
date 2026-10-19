@@ -1,12 +1,22 @@
-"""Khayyam's cost guard. Additive SQL tables; safe across Render workers via row locks.
+"""Khayyam's cost guard.
 
-All dollar budgets here are protective configuration, not promises of API price.
-Only finalized API tokens are recorded as actual usage; reservations cover concurrent calls.
+Two independent protections, both enforced BEFORE a provider call is made:
+
+1. Token windows per tier (what the pricing page promises users). Users are charged
+   for what they and the model write (history + message + answer), NOT for Khayyam's
+   own fixed system prompt, so a plan limit is never eaten by our overhead.
+2. A USD ceiling per owner per month (what protects us). It is computed from the
+   provider's real usage numbers and includes the system prompt.
+
+Hot path = 4 SQL statements (advisory lock, one aggregate read, one insert, one update).
+Schema creation happens once at startup (ensure_storage), never per request.
+Failed provider calls (HTTP errors, no answer) are refunded; only calls that may have
+been billed (timeouts) are charged, and only conservatively.
 """
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 
 VOICE_PLANS = {
     'free': {'price': 0, 'daily': 180, 'monthly': 1800},
@@ -75,9 +85,8 @@ def usd_micro(model, prompt_tokens, completion_tokens):
 
 
 def ensure_storage(db):
+    """Idempotent. Call once at startup. Works on PostgreSQL and SQLite."""
     with db.engine.begin() as conn:
-        conn.execute(text('''CREATE TABLE IF NOT EXISTS api_meter_locks (
-            owner_key VARCHAR(160) PRIMARY KEY)'''))
         conn.execute(text('''CREATE TABLE IF NOT EXISTS api_usage_requests (
             request_id VARCHAR(36) PRIMARY KEY,
             owner_key VARCHAR(160) NOT NULL,
@@ -92,13 +101,22 @@ def ensure_storage(db):
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)'''))
         conn.execute(text('''CREATE INDEX IF NOT EXISTS ix_api_owner_scope
             ON api_usage_requests (owner_key,feature,month_key)'''))
+        conn.execute(text('''CREATE INDEX IF NOT EXISTS ix_api_created
+            ON api_usage_requests (created_at)'''))
+    # Diagnostic columns (added once; harmless if they already exist).
+    cols = {c['name'] for c in inspect(db.engine).get_columns('api_usage_requests')}
+    extra = {'intent': 'VARCHAR(16)', 'latency_ms': 'INTEGER', 'overhead_tokens': 'INTEGER'}
+    with db.engine.begin() as conn:
+        for name, typ in extra.items():
+            if name not in cols:
+                conn.execute(text(f'ALTER TABLE api_usage_requests ADD COLUMN {name} {typ}'))
 
 
 def lock_owner(db, owner):
-    db.session.execute(text('''INSERT INTO api_meter_locks(owner_key) VALUES (:o)
-        ON CONFLICT(owner_key) DO NOTHING'''), {'o':owner})
-    suffix = ' FOR UPDATE' if db.engine.dialect.name == 'postgresql' else ''
-    db.session.execute(text('SELECT owner_key FROM api_meter_locks WHERE owner_key=:o'+suffix), {'o':owner}).one()
+    """Serialize concurrent reservations for one owner. One statement on PostgreSQL;
+    a no-op on SQLite (single-process development)."""
+    if db.engine.dialect.name == 'postgresql':
+        db.session.execute(text('SELECT pg_advisory_xact_lock(hashtext(:o))'), {'o': owner})
 
 
 def owner_key(uid, guest_key=None):
@@ -114,71 +132,127 @@ def _window(period, now):
     return now.strftime('%Y-%m-%d' if period == 'daily' else '%Y-%m')
 
 
-def reserve(db, uid, feature, plan, options, estimated_input, max_output=900, guest_key=None):
-    """Returns (reservation, config index) or (None,None). Options must have finite limit.
+def next_reset_ts(period, now=None):
+    """UTC unix timestamp at which a 'daily' or 'monthly' window rolls over."""
+    now = now or utc_now()
+    if period == 'daily':
+        nxt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        nxt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        nxt = nxt.replace(year=nxt.year + 1, month=1) if nxt.month == 12 else nxt.replace(month=nxt.month + 1)
+    return int(nxt.replace(tzinfo=timezone.utc).timestamp())
 
-    Each option: {'model':str, 'limit':int, 'reset':'daily'|'monthly','tier':int}
+
+def guest_global_spent_micro(db):
+    """All guests combined, today (UTC). Stops a many-IP flood from draining the budget."""
+    now = utc_now()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(db.session.execute(text('''SELECT COALESCE(SUM(CASE WHEN status='reserved'
+        THEN reserved_micro ELSE actual_micro END),0) FROM api_usage_requests
+        WHERE owner_key LIKE 'g:%' AND created_at>=:s'''), {'s': start}).scalar_one() or 0)
+
+
+def reserve(db, uid, feature, plan, options, estimated_input, max_output=900,
+            guest_key=None, overhead_tokens=0, intent=None):
+    """Returns (reservation, index into `options`) or (None, None).
+
+    options: ordered by PREFERENCE. Each: {'model','limit','reset':'daily'|'monthly','tier'}
+    estimated_input: all input tokens we will send (system prompt included) -> USD guard.
+    overhead_tokens: the part of estimated_input that is Khayyam's own fixed prompt;
+                     it is NOT charged against the user's token window.
     """
     assert feature in ('chat','tutor')
     now = utc_now(); owner=owner_key(uid, guest_key); month=now.strftime('%Y-%m')
-    estimated_input = max(1, min(int(estimated_input), 20000))
+    estimated_input = max(1, min(int(estimated_input), 40000))
+    overhead_tokens = max(0, min(int(overhead_tokens), estimated_input - 1))
+    charged_input = estimated_input - overhead_tokens
     max_output = max(1, min(int(max_output), 4000))
-    lock_owner(db,owner)
-    # A worker crash leaves a paid reservation outstanding, never auto-refund it.
-    db.session.execute(text('''UPDATE api_usage_requests SET status='uncertain',actual_micro=reserved_micro,
-        input_tokens=reserved_tokens, output_tokens=0
-        WHERE owner_key=:o AND status='reserved' AND created_at<:cutoff'''),
-        {'o':owner,'cutoff':now-timedelta(minutes=15)})
-    spent = db.session.execute(text('''SELECT COALESCE(SUM(CASE WHEN status='reserved'
-        THEN reserved_micro ELSE actual_micro END),0) FROM api_usage_requests
-        WHERE owner_key=:o AND feature=:f AND month_key=:m'''),
-        {'o':owner,'f':feature,'m':month}).scalar_one()
+    lock_owner(db, owner)
+    rows = db.session.execute(text('''SELECT tier, window_key,
+          COALESCE(SUM(CASE WHEN status='reserved' THEN reserved_tokens
+                       ELSE input_tokens+output_tokens END),0) AS toks,
+          COALESCE(SUM(CASE WHEN status='reserved' THEN reserved_micro
+                       ELSE actual_micro END),0) AS micro
+        FROM api_usage_requests
+        WHERE owner_key=:o AND feature=:f AND month_key=:m
+        GROUP BY tier, window_key'''), {'o':owner,'f':feature,'m':month}).all()
+    spent = sum(int(r[3] or 0) for r in rows)
+    used_by = {(int(r[0]), r[1]): int(r[2] or 0) for r in rows}
+    budget = budget_micro(plan, feature, owner)
     for ix, choice in enumerate(options):
         if not choice.get('limit') or choice.get('reset') not in ('daily','monthly'): continue
         model=choice['model']; provider='groq' if model.startswith('openai/gpt-oss') else 'openai'
         period = choice['reset']; window=_window(period,now); tier=int(choice['tier'])
-        used = db.session.execute(text('''SELECT COALESCE(SUM(CASE WHEN status='reserved'
-            THEN reserved_tokens ELSE input_tokens+output_tokens END),0)
-            FROM api_usage_requests WHERE owner_key=:o AND feature=:f AND tier=:t
-            AND window_key=:w'''),{'o':owner,'f':feature,'t':tier,'w':window}).scalar_one()
-        # Prefer the better model if a smaller but useful response fits.
-        # This is a reservation bound, NOT a post-facto token estimate.
-        remaining = int(choice['limit']) - int(used) - estimated_input
+        used = used_by.get((tier, window), 0)
+        remaining = int(choice['limit']) - used - charged_input
         allocated_output = min(max_output, remaining)
         if allocated_output < 120:
             continue
-        estimate_tokens = estimated_input + allocated_output
         reserve_cost = usd_micro(model, estimated_input, allocated_output)
-        if int(spent) + reserve_cost > budget_micro(plan, feature, owner):
+        if spent + reserve_cost > budget:
             continue
         rid=str(uuid.uuid4())
         db.session.execute(text('''INSERT INTO api_usage_requests
           (request_id,owner_key,feature,tier,model,provider,window_key,month_key,
-          reserved_tokens,reserved_micro) VALUES (:id,:o,:f,:t,:model,:provider,:w,:m,:rt,:rc)'''),
+           reserved_tokens,reserved_micro,intent,overhead_tokens)
+          VALUES (:id,:o,:f,:t,:model,:provider,:w,:m,:rt,:rc,:intent,:oh)'''),
           {'id':rid,'o':owner,'f':feature,'t':tier,'model':model,'provider':provider,
-           'w':window,'m':month,'rt':estimate_tokens,'rc':reserve_cost})
+           'w':window,'m':month,'rt':charged_input+allocated_output,'rc':reserve_cost,
+           'intent':(intent or '')[:16] or None,'oh':overhead_tokens})
         db.session.commit()
-        return {'id':rid,'model':model,'tier':tier,'feature':feature,
-                'owner':owner,'max_output':allocated_output}, ix
+        return {'id':rid,'model':model,'tier':tier,'feature':feature,'owner':owner,
+                'max_output':allocated_output,'overhead':overhead_tokens,'intent':intent}, ix
     db.session.commit()
     return None,None
 
 
-def finalize(db, reservation, input_tokens=None, output_tokens=None, uncertain=False):
+def finalize(db, reservation, input_tokens=None, output_tokens=None,
+             uncertain=False, failed=False, latency_ms=None):
+    """Settle a reservation. One UPDATE; guarded so it can only settle a 'reserved' row.
+
+    done      -> user charged (input - fixed overhead) + output; USD from real counts
+    failed    -> refunded entirely (provider returned an error / nothing to bill)
+    uncertain -> charged at the reservation (request may have been billed, e.g. timeout)
+    """
     if not reservation: return
-    owner=reservation['owner']; lock_owner(db,owner)
-    if uncertain:
+    rid = reservation['id']
+    if failed:
+        db.session.execute(text('''UPDATE api_usage_requests SET status='failed',
+            actual_micro=0,input_tokens=0,output_tokens=0,latency_ms=:ms
+            WHERE request_id=:id AND status='reserved' '''),{'id':rid,'ms':latency_ms})
+    elif uncertain:
         db.session.execute(text('''UPDATE api_usage_requests SET status='uncertain',
-          actual_micro=reserved_micro, input_tokens=reserved_tokens, output_tokens=0
-          WHERE request_id=:id AND status='reserved' '''),{'id':reservation['id']})
+          actual_micro=reserved_micro, input_tokens=reserved_tokens, output_tokens=0,
+          latency_ms=:ms WHERE request_id=:id AND status='reserved' '''),{'id':rid,'ms':latency_ms})
     else:
-        i=max(0,int(input_tokens or 0));o=max(0,int(output_tokens or 0))
+        i=max(0,int(input_tokens or 0)); o=max(0,int(output_tokens or 0))
         actual=usd_micro(reservation['model'],i,o)
+        # The fixed system prompt's share of the REAL input count (by characters), so the
+        # user is never over- or under-credited by our own token estimate.
+        share=reservation.get('sys_share')
+        overhead=int(round(i*share)) if share is not None else int(reservation.get('overhead') or 0)
+        overhead=max(0,min(overhead,i))
+        charged_in=i-overhead
         db.session.execute(text('''UPDATE api_usage_requests SET status='done',
-            actual_micro=:cost,input_tokens=:input,output_tokens=:output
+            actual_micro=:cost,input_tokens=:input,output_tokens=:output,latency_ms=:ms,
+            overhead_tokens=:oh
             WHERE request_id=:id AND status='reserved' '''),
-            {'cost':actual,'input':i,'output':o,'id':reservation['id']})
+            {'cost':actual,'input':charged_in,'output':o,'ms':latency_ms,'oh':overhead,'id':rid})
     db.session.commit()
+
+
+def recent_requests(db, limit=60):
+    """Newest first, for the admin diagnostics view."""
+    rows = db.session.execute(text('''SELECT created_at, owner_key, feature, intent, model, status,
+        reserved_tokens, input_tokens, output_tokens, overhead_tokens, actual_micro, latency_ms
+        FROM api_usage_requests ORDER BY created_at DESC LIMIT :n'''),{'n':int(limit)}).mappings().all()
+    return [{
+        'at': r['created_at'].isoformat() if hasattr(r['created_at'],'isoformat') else str(r['created_at']),
+        'owner': r['owner_key'][:6]+'…' if r['owner_key'].startswith('g:') else r['owner_key'],
+        'feature': r['feature'], 'intent': r['intent'], 'model': r['model'], 'status': r['status'],
+        'reserved': r['reserved_tokens'], 'charged_in': r['input_tokens'], 'out': r['output_tokens'],
+        'overhead': r['overhead_tokens'], 'usd': round(int(r['actual_micro'] or 0)/1e6, 5),
+        'ms': r['latency_ms']} for r in rows]
 
 
 def summary(db, uid):

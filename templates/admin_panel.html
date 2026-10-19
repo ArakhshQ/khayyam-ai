@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="/static/main.js?v=2"></script>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>پنل ادمین — خیام</title>
@@ -177,6 +179,25 @@
     .plan-basic   { background: rgba(58,130,200,0.15); color: #6ab0e0; }
     .plan-pro     { background: rgba(201,168,76,0.15); color: var(--gold); }
     .plan-premium { background: rgba(160,100,200,0.15); color: #c080e0; }
+    .plan-tutor_pro { background: rgba(90,180,120,0.15); color: #7fd49a; }
+    .exp-note { font-size: 10px; color: var(--text-dim); margin-top: 3px; }
+    .exp-note.soon { color: #e0a050; }
+    .plan-form { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; flex-wrap: wrap; }
+    .plan-form button, .req-actions button, .small-btn {
+      padding: 4px 10px; font-size: 11px; border-radius: 6px; cursor: pointer;
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      font-family: 'Vazirmatn', sans-serif;
+    }
+    .plan-form button:hover, .req-actions button:hover, .small-btn:hover { border-color: var(--gold); color: var(--gold); }
+    .status-pill { display:inline-block; font-size:10px; font-weight:700; padding:3px 8px; border-radius:6px; }
+    .st-new { background: rgba(224,160,80,0.15); color: #e0a050; }
+    .st-contacted { background: rgba(58,130,200,0.15); color: #6ab0e0; }
+    .st-paid { background: rgba(90,180,120,0.15); color: #7fd49a; }
+    .st-rejected { background: var(--surface2); color: var(--text-dim); }
+    .req-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+    .log-table { width:100%; border-collapse:collapse; font-size:11px; direction:ltr; }
+    .log-table th, .log-table td { padding:6px 8px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
+    .log-table th { color: var(--text-dim); font-weight:500; }
 
     .admin-badge {
       display: inline-block; font-size: 10px;
@@ -302,33 +323,22 @@
     <button class="tab" onclick="switchTab('dialect', this)">🗣️ کلمات دری</button>
     <button class="tab" onclick="switchTab('culture', this)">🏛️ فرهنگ</button>
     <button class="tab" onclick="switchTab('examples', this)">💬 نمونه گفتگو</button>
+    <button class="tab" onclick="switchTab('requests', this); loadRequests()">📞 درخواست‌های خرید <span id="req-badge" class="plan-badge plan-basic" style="display:none"></span></button>
+    <button class="tab" onclick="switchTab('ailog', this); loadAiLog()">📊 مصرف هوش مصنوعی</button>
   </div>
 
   <!-- TAB: USERS -->
   <div class="tab-content active" id="tab-users">
 
     <div class="overview-section" id="plan-overview">
-      <div class="section-title">توزیع پلان‌ها</div>
-      <div class="overview-row">
-        <span class="overview-key">رایگان</span>
-        <span class="overview-val" id="count-free">—</span>
-      </div>
-      <div class="overview-row">
-        <span class="overview-key">پایه ($10)</span>
-        <span class="overview-val" id="count-basic">—</span>
-      </div>
-      <div class="overview-row">
-        <span class="overview-key">حرفه‌ای ($20)</span>
-        <span class="overview-val gold" id="count-pro">—</span>
-      </div>
-      <div class="overview-row">
-        <span class="overview-key">پریمیوم ($40)</span>
-        <span class="overview-val gold" id="count-premium">—</span>
-      </div>
-      <div class="overview-row">
-        <span class="overview-key">درآمد تخمینی ماهانه</span>
-        <span class="overview-val gold" id="est-revenue">—</span>
-      </div>
+      <div class="section-title">توزیع پلان‌ها (فعال)</div>
+      <div class="overview-row"><span class="overview-key">رایگان</span><span class="overview-val" id="count-free">—</span></div>
+      <div class="overview-row"><span class="overview-key">پایه ($12)</span><span class="overview-val" id="count-basic">—</span></div>
+      <div class="overview-row"><span class="overview-key">حرفه‌ای ($25)</span><span class="overview-val gold" id="count-pro">—</span></div>
+      <div class="overview-row"><span class="overview-key">پریمیوم ($49)</span><span class="overview-val gold" id="count-premium">—</span></div>
+      <div class="overview-row"><span class="overview-key">استاد حرفه‌ای ($69)</span><span class="overview-val gold" id="count-tutor_pro">—</span></div>
+      <div class="overview-row"><span class="overview-key">درآمد تخمینی ماهانه</span><span class="overview-val gold" id="est-revenue">—</span></div>
+      <div style="margin-top:12px"><button class="small-btn" onclick="sweepPlans()">اجرای بررسی انقضا و یادآوری‌ها</button></div>
     </div>
 
     <div style="overflow-x:auto;">
@@ -336,9 +346,9 @@
         <thead>
           <tr>
             <th>کاربر</th>
-            <th>پلان</th>
+            <th>پلان گفتگو</th>
+            <th>پلان استاد</th>
             <th>ایمیل / تلفن</th>
-            <th>تاریخ عضویت</th>
             <th>تغییر پلان</th>
           </tr>
         </thead>
@@ -397,6 +407,33 @@
     <div class="items-list" id="examples-list"></div>
   </div>
 
+  <!-- TAB: CALL REQUESTS -->
+  <div class="tab-content" id="tab-requests">
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+      <select class="plan-select" id="req-filter" onchange="loadRequests()">
+        <option value="">همه</option>
+        <option value="new">جدید</option>
+        <option value="contacted">تماس گرفته شد</option>
+        <option value="paid">پرداخت شد</option>
+        <option value="rejected">رد شد</option>
+      </select>
+      <button class="small-btn" onclick="loadRequests()">تازه‌سازی</button>
+    </div>
+    <div id="req-list"><div class="empty-state">در حال بارگذاری...</div></div>
+  </div>
+
+  <!-- TAB: AI LOG -->
+  <div class="tab-content" id="tab-ailog">
+    <p style="color:var(--text-dim);font-size:12px;line-height:1.9;margin-bottom:12px;">
+      آخرین درخواست‌های هوش مصنوعی: مدل، نوع درخواست، توکنی که از کاربر کم شد (بدون پرامپت ثابت خیام)،
+      هزینه واقعی به دلار، و سرعت پاسخ. وضعیت failed یعنی خطای سرویس‌دهنده بود و چیزی کم نشد.
+    </p>
+    <div style="overflow-x:auto;"><table class="log-table"><thead><tr>
+      <th>time (UTC)</th><th>who</th><th>feature</th><th>intent</th><th>model</th><th>status</th>
+      <th>user in</th><th>out</th><th>fixed prompt</th><th>USD</th><th>ms</th></tr></thead>
+      <tbody id="ailog-body"></tbody></table></div>
+  </div>
+
 </div>
 
 <div class="toast" id="toast"></div>
@@ -406,8 +443,10 @@
   let examples  = {};
   let users     = [];
 
-  const PLAN_PRICES = { free: 0, basic: 10, pro: 20, premium: 40 };
-  const PLAN_LABELS = { free: 'رایگان', basic: 'پایه', pro: 'حرفه‌ای', premium: 'پریمیوم' };
+  const PLAN_PRICES = { free: 0, basic: 12, pro: 25, premium: 49, tutor_pro: 69 };
+  const PLAN_LABELS = { free: 'رایگان', basic: 'پایه', pro: 'حرفه‌ای', premium: 'پریمیوم', tutor_pro: 'استاد حرفه‌ای' };
+  const CHAT_OPTIONS  = ['free', 'basic', 'pro', 'premium'];
+  const TUTOR_OPTIONS = ['free', 'tutor_pro'];
 
   // ── INIT ──
   async function init() {
@@ -422,6 +461,7 @@
     renderAll();
     renderUsers();
     updateStats();
+    loadRequests().catch(() => {});
   }
 
   function renderAll() {
@@ -431,13 +471,15 @@
   }
 
   function updateStats() {
-    const paid    = users.filter(u => u.plan !== 'free').length;
-    const counts  = { free: 0, basic: 0, pro: 0, premium: 0 };
+    const paid    = users.filter(u => u.plan !== 'free' || u.tutor_plan !== 'free').length;
+    const counts  = { free: 0, basic: 0, pro: 0, premium: 0, tutor_pro: 0 };
     let revenue   = 0;
 
     users.forEach(u => {
-      counts[u.plan] = (counts[u.plan] || 0) + 1;
-      revenue += PLAN_PRICES[u.plan] || 0;
+      if (u.plan !== 'free') counts[u.plan] = (counts[u.plan] || 0) + 1;
+      if (u.tutor_plan !== 'free') counts[u.tutor_plan] = (counts[u.tutor_plan] || 0) + 1;
+      if (u.plan === 'free' && u.tutor_plan === 'free') counts.free += 1;
+      revenue += (PLAN_PRICES[u.plan] || 0) + (PLAN_PRICES[u.tutor_plan] || 0);
     });
 
     document.getElementById('stat-total-users').textContent = users.length;
@@ -445,11 +487,10 @@
     document.getElementById('stat-dialect').textContent     = (knowledge.dari_dialect || []).length;
     document.getElementById('stat-examples').textContent    = (examples.conversation_examples || []).length;
 
-    document.getElementById('count-free').textContent    = counts.free + ' نفر';
-    document.getElementById('count-basic').textContent   = counts.basic + ' نفر';
-    document.getElementById('count-pro').textContent     = counts.pro + ' نفر';
-    document.getElementById('count-premium').textContent = counts.premium + ' نفر';
-    document.getElementById('est-revenue').textContent   = '$' + revenue + ' / ماه';
+    ['free', 'basic', 'pro', 'premium', 'tutor_pro'].forEach(k => {
+      document.getElementById('count-' + k).textContent = counts[k] + ' نفر';
+    });
+    document.getElementById('est-revenue').textContent = '$' + revenue + ' / ماه';
   }
 
   // ── TABS ──
@@ -469,6 +510,20 @@
   }
 
   // ── USERS ──
+  function expiryNote(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const days = Math.ceil((d - new Date()) / 86400000);
+    const soon = days <= 3 ? ' soon' : '';
+    return `<div class="exp-note${soon}">تا ${d.toISOString().slice(0, 10)} (${days} روز)</div>`;
+  }
+
+  function planOptions(list, current) {
+    return list.map(p => `<option value="${p}" ${p === current ? 'selected' : ''}>${PLAN_LABELS[p]}${PLAN_PRICES[p] ? ' $' + PLAN_PRICES[p] : ''}</option>`).join('');
+  }
+
+  const MONTH_OPTIONS = [1, 2, 3, 6, 12].map(m => `<option value="${m}">${m} ماه</option>`).join('');
+
   function renderUsers() {
     const tbody = document.getElementById('users-tbody');
     if (!users || users.length === 0) {
@@ -479,45 +534,161 @@
     tbody.innerHTML = '';
     users.forEach(u => {
       const tr = document.createElement('tr');
-      const joinDate = new Date(u.created_at).toLocaleDateString('fa-AF');
-      const planClass = `plan-${u.plan}`;
-      const planLabel = PLAN_LABELS[u.plan] || u.plan;
-
       tr.innerHTML = `
         <td>
-          <div style="font-weight:500;">${u.username}</div>
+          <div style="font-weight:500;">${escapeHtml(u.username)}</div>
           ${u.is_admin ? '<span class="admin-badge">👑 ادمین</span>' : ''}
+          ${u.is_verified ? '' : '<span class="admin-badge" style="color:#e0a050">ایمیل تأیید نشده</span>'}
         </td>
-        <td><span class="plan-badge ${planClass}">${planLabel}</span></td>
+        <td><span class="plan-badge plan-${u.plan}">${PLAN_LABELS[u.plan] || escapeHtml(u.plan)}</span>${u.plan !== 'free' ? expiryNote(u.plan_expires_at) : ''}</td>
+        <td><span class="plan-badge plan-${u.tutor_plan}">${PLAN_LABELS[u.tutor_plan] || escapeHtml(u.tutor_plan)}</span>${u.tutor_plan !== 'free' ? expiryNote(u.tutor_plan_expires_at) : ''}</td>
         <td style="color:var(--text-dim);font-size:12px;">
-          ${u.email || ''} ${u.phone ? '· ' + u.phone : ''}
+          ${escapeHtml(u.email || '')} ${u.phone ? '· ' + escapeHtml(u.phone) : ''}
         </td>
-        <td style="color:var(--text-dim);font-size:12px;">${joinDate}</td>
         <td>
-          <select class="plan-select" onchange="changePlan(${u.id}, this.value)">
-            <option value="free"    ${u.plan === 'free'    ? 'selected' : ''}>رایگان</option>
-            <option value="basic"   ${u.plan === 'basic'   ? 'selected' : ''}>پایه $10</option>
-            <option value="pro"     ${u.plan === 'pro'     ? 'selected' : ''}>حرفه‌ای $20</option>
-            <option value="premium" ${u.plan === 'premium' ? 'selected' : ''}>پریمیوم $40</option>
-          </select>
+          <div class="plan-form">
+            <span style="font-size:10px;color:var(--text-dim)">گفتگو</span>
+            <select class="plan-select" id="cp-${u.id}">${planOptions(CHAT_OPTIONS, u.plan)}</select>
+            <select class="plan-select" id="cm-${u.id}">${MONTH_OPTIONS}</select>
+            <button onclick="applyPlan(${u.id}, 'chat')">ثبت</button>
+          </div>
+          <div class="plan-form">
+            <span style="font-size:10px;color:var(--text-dim)">استاد</span>
+            <select class="plan-select" id="tp-${u.id}">${planOptions(TUTOR_OPTIONS, u.tutor_plan)}</select>
+            <select class="plan-select" id="tm-${u.id}">${MONTH_OPTIONS}</select>
+            <button onclick="applyPlan(${u.id}, 'tutor')">ثبت</button>
+          </div>
         </td>`;
       tbody.appendChild(tr);
     });
   }
 
-  async function changePlan(userId, newPlan) {
+  // Same plan again = renew (adds months to the current expiry). Different plan = starts now.
+  // "free" removes the plan. The user gets an email either way.
+  async function applyPlan(userId, kind) {
+    const prefix = kind === 'chat' ? 'c' : 't';
+    const plan   = document.getElementById(prefix + 'p-' + userId).value;
+    const months = parseInt(document.getElementById(prefix + 'm-' + userId).value, 10);
+    const label  = plan === 'free' ? 'حذف پلان' : `${PLAN_LABELS[plan]} برای ${months} ماه`;
+    if (!confirm(`تأیید: ${label}؟ ایمیل اطلاع‌رسانی برای کاربر فرستاده می‌شود.`)) return;
     const res  = await fetch(`/api/admin/users/${userId}/plan`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ plan: newPlan })
+      body:    JSON.stringify({ plan, kind, months })
     });
     const data = await res.json();
     if (data.success) {
-      const u = users.find(u => u.id === userId);
-      if (u) u.plan = newPlan;
-      updateStats();
-      showToast('✓ پلان تغییر یافت');
+      const u = users.find(x => x.id === userId);
+      if (u) {
+        u.plan = data.chat_plan; u.tutor_plan = data.tutor_plan;
+        u.plan_expires_at = data.chat_plan_expires_at; u.tutor_plan_expires_at = data.tutor_plan_expires_at;
+      }
+      renderUsers(); updateStats();
+      showToast('✓ پلان ثبت شد');
+    } else {
+      showToast('خطا: ' + (data.error || ''));
     }
+  }
+
+  async function sweepPlans() {
+    const res  = await fetch('/api/admin/sweep-plans', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`منقضی شد: ${data.expired} | یادآوری ارسال شد: ${data.warned}`);
+      users = await fetch('/api/admin/users').then(r => r.json());
+      renderUsers(); updateStats();
+    }
+  }
+
+  // ── CALL REQUESTS ──
+  const STATUS_LABELS = { new: 'جدید', contacted: 'تماس گرفته شد', paid: 'پرداخت شد', rejected: 'رد شد' };
+
+  async function loadRequests() {
+    const status = document.getElementById('req-filter').value;
+    const res    = await fetch('/api/admin/call-requests' + (status ? '?status=' + status : ''));
+    const rows   = await res.json();
+    const list   = document.getElementById('req-list');
+    const open   = rows.filter(r => r.status === 'new').length;
+    const badge  = document.getElementById('req-badge');
+    badge.style.display = open ? 'inline-block' : 'none';
+    badge.textContent   = open;
+    if (!rows.length) { list.innerHTML = '<div class="empty-state">درخواستی وجود ندارد</div>'; return; }
+    list.innerHTML = '';
+    rows.forEach(r => {
+      const div = document.createElement('div');
+      div.className = 'item-card';
+      div.style.display = 'block';
+      const account = r.username ? `${escapeHtml(r.username)} (${escapeHtml(r.email || '')})` : 'بدون حساب کاربری (مهمان)';
+      div.innerHTML = `
+        <div class="item-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+            <strong>${escapeHtml(r.name)}</strong>
+            <span class="status-pill st-${r.status}">${STATUS_LABELS[r.status]}</span>
+          </div>
+          <div class="item-content" style="margin-top:6px;">
+            📞 <a href="tel:${escapeHtml(r.phone)}" style="color:var(--gold)" dir="ltr">${escapeHtml(r.phone)}</a>
+            · ${PLAN_LABELS[r.plan] || escapeHtml(r.plan)} (${r.plan_kind === 'tutor' ? 'استاد' : 'گفتگو'}) · ${r.months} ماه
+          </div>
+          <div class="item-note">حساب: ${account} · ${new Date(r.created_at).toLocaleString('fa-AF')}</div>
+          ${r.note ? `<div class="item-note">یادداشت مشتری: ${escapeHtml(r.note)}</div>` : ''}
+          ${r.admin_note ? `<div class="item-note">یادداشت ادمین: ${escapeHtml(r.admin_note)}</div>` : ''}
+          <div class="req-actions">
+            <button onclick="setReqStatus(${r.id}, 'contacted')">تماس گرفته شد</button>
+            <button onclick="grantRequest(${r.id}, ${r.user_id ? 'true' : 'false'}, ${r.months})">پرداخت شد — فعال‌سازی پلان</button>
+            <button onclick="setReqStatus(${r.id}, 'rejected')">رد</button>
+            <button onclick="noteRequest(${r.id})">یادداشت</button>
+          </div>
+        </div>`;
+      list.appendChild(div);
+    });
+  }
+
+  async function setReqStatus(id, status) {
+    const res = await fetch('/api/admin/call-requests/' + id, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+    });
+    if ((await res.json()).success) { showToast('✓ ثبت شد'); loadRequests(); }
+  }
+
+  async function noteRequest(id) {
+    const note = prompt('یادداشت ادمین:');
+    if (note === null) return;
+    await fetch('/api/admin/call-requests/' + id, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ admin_note: note })
+    });
+    loadRequests();
+  }
+
+  async function grantRequest(id, hasUser, months) {
+    let who = '';
+    if (!hasUser) {
+      who = prompt('این مشتری حساب ندارد. ایمیل یا نام کاربری حساب او را وارد کنید:');
+      if (!who) return;
+    }
+    const m = prompt('تعداد ماه:', String(months || 1));
+    if (!m) return;
+    const res  = await fetch(`/api/admin/call-requests/${id}/grant`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user: who, months: parseInt(m, 10) })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('✓ پلان فعال شد و ایمیل ارسال شد');
+      users = await fetch('/api/admin/users').then(r => r.json());
+      renderUsers(); updateStats(); loadRequests();
+    } else {
+      showToast('خطا: ' + (data.error || ''));
+    }
+  }
+
+  // ── AI LOG ──
+  async function loadAiLog() {
+    const rows = await fetch('/api/admin/ai-log').then(r => r.json());
+    document.getElementById('ailog-body').innerHTML = rows.map(r => `<tr>
+      <td>${escapeHtml(r.at.replace('T', ' ').slice(0, 19))}</td><td>${escapeHtml(r.owner)}</td>
+      <td>${escapeHtml(r.feature)}</td><td>${escapeHtml(r.intent || '')}</td><td>${escapeHtml(r.model)}</td>
+      <td>${escapeHtml(r.status)}</td><td>${r.charged_in}</td><td>${r.out}</td>
+      <td>${r.overhead == null ? '' : r.overhead}</td><td>${r.usd}</td><td>${r.ms == null ? '' : r.ms}</td></tr>`).join('');
   }
 
   // ── DIALECT ──
@@ -535,10 +706,10 @@
       div.innerHTML = `
         <div class="item-body">
           <div class="item-label">درست ← اشتباه</div>
-          <span class="item-correct">${item.correct}</span>
+          <span class="item-correct">${escapeHtml(item.correct)}</span>
           <span style="color:var(--text-dim)"> ← </span>
-          <span class="item-wrong">${item.wrong}</span>
-          <div class="item-note">${item.note}</div>
+          <span class="item-wrong">${escapeHtml(item.wrong)}</span>
+          <div class="item-note">${escapeHtml(item.note)}</div>
         </div>
         <button class="del-btn" onclick="deleteDialect(${i})">✕</button>`;
       list.appendChild(div);
@@ -586,8 +757,8 @@
       div.className = 'item-card';
       div.innerHTML = `
         <div class="item-body">
-          <div class="item-topic">${item.topic}</div>
-          <div class="item-content">${item.content}</div>
+          <div class="item-topic">${escapeHtml(item.topic)}</div>
+          <div class="item-content">${escapeHtml(item.content)}</div>
         </div>
         <button class="del-btn" onclick="deleteCulture(${i})">✕</button>`;
       list.appendChild(div);
@@ -632,9 +803,9 @@
       div.innerHTML = `
         <div class="item-body">
           <div class="item-label">کاربر</div>
-          <div class="item-content" style="margin-bottom:8px">${item.user}</div>
+          <div class="item-content" style="margin-bottom:8px">${escapeHtml(item.user)}</div>
           <div class="item-label">خیام</div>
-          <div class="item-correct">${item.assistant}</div>
+          <div class="item-correct">${escapeHtml(item.assistant)}</div>
         </div>
         <button class="del-btn" onclick="deleteExample(${i})">✕</button>`;
       list.appendChild(div);

@@ -178,6 +178,47 @@ class StudentBadge(db.Model):
             'earned_at':   self.earned_at.isoformat(),
         }
 
+class CallRequest(db.Model):
+    """A "call us to buy a plan" request submitted from the pricing page."""
+    __tablename__ = 'call_requests'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    name       = db.Column(db.String(120), nullable=False)
+    phone      = db.Column(db.String(40), nullable=False)
+    plan_kind  = db.Column(db.String(10), nullable=False, default='chat')   # chat | tutor
+    plan       = db.Column(db.String(20), nullable=False)
+    months     = db.Column(db.Integer, nullable=False, default=1)
+    note       = db.Column(db.String(500), nullable=True)
+    status     = db.Column(db.String(12), nullable=False, default='new', index=True)  # new | contacted | paid | rejected
+    admin_note = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    handled_at = db.Column(db.DateTime, nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'user_id': self.user_id, 'name': self.name,
+            'phone': self.phone, 'plan_kind': self.plan_kind, 'plan': self.plan,
+            'months': self.months, 'note': self.note or '', 'status': self.status,
+            'admin_note': self.admin_note or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'handled_at': self.handled_at.isoformat() if self.handled_at else None,
+        }
+
+
+class PlanEvent(db.Model):
+    """Audit log of plan grants, expiries and reminder emails (also dedupes reminders)."""
+    __tablename__ = 'plan_events'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    plan_kind  = db.Column(db.String(10), nullable=False)      # chat | tutor
+    plan       = db.Column(db.String(20), nullable=False)
+    event      = db.Column(db.String(12), nullable=False)      # granted | expired | warned | revoked
+    expires_at = db.Column(db.DateTime, nullable=True)
+    actor      = db.Column(db.String(60), nullable=True)       # admin username or "system"
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
 def json_loads_safe(val):
     try:
         return json.loads(val) if val else []

@@ -1,13 +1,16 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="/static/main.js?v=2"></script>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>استاد خیام — کلاس درس</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
   <style>
     body { height:100vh; display:flex; flex-direction:column; overflow:hidden; }
 
@@ -515,7 +518,7 @@
       if (meData.logged_in) {
         currentUser = meData;
         document.getElementById('auth-nav').innerHTML =
-          `<a href="/profile" class="nav-btn">${meData.username}</a>`;
+          `<a href="/profile" class="nav-btn">${escapeHtml(meData.username)}</a>`;
         document.getElementById('xp-bar-wrap').style.display = 'flex';
         await loadAllProgress();
       }
@@ -1173,7 +1176,7 @@
     const content = document.createElement('div');
     content.className = 'bubble-content';
     if (role === 'ai') {
-      content.innerHTML = marked.parse(text);
+      content.innerHTML = renderMarkdown(text);
       bubble.appendChild(content);
       const speakBtn = document.createElement('button');
       speakBtn.type = 'button';

@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from database import db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress, QuizResult, StudentBadge
+from database import (db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress,
+    QuizResult, StudentBadge, CallRequest, PlanEvent)
 from functools import wraps
 from openai import OpenAI
 from groq import Groq
@@ -12,38 +13,156 @@ import json
 import re
 import base64
 import smtplib
+import threading
+import hmac
 import ssl
 import time
 import uuid
 from email.message import EmailMessage
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import text as sql_text
+from sqlalchemy.exc import IntegrityError
 from io import BytesIO
 import hashlib
+from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_limiter import Limiter
+from werkzeug.middleware.proxy_fix import ProxyFix
+import router as khr
 from metering import (VOICE_PLANS, ensure_storage as ensure_api_meter, reserve as reserve_api,
     finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
-    tutor_tier as active_tutor_tier, voice_tier as active_voice_tier, usd_micro)
+    tutor_plan as active_tutor_plan, tutor_tier as active_tutor_tier,
+    voice_tier as active_voice_tier, usd_micro, recent_requests)
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY") or os.getenv("ADMIN_PASSWORD") or os.urandom(32).hex()
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "true").lower() == "true")
+if not os.getenv("SECRET_KEY"):
+    app.logger.warning("SECRET_KEY is not set: set it on Render (sessions and email links depend on it)")
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "true").lower() == "true",
+                  PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+                  REMEMBER_COOKIE_HTTPONLY=True, REMEMBER_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "true").lower() == "true",
+                  WTF_CSRF_TIME_LIMIT=None)
 database_url = os.getenv("DATABASE_URL", "sqlite:///khayyam.db")
-if database_url.startswith("postgresql://"):
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql+psycopg2://", 1)
+elif database_url.startswith("postgresql://"):
     database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
+if not database_url.startswith("sqlite"):
+    # Supabase drops idle connections: validate on checkout and recycle before it does.
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 280,
+                                               'pool_size': 5, 'max_overflow': 5}
+
+# Render terminates TLS in front of us: trust exactly one proxy for scheme and host.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=0, x_proto=1, x_host=1)
 
 db.init_app(app)
+csrf = CSRFProtect(app)
+
+# ---- Client IP behind Render's proxy chain -------------------------------------------
+# request.remote_addr is the proxy, so using it would put EVERY guest in one bucket.
+# CLIENT_IP_HEADER (e.g. CF-Connecting-IP / True-Client-IP) wins when set; otherwise we take
+# the CLIENT_IP_HOPS-th entry from the RIGHT of X-Forwarded-For (entries added by our own
+# proxies; anything a client prepends sits further left and is ignored).
+# Use /api/admin/ip-debug once after deploying to confirm which setting is right.
+CLIENT_IP_HEADER = os.getenv("CLIENT_IP_HEADER", "").strip()
+CLIENT_IP_HOPS = int(os.getenv("CLIENT_IP_HOPS", "1"))
+
+
+def client_ip():
+    if CLIENT_IP_HEADER:
+        value = request.headers.get(CLIENT_IP_HEADER, "").split(",")[0].strip()
+        if value:
+            return value[:64]
+    parts = [p.strip() for p in request.headers.get("X-Forwarded-For", "").split(",") if p.strip()]
+    if parts and 0 < CLIENT_IP_HOPS <= len(parts):
+        return parts[-CLIENT_IP_HOPS][:64]
+    return (request.remote_addr or "unknown")[:64]
+
+
+def _rate_key():
+    try:
+        if current_user.is_authenticated:
+            return "u:%s" % current_user.id
+    except Exception:
+        pass
+    return "ip:%s" % client_ip()
+
+
+limiter = Limiter(key_func=_rate_key, app=app,
+                  storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"),
+                  default_limits=["60 per minute", "800 per hour"],
+                  default_limits_exempt_when=lambda: request.endpoint == "static")
+
+
+@app.errorhandler(429)
+def rate_limited(_e):
+    msg = "تعداد درخواست‌ها زیاد است. کمی صبر کنید و دوباره تلاش کنید."
+    if request.path.startswith("/api/"):
+        return jsonify(success=False, error=msg, rate_limited=True), 429
+    return msg, 429
+
+
+@app.errorhandler(CSRFError)
+def csrf_failed(_e):
+    msg = "نشست شما منقضی شده است. صفحه را دوباره بارگذاری کنید."
+    if request.path.startswith("/api/"):
+        return jsonify(success=False, error=msg, csrf=True), 400
+    return msg, 400
+
+
+@app.after_request
+def security_headers(resp):
+    h = resp.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    h.setdefault("Permissions-Policy", "microphone=(self), camera=(), geolocation=(), payment=()")
+    if app.config["SESSION_COOKIE_SECURE"]:
+        h.setdefault("Strict-Transport-Security", "max-age=15552000")
+    if request.path.startswith("/api/"):
+        h.setdefault("Cache-Control", "no-store")
+    elif resp.mimetype == "text/html":
+        h.setdefault("Cache-Control", "private, no-cache")
+    return resp
+
+
+def _once(fn):
+    """Run a schema-creation helper once per process (it used to run CREATE TABLE IF NOT
+    EXISTS on every request, which is slow and takes locks on Supabase)."""
+    done = []
+    @wraps(fn)
+    def wrapper(*a, **k):
+        if done:
+            return None
+        result = fn(*a, **k)
+        done.append(True)
+        return result
+    return wrapper
+
+
+def site_url():
+    """Base URL used inside emails. Never derived from a client-supplied Host header."""
+    configured = os.getenv("SITE_URL", "").strip().rstrip("/")
+    return configured or request.host_url.rstrip("/")
 
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login_page'
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-groq_client   = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+@login_manager.unauthorized_handler
+def _unauthorized():
+    if request.path.startswith("/api/"):
+        return jsonify(success=False, error="لطفاً ابتدا وارد شوید.", login_required=True), 401
+    return redirect(url_for("login_page"))
+
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=45.0, max_retries=1)
+groq_client   = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=30.0, max_retries=1)
 
 KNOWLEDGE_FILE = "knowledge.json"
 EXAMPLES_FILE  = "examples.json"
@@ -100,6 +219,12 @@ with app.app_context():
         # Old DB's `plan` was the only subscription record; preserve it verbatim.
         if 'plan' in columns and 'chat_plan' not in columns:
             conn.execute(sql_text("UPDATE users SET chat_plan=COALESCE(plan,'free')"))
+        # One verified flag: anyone verified under the older `is_verified` stays verified.
+        conn.execute(sql_text("UPDATE users SET email_verified=TRUE WHERE is_verified=TRUE "
+                              "AND (email_verified IS NULL OR email_verified=FALSE)"))
+        conn.execute(sql_text("UPDATE users SET email_verified=FALSE WHERE email_verified IS NULL"))
+        conn.execute(sql_text("UPDATE users SET chat_plan='free' WHERE chat_plan IS NULL"))
+        conn.execute(sql_text("UPDATE users SET tutor_plan='free' WHERE tutor_plan IS NULL"))
     ensure_api_meter(db)
 
 @login_manager.user_loader
@@ -235,118 +360,147 @@ def _usage_pair(response):
     return (max(0, int(inp)), max(0, int(out)))
 
 
-def _actual_legacy_tokens(user_id, feature, tier, plan, total):
-    # Display-only legacy counters, written AFTER a successful provider response.
-    if user_id is None or tier > 3: return
-    usage=get_or_create_usage(user_id)
-    if usage is None: return
-    if feature == 'chat':
-        spec=next((x for x in PLAN_CONFIG.get(plan,[]) if x['tier']==tier),None)
-        prefix=f'tier{tier}'
-    else:
-        spec=next((x for x in TUTOR_PLAN_CONFIG.get(plan,[]) if x.get('tier',1)==tier),None)
-        prefix=f'tutor_tier{tier}'
-    if spec is None: return
-    resetcol=prefix+'_reset'; tokencol=prefix+'_tokens'
-    if not hasattr(usage,tokencol):return
-    ts=getattr(usage,resetcol) or datetime.utcnow()
-    if should_reset(ts,spec['reset']):
-        setattr(usage,tokencol,0); setattr(usage,resetcol,datetime.utcnow())
-    setattr(usage,tokencol,(getattr(usage,tokencol) or 0)+int(total))
-    usage.updated_at=datetime.utcnow()
-    db.session.commit()
+def _maybe_billed(exc):
+    """Did the provider possibly bill a call that raised? HTTP error replies (4xx/5xx)
+    are not billed, so they are refunded. A timeout may have been generated, so it is
+    charged (conservatively)."""
+    name = type(exc).__name__
+    return name in ('APITimeoutError', 'ReadTimeout', 'TimeoutException', 'Timeout')
+
+
+def _next_reset_ts(options):
+    """Earliest moment any tier's window rolls over (UTC unix seconds)."""
+    from metering import next_reset_ts
+    periods = {o['reset'] for o in options if o.get('reset')}
+    return min((next_reset_ts(p) for p in periods), default=None)
+
+
+def _attempt(grant, system_prompt, messages, temperature, image_b64, image_type, effort, json_mode):
+    """One provider call against one reservation. ALWAYS settles the reservation.
+    Returns the reply text; raises on failure (after refunding or charging correctly)."""
+    t0 = time.monotonic()
+    ms = lambda: int((time.monotonic() - t0) * 1000)
+    model = grant['model']
+    try:
+        if model.startswith('openai/gpt-oss'):
+            reply, response = call_groq_model(system_prompt, messages, temperature,
+                                              model=model, return_response=True)
+        else:
+            reply, response = call_openai_model(model, system_prompt, messages, temperature,
+                                                image_b64, image_type, return_response=True,
+                                                max_output=grant['max_output'],
+                                                effort=effort, json_mode=json_mode)
+    except Exception as exc:
+        try:
+            finalize_api(db, grant, uncertain=_maybe_billed(exc), failed=not _maybe_billed(exc),
+                         latency_ms=ms())
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('Could not settle reservation after provider error')
+        raise
+    usage = _usage_pair(response)
+    try:
+        if usage is None:
+            finalize_api(db, grant, uncertain=True, latency_ms=ms())
+        else:
+            finalize_api(db, grant, usage[0], usage[1], latency_ms=ms())
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Could not settle reservation after provider reply')
+    app.logger.info('ai_call feature=%s model=%s intent=%s in=%s out=%s ms=%s',
+                    grant['feature'], model, grant.get('intent'),
+                    usage[0] if usage else '?', usage[1] if usage else '?', ms())
+    if not reply or not reply.strip():
+        raise RuntimeError('Provider returned no visible answer')
+    return reply
 
 
 def _metered_completion(feature, system_prompt, messages, user_id, plan,
                         temperature=.7, image_b64=None, image_type=None,
-                        max_output=1000):
-    from metering import reserve, finalize
-    ensure_api_meter(db)
-    user_key = hashlib.sha256((app.secret_key + ':' + request.remote_addr).encode()).hexdigest() if user_id is None else None
-    config = PLAN_CONFIG.get(plan, PLAN_CONFIG['free']) if feature=='chat' else TUTOR_PLAN_CONFIG.get(plan,TUTOR_PLAN_CONFIG['free'])
-    options = []
-    for index,spec in enumerate(config):
-        if image_b64 and spec['model'].startswith('openai/gpt-oss'):
-            continue
-        options.append({'model':spec['model'], 'limit':spec['limit'],
-            'reset':spec['reset'],'tier':index+1})
-    # Count the actual request with an OpenAI-compatible tokenizer instead of
-    # treating each Dari character as 1.5 tokens. The old heuristic incorrectly
-    # skipped Free users' untouched Mini allowance on even a simple greeting.
-    # We reserve a safety margin for framing/tool metadata and image token costs.
-    from tiktoken import get_encoding
-    payload_size = len(system_prompt) + sum(len(str(m.get('content', ''))) for m in messages)
-    if payload_size > 30000:
+                        max_output=1000, level='standard', effort=None,
+                        json_mode=False, intent_label=None):
+    """Route -> reserve -> call -> settle. Returns (reply, switched, reset_ts, model).
+
+    reply None + model 'limited' : the user's allowance (or the guest budget) is used up
+    reply None + model 'error'   : every affordable provider failed (nothing was charged)
+    """
+    from metering import reserve, guest_global_spent_micro
+    guest_key = (hashlib.sha256((app.secret_key + ':' + client_ip()).encode()).hexdigest()
+                 if user_id is None else None)
+    config = PLAN_CONFIG.get(plan, PLAN_CONFIG['free']) if feature == 'chat' \
+        else TUTOR_PLAN_CONFIG.get(plan, TUTOR_PLAN_CONFIG['free'])
+    options = [o for o in khr.order_options(config, level)
+               if not (image_b64 and o['model'].startswith('openai/gpt-oss'))]
+
+    # Token estimate without a network round trip. `overhead` is Khayyam's own fixed
+    # system prompt: it counts toward OUR dollar guard but never toward the user's window.
+    overhead = khr.estimate_tokens(system_prompt) + 15
+    body = sum(khr.estimate_tokens(m.get('content', '')) + 10 for m in messages) + (2500 if image_b64 else 0)
+    total_chars = len(system_prompt) + sum(len(str(m.get('content', ''))) for m in messages)
+    if total_chars > 60000:
         raise ValueError('Message history is too long')
-    encoder = get_encoding('o200k_base')
-    measured = len(encoder.encode(system_prompt)) + 12
-    for item in messages:
-        measured += len(encoder.encode(str(item.get('content', '')))) + 12
-    estimated = max(200, int(measured * 1.12) + 128 + (8000 if image_b64 else 0))
-    if estimated > 19000:
-        raise ValueError('Input is too long for the allowed request budget')
-    grant,idx=reserve_api(db,user_id,feature,plan,options,estimated,max_output,guest_key=user_key)
-    if not grant: return None, True, None, None
-    model=grant['model']; switched=(idx>0)
-    try:
-        if model.startswith('openai/gpt-oss'):
-            if image_b64:
-                finalize_api(db,grant,0,0)  # no image support on text-only fallback
-                return None,True,None,None
-            reply, response=call_groq_model(system_prompt,messages,temperature,model=model,return_response=True)
-        else:
-            reply, response=call_openai_model(model,system_prompt,messages,temperature,
-                                               image_b64,image_type,return_response=True,
-                                               max_output=grant['max_output'])
-        if not reply or not reply.strip():
-            raise RuntimeError('Provider returned no visible answer')
-        usage = _usage_pair(response)
-        if usage is None:
-            finalize_api(db,grant,uncertain=True)
-        else:
-            i,o=usage
-            finalize_api(db,grant,i,o)
-            try: _actual_legacy_tokens(user_id,feature,grant['tier'],plan,int(i)+int(o))
-            except Exception: app.logger.exception('Legacy token display update failed')
-        return reply,switched,None,model
-    except Exception:
-        app.logger.exception('Metered provider call failed (%s)',model)
-        try: finalize_api(db,grant,uncertain=True) # provider may have billed an errored request
-        except Exception: db.session.rollback(); app.logger.exception('Unable to finalize uncertain API charge')
-        # Failure-only bounded provider fallback, fresh quota reservation; never fall back when budget exhausted.
-        if model.startswith('openai/gpt-oss') or image_b64:
-            return None,False,None,None
-        fallback={'model':os.getenv('GROQ_FALLBACK_MODEL','openai/gpt-oss-20b'),
-                  'limit':int(os.getenv('GROQ_FALLBACK_TOKENS_MONTHLY','25000')),
-                  'reset':'monthly','tier':8}
-        if fallback['model'] not in ('openai/gpt-oss-20b','openai/gpt-oss-120b'):
-            return None,False,None,None
-        alt,_=reserve_api(db,user_id,feature,plan,[fallback],estimated,650,guest_key=user_key)
-        if not alt: return None,False,None,None
+    estimated = overhead + body
+
+    if user_id is None:
+        cap = float(os.getenv('GUEST_GLOBAL_DAILY_USD', '3.0'))
+        if guest_global_spent_micro(db) >= cap * 1e6:
+            return None, True, _next_reset_ts([{'reset': 'daily'}]), 'limited'
+
+    first_choice = None
+    attempts = 0
+    while options and attempts < 3:
+        attempts += 1
+        grant, idx = reserve(db, user_id, feature, plan, options, estimated, max_output,
+                             guest_key=guest_key, overhead_tokens=overhead, intent=intent_label or level)
+        if not grant:
+            if first_choice is None:
+                return None, True, _next_reset_ts(options), 'limited'
+            break
+        if first_choice is None:
+            first_choice = options[0]['model']
+        grant['sys_share'] = len(system_prompt) / max(1, total_chars)
         try:
-            reply,response=call_groq_model(system_prompt,messages,temperature,
-                                            model=fallback['model'],return_response=True)
-            if not reply or not reply.strip():
-                raise RuntimeError('Fallback returned no visible answer')
-            usage=_usage_pair(response)
-            if usage is None: finalize_api(db,alt,uncertain=True)
-            else: finalize_api(db,alt,*usage)
-            return reply,True,None,fallback['model']
+            reply = _attempt(grant, system_prompt, messages, temperature, image_b64, image_type,
+                             effort, json_mode)
+            return reply, (grant['model'] != first_choice), None, grant['model']
         except Exception:
-            app.logger.exception('Bounded Groq fallback failed')
-            try:finalize_api(db,alt,uncertain=True)
-            except Exception:db.session.rollback()
-            return None,False,None,None
+            app.logger.exception('Provider call failed (%s); trying the next affordable model', grant['model'])
+            options = options[idx + 1:]
+    return None, True, None, 'error'
 
 
 def smart_tutor_chat(system_prompt, history, user_message, user_id=None, plan='free', temperature=0.7):
-    messages=history+[{'role':'user','content':user_message}]
-    reply,switched,reset_ts,model = _metered_completion('tutor',system_prompt,messages,user_id,
-        plan,temperature,max_output=900)
+    messages = khr.trim_history(history, tutor=True) + [{'role': 'user', 'content': user_message}]
+    reply, switched, reset_ts, model = _metered_completion('tutor', system_prompt, messages, user_id,
+        plan, temperature, max_output=900, level='standard', intent_label='tutor')
+    if reply is None and model == 'error':
+        raise RuntimeError('All tutor providers failed')
     return reply, (reply is None), reset_ts
 
 # ── KNOWLEDGE (DATABASE BACKED) ──
+_KB_CACHE = {}
+_KB_TTL = 60  # seconds; admin edits show up on every worker within a minute
+
+
+def _kb_cached(name, loader):
+    hit = _KB_CACHE.get(name)
+    now = time.monotonic()
+    if hit and now - hit[0] < _KB_TTL:
+        return hit[1]
+    data = loader()
+    _KB_CACHE[name] = (now, data)
+    return data
+
+
 def load_knowledge():
+    return _kb_cached('knowledge', _load_knowledge_db)
+
+
+def load_examples():
+    return _kb_cached('examples', _load_examples_db)
+
+
+def _load_knowledge_db():
     try:
         row = SiteConfig.query.filter_by(key='knowledge').first()
         if row:
@@ -358,7 +512,7 @@ def load_knowledge():
     except:
         return {"dari_dialect": [], "cultural_customs": []}
 
-def load_examples():
+def _load_examples_db():
     try:
         row = SiteConfig.query.filter_by(key='examples').first()
         if row:
@@ -380,6 +534,7 @@ def save_knowledge(data):
             row = SiteConfig(key='knowledge', value=json.dumps(data, ensure_ascii=False))
             db.session.add(row)
         db.session.commit()
+        _KB_CACHE.pop('knowledge', None)
     except Exception as e:
         print(f"save_knowledge error: {e}")
         db.session.rollback()
@@ -394,6 +549,7 @@ def save_examples(data):
             row = SiteConfig(key='examples', value=json.dumps(data, ensure_ascii=False))
             db.session.add(row)
         db.session.commit()
+        _KB_CACHE.pop('examples', None)
     except Exception as e:
         print(f"save_examples error: {e}")
         db.session.rollback()
@@ -406,133 +562,27 @@ def get_user_memories(user_id):
     return [m.content for m in memories]
 
 def extract_and_save_memory(user_id, user_message):
-    trigger_words = [
-        'یادت باشد', 'یادت باشه', 'ذخیره کن', 'به یاد داشته باش',
-        'فراموش نکن', 'همیشه بدان', 'بدان که', 'حفظ کن',
-        'remember', 'save this', 'note that', 'keep in mind',
-        'always know', 'dont forget', "don't forget"
-    ]
-    msg_lower = user_message.lower()
-    if not any(word.lower() in msg_lower for word in trigger_words):
+    """Save an explicit "remember this" request. Rule-based: no model call, no tokens,
+    no extra latency (the old version made a second paid call per request)."""
+    memory_text = khr.extract_memory_text(user_message)
+    if not memory_text:
         return
-
-    extraction_prompt = f"""کاربر این پیام را فرستاده:
-"{user_message}"
-
-اگر کاربر خواسته چیزی برای همیشه به یاد سپرده شود، آن را یک جمله کوتاه بنویس.
-مثال: "کاربر اسمش احمد است" یا "کاربر پزشک است"
-اگر چیزی برای ذخیره نیست فقط بنویس: NONE
-فقط یک جمله یا NONE."""
-
-    
-    memory_text = None
     try:
-        memory_text,_,_,_ = _metered_completion(
-            'chat','Extract a single factual memory or NONE.',
-            [{'role':'user','content':extraction_prompt}], user_id,
-            active_chat_plan(db.session.get(User,user_id)),max_output=80)
-        if memory_text: memory_text=memory_text.strip()
+        if not Memory.query.filter_by(user_id=user_id, content=memory_text).first():
+            # Keep the memory list bounded so prompts never grow without limit.
+            if Memory.query.filter_by(user_id=user_id).count() >= 50:
+                oldest = Memory.query.filter_by(user_id=user_id).order_by(Memory.created_at.asc()).first()
+                if oldest: db.session.delete(oldest)
+            db.session.add(Memory(user_id=user_id, content=memory_text))
+            db.session.commit()
     except Exception:
-        app.logger.exception('Metered memory extraction failed')
-        return
-    if memory_text and memory_text.upper() != 'NONE' and len(memory_text)>3:
-        try:
-            exists=Memory.query.filter_by(user_id=user_id,content=memory_text).first()
-            if not exists:
-                db.session.add(Memory(user_id=user_id,content=memory_text))
-                db.session.commit()
-        except Exception:
-            db.session.rollback()
-            app.logger.exception('Memory save failed')
+        db.session.rollback()
+        app.logger.exception('Memory save failed')
 
 # ── PROMPTS ──
-def build_system_prompt(user_memories=None):
-    knowledge = load_knowledge()
-    examples  = load_examples()
-
-    dialect_rules = ""
-    for item in knowledge.get("dari_dialect", []):
-        dialect_rules += f'- بگو "{item["correct"]}" نه "{item["wrong"]}" ({item["note"]})\n'
-
-    cultural_knowledge = ""
-    for item in knowledge.get("cultural_customs", []):
-        cultural_knowledge += f'- {item["topic"]}: {item["content"]}\n'
-
-    example_block = ""
-    for ex in examples.get("conversation_examples", []):
-        example_block += f'User: {ex["user"]}\nAssistant: {ex["assistant"]}\n\n'
-
-    memory_block = ""
-    if user_memories:
-        memory_block = "====================\nاطلاعات ذخیره‌شده درباره این کاربر\n====================\n"
-        memory_block += "این اطلاعات را همیشه در نظر بگیر و در پاسخ‌هایت استفاده کن:\n"
-        for mem in user_memories:
-            memory_block += f"- {mem}\n"
-        memory_block += "\n"
-
-    return f"""تو یک دستیار هوشمند به نام خیام هستی که به زبان دری افغانی صحبت می‌کنی.
-
-{memory_block}====================
-قانون زبان
-====================
-زبان پیش‌فرض: دری افغانی
-- اگر موضوع آموزش زبان باشد، مثال‌ها را به همان زبان بنویس اما توضیحات را به دری بده
-- در موضوعات علمی استفاده از نمادها مجاز است (x, H2O, km)
-- اگر کاربر لینک فرستاد بگو نمی‌توانی باز کنی
-- اگر کاربر تصویر یا فایل فرستاد آن را به دری توضیح بده
-
-====================
-هویت و شخصیت
-====================
-- نام: خیام
-- لحن: گرم، مهربان و صمیمی
-- از کلمات مانند: برادر، خواهر، تشکر استفاده کن
-- هرگز خود را ChatGPT معرفی نکن
-- اگر اطلاعاتی درباره کاربر داری از آن استفاده کن
-
-====================
-سیستم حافظه — بسیار مهم
-====================
-تو یک سیستم حافظه دائمی داری که اطلاعات کاربران را برای همیشه ذخیره می‌کند.
-
-وقتی کاربر می‌گوید "یادت باشه"، "ذخیره کن"، "remember" یا مشابه:
-- بگو: "بسیار خوب، این را در حافظه‌ام ذخیره کردم و در همه گفتگوهای بعدی به یاد خواهم داشت."
-- هرگز نگو که نمی‌توانی چیزی را به یاد بسپاری
-- هرگز نگو که حافظه‌ات فقط در این چت کار می‌کند
-
-====================
-فرمت‌بندی — بسیار مهم
-====================
-۱. هر پاسخ را به پاراگراف‌های کوتاه تقسیم کن — هر پاراگراف حداکثر ۳ جمله
-۲. بین هر پاراگراف یک خط خالی بگذار
-۳. موضوعات مختلف را با ## تیتر جدا کن
-۴. برای لیست از - استفاده کن
-۵. کلمات مهم را **بولد** کن
-۶. جواب‌های کوتاه را بدون فرمت بنویس
-۷. هرگز یک بلوک طولانی بدون تقسیم‌بندی ننویس
-
-====================
-حالت ویژه: شعر
-====================
-- هر مصرع روی یک خط جداگانه
-- بین هر دو بیت یک خط خالی
-- قافیه را در تمام شعر حفظ کن
-- فقط شعر بنویس — هیچ توضیح اضافه نده
-
-====================
-دانش فرهنگی
-====================
-{cultural_knowledge}
-
-====================
-قوانین گویش
-====================
-{dialect_rules}
-
-====================
-نمونه‌ها
-====================
-{example_block}"""
+def build_system_prompt(user_memories=None, message='', kind='chat', level='standard'):
+    """Compact core prompt + only the knowledge relevant to this message (see router.py)."""
+    return khr.build_chat_prompt(load_knowledge(), load_examples(), user_memories, message, kind, level)
 
 def build_tutor_prompt(subject, grade):
     return f"""تو استاد خیام هستی — یک استاد افغانی مهربان که به دری افغانی درس می‌دهی.
@@ -588,7 +638,7 @@ def build_tutor_prompt(subject, grade):
 # ── CHAT FUNCTIONS ──
 def call_openai_model(model, system_prompt, messages, temperature=.7,
                       image_b64=None, image_type=None, return_response=False,
-                      max_output=1000):
+                      max_output=1000, effort=None, json_mode=False):
     formatted=[]
     for m in messages:
         if m.get('role')=='user' and image_b64 and m is messages[-1]:
@@ -600,7 +650,18 @@ def call_openai_model(model, system_prompt, messages, temperature=.7,
     kwargs={'model':model,'messages':[{'role':'system','content':system_prompt}]+formatted,
             'max_completion_tokens' if is_reasoning else 'max_tokens':max_output}
     if not is_reasoning:kwargs['temperature']=temperature
-    response=openai_client.chat.completions.create(**kwargs)
+    if json_mode:kwargs['response_format']={'type':'json_object'}
+    if effort and is_reasoning:kwargs['reasoning_effort']=effort
+    try:
+        response=openai_client.chat.completions.create(**kwargs)
+    except Exception as exc:
+        # An unsupported optional parameter must never take the whole answer down.
+        text=str(exc).lower()
+        if type(exc).__name__=='BadRequestError' and ('reasoning_effort' in text or 'response_format' in text):
+            kwargs.pop('reasoning_effort',None); kwargs.pop('response_format',None)
+            response=openai_client.chat.completions.create(**kwargs)
+        else:
+            raise
     reply=response.choices[0].message.content or ''
     return (reply,response) if return_response else (reply,getattr(response.usage,'total_tokens',0))
 
@@ -617,11 +678,17 @@ def call_groq_model(system_prompt, messages, temperature=.7,
 
 
 def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
-               temperature=.7, image_b64=None, image_type=None):
+               temperature=.7, image_b64=None, image_type=None, intent=None):
+    """intent: dict from router.classify (level/kind/max_output/effort). Defaults to standard."""
+    intent = intent or {'level': 'standard', 'kind': 'chat', 'max_output': 900, 'effort': None}
     messages=history+[{'role':'user','content':user_message}]
     reply,switched,reset_ts,model = _metered_completion('chat',system_prompt,messages,
-        user_id,plan,temperature,image_b64,image_type,max_output=900)
-    if reply is None: return 'محدودیت استفاده تکمیل شده یا سرویس موقتاً در دسترس نیست. بعداً دوباره تلاش کنید.', True, reset_ts, 'limited'
+        user_id,plan,temperature,image_b64,image_type,max_output=intent['max_output'],
+        level=intent['level'],effort=intent.get('effort'),intent_label=intent.get('kind'))
+    if reply is None:
+        if model == 'error':
+            return 'سرویس موقتاً در دسترس نیست. چیزی از سهمیه شما کم نشد؛ لطفاً چند لحظه بعد دوباره تلاش کنید.', False, None, 'error'
+        return 'محدودیت استفاده تکمیل شده است. بعداً دوباره تلاش کنید.', True, reset_ts, 'limited'
     return reply,switched,reset_ts,model
 
 # ── DOCUMENT EXTRACTION ──
@@ -676,6 +743,7 @@ def pricing_page():
     return render_template("pricing.html")
 
 @app.route("/api/register", methods=["POST"])
+@limiter.limit("5 per hour")
 def api_register():
     data = request.get_json(silent=True) or {}
     username = str(data.get("username") or "").strip()
@@ -683,12 +751,16 @@ def api_register():
     password = str(data.get("password") or "")
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or len(email) > 150:
         return jsonify(success=False, error="آدرس ایمیل معتبر وارد کنید."), 400
-    if len(username) < 3 or len(username) > 80:
-        return jsonify(success=False, error="نام کاربری باید بین ۳ و ۸۰ نویسه باشد."), 400
+    if not re.fullmatch(r"[\w.\-]{3,40}", username):
+        return jsonify(success=False, error="نام کاربری باید ۳ تا ۴۰ نویسه و فقط شامل حروف، عدد، نقطه، خط تیره یا زیرخط باشد."), 400
     if not 8 <= len(password) <= 128:
         return jsonify(success=False, error="رمز عبور باید بین ۸ و ۱۲۸ نویسه باشد."), 400
 
-    user, error = register_user(username, password, email, None)
+    try:
+        user, error = register_user(username, password, email, None)
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(success=False, error="این نام کاربری یا ایمیل قبلاً ثبت شده است."), 400
     if error:
         return jsonify(success=False, error=error), 400
 
@@ -705,6 +777,7 @@ def api_register():
 
 
 @app.route("/api/login", methods=["POST"])
+@limiter.limit("10 per minute;40 per hour")
 def api_login():
     data = request.get_json(silent=True) or {}
     email = str(data.get("email") or data.get("identifier") or "").strip().lower()
@@ -773,11 +846,11 @@ def send_account_email(user, purpose):
         return False
     token = account_token(user, purpose)
     if purpose == 'verify':
-        link = url_for('verify_email', token=token, _external=True)
+        link = site_url() + url_for('verify_email', token=token)
         subject = 'تأیید ایمیل خیام | Verify your Khayyam email'
         body = f'برای تأیید ایمیل خود روی لینک زیر کلیک کنید (اعتبار: ۲۴ ساعت):\n{link}\n\nIf you did not register, ignore this email.'
     else:
-        link = url_for('reset_password_page', token=token, _external=True)
+        link = site_url() + url_for('reset_password_page', token=token)
         subject = 'بازیابی رمز عبور خیام | Reset your Khayyam password'
         body = f'برای تعیین رمز عبور جدید روی لینک زیر کلیک کنید (اعتبار: ۳۰ دقیقه):\n{link}\n\nIf you did not request this, ignore this email.'
     message = EmailMessage()
@@ -806,6 +879,18 @@ def send_account_email(user, purpose):
 <p style="color:#8b8170;font-size:12px;line-height:2">اگر این درخواست را انجام نداده‌اید، این ایمیل را نادیده بگیرید.</p>
 <p style="color:#8b8170;font-size:12px;border-top:1px solid #2e2a22;padding-top:20px">Khayyam AI</p>
 </td></tr></table></body></html>""", subtype="html")
+    _smtp_send(message)
+    return True
+
+def _smtp_configured():
+    return all(os.getenv(k, '').strip() for k in ('SMTP_HOST', 'SMTP_FROM', 'SMTP_USER')) and bool(os.getenv('SMTP_PASSWORD'))
+
+
+def _smtp_send(message):
+    host = os.getenv('SMTP_HOST', '').strip()
+    port = int(os.getenv('SMTP_PORT', '587'))
+    username = os.getenv('SMTP_USER', '').strip()
+    password = os.getenv('SMTP_PASSWORD', '')
     if port == 465:
         with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=15) as smtp:
             smtp.login(username, password)
@@ -817,7 +902,49 @@ def send_account_email(user, purpose):
             smtp.ehlo()
             smtp.login(username, password)
             smtp.send_message(message)
+
+
+def send_card_email(to_address, subject, heading, description, lines=(), button_label=None, link=None):
+    """Branded transactional email (same look as the verification email)."""
+    if not _smtp_configured():
+        app.logger.warning('SMTP is not configured; email "%s" was not sent', subject)
+        return False
+    from html import escape
+    message = EmailMessage()
+    message['From'] = os.getenv('SMTP_FROM', '').strip()
+    message['To'] = to_address
+    message['Subject'] = subject
+    plain = [heading, '', description] + [''] + list(lines) + ([''] + [link] if link else [])
+    message.set_content('\n'.join(plain))
+    rows = ''.join(f'<p style="color:#ede8df;font-size:14px;line-height:2;margin:4px 0">{escape(x)}</p>' for x in lines)
+    button = (f'<a href="{escape(link, quote=True)}" style="display:inline-block;background:#c9a84c;color:#0f0e0c;'
+              f'padding:14px 28px;border-radius:9px;text-decoration:none;font-weight:bold;margin-top:22px">'
+              f'{escape(button_label or "")}</a>') if link and button_label else ''
+    message.add_alternative(f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:32px 14px;background:#0f0e0c;color:#ede8df;font-family:Tahoma,Arial,sans-serif">
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:520px;margin:auto;background:#1a1814;border:1px solid #2e2a22;border-radius:16px">
+<tr><td style="padding:36px 28px;text-align:center">
+<div style="color:#c9a84c;font-size:29px;font-weight:bold;margin-bottom:22px">خیام</div>
+<h1 style="font-size:22px;color:#ede8df">{escape(heading)}</h1>
+<p style="color:#b5ab99;font-size:14px;line-height:2;margin-bottom:20px">{escape(description)}</p>
+{rows}{button}
+<p style="color:#8b8170;font-size:12px;border-top:1px solid #2e2a22;padding-top:20px;margin-top:28px">Khayyam AI</p>
+</td></tr></table></body></html>""", subtype='html')
+    _smtp_send(message)
     return True
+
+
+def _run_async(fn, *args):
+    """Fire-and-forget (email must never slow down or break a request)."""
+    def runner():
+        try:
+            with app.app_context():
+                fn(*args)
+        except Exception:
+            app.logger.exception('Background task failed')
+    threading.Thread(target=runner, daemon=True).start()
+
 
 # Lightweight per-process throttling; production multi-worker deployments should use Redis.
 _email_requests = {}
@@ -831,6 +958,298 @@ def email_throttled(email, action):
             if now - t > 3600: _email_requests.pop(k, None)
     return False
 
+# ══════════════════════════════════════════
+# ── PLANS: grants, expiry, reminders, call-us requests ──
+# ══════════════════════════════════════════
+PLAN_PERIOD_DAYS = 30
+CHAT_PLANS = ('free', 'basic', 'pro', 'premium')
+TUTOR_PLANS = ('free', 'tutor_pro')
+
+
+def plan_label(plan):
+    """'پایه — $12' -> 'پایه'."""
+    return PLAN_NAMES.get(plan, plan).split(' — ')[0]
+
+
+def _plan_fields(kind):
+    return ('chat_plan', 'chat_plan_expires_at') if kind == 'chat' else ('tutor_plan', 'tutor_plan_expires_at')
+
+
+def _fmt_date(dt):
+    return dt.strftime('%Y-%m-%d') if dt else ''
+
+
+def _send_plan_email(user_id, event, kind, plan, expires_iso):
+    user = db.session.get(User, user_id)
+    if not user or not user.email:
+        return
+    expires = datetime.fromisoformat(expires_iso) if expires_iso else None
+    area = 'گفتگو' if kind == 'chat' else 'استاد'
+    name = f'{plan_label(plan)} ({area})'
+    pricing = site_url() + '/pricing'
+    if event == 'granted':
+        send_card_email(user.email, 'پلان شما فعال شد | Your Khayyam plan is active',
+            'پلان شما فعال شد', f'پلان {name} برای حساب شما فعال شد. از همراهی شما سپاسگزاریم.',
+            [f'اعتبار تا: {_fmt_date(expires)}'], 'رفتن به خیام', site_url() + '/chat')
+    elif event == 'expired':
+        send_card_email(user.email, 'پلان شما به پایان رسید | Your Khayyam plan has ended',
+            'پلان شما به پایان رسید',
+            f'اعتبار پلان {name} تمام شد و حساب شما به پلان رایگان برگشت. گفتگوهای شما همچنان ذخیره است.',
+            [], 'تمدید پلان', pricing)
+    elif event == 'warned':
+        send_card_email(user.email, 'پلان شما به‌زودی تمام می‌شود | Your Khayyam plan ends soon',
+            'پلان شما به‌زودی تمام می‌شود',
+            f'اعتبار پلان {name} در تاریخ {_fmt_date(expires)} تمام می‌شود. برای ادامه، با ما تماس بگیرید.',
+            [], 'تمدید پلان', pricing)
+    elif event == 'revoked':
+        send_card_email(user.email, 'پلان شما تغییر کرد | Your Khayyam plan changed',
+            'پلان شما تغییر کرد', f'پلان {name} از حساب شما برداشته شد.', [], 'مشاهده پلان‌ها', pricing)
+
+
+def grant_plan(user, kind, plan, months=1, actor='system', expires_at=None, notify=True):
+    """Grant (or revoke with plan='free') a plan. Monthly and stackable:
+    renewing the SAME active plan extends from its current expiry; switching plans starts a
+    fresh period now. Chat and Tutor plans are independent of each other."""
+    if kind not in ('chat', 'tutor'):
+        raise ValueError('Invalid plan kind')
+    allowed = CHAT_PLANS if kind == 'chat' else TUTOR_PLANS
+    if plan not in allowed:
+        raise ValueError('Invalid plan for this kind')
+    months = max(1, min(int(months or 1), 24))
+    plan_col, exp_col = _plan_fields(kind)
+    now = datetime.utcnow()
+    if plan == 'free':
+        setattr(user, plan_col, 'free'); setattr(user, exp_col, None)
+        new_exp = None; event = 'revoked'
+    else:
+        current_plan = getattr(user, plan_col) or 'free'
+        current_exp = getattr(user, exp_col)
+        if expires_at is not None:
+            new_exp = expires_at
+        else:
+            base = current_exp if (current_plan == plan and current_exp and current_exp > now) else now
+            new_exp = base + timedelta(days=PLAN_PERIOD_DAYS * months)
+        setattr(user, plan_col, plan); setattr(user, exp_col, new_exp)
+        event = 'granted'
+    db.session.add(PlanEvent(user_id=user.id, plan_kind=kind, plan=plan, event=event,
+                             expires_at=new_exp, actor=actor))
+    db.session.commit()
+    if notify:
+        _run_async(_send_plan_email, user.id, event, kind, plan, new_exp.isoformat() if new_exp else None)
+    return new_exp
+
+
+def expire_plans_for(user, notify=True):
+    """Revert any lapsed plan on `user` to free (and tell them). Cheap: only touches the DB
+    when something actually expired. Returns the list of kinds that expired."""
+    now = datetime.utcnow()
+    expired = []
+    for kind in ('chat', 'tutor'):
+        plan_col, exp_col = _plan_fields(kind)
+        plan, exp = getattr(user, plan_col), getattr(user, exp_col)
+        if plan and plan != 'free' and exp is not None and exp <= now:
+            db.session.add(PlanEvent(user_id=user.id, plan_kind=kind, plan=plan, event='expired',
+                                     expires_at=exp, actor='system'))
+            setattr(user, plan_col, 'free'); setattr(user, exp_col, None)
+            expired.append((kind, plan, exp))
+    if expired:
+        db.session.commit()
+        if notify:
+            for kind, plan, exp in expired:
+                _run_async(_send_plan_email, user.id, 'expired', kind, plan, exp.isoformat())
+    return [k for k, _, _ in expired]
+
+
+def sweep_plans(warn_days=3):
+    """Expire lapsed plans for everyone and send one reminder per plan period.
+    Safe to run as often as you like."""
+    now = datetime.utcnow()
+    expired_count = warned_count = 0
+    for kind in ('chat', 'tutor'):
+        plan_col, exp_col = _plan_fields(kind)
+        plan_attr, exp_attr = getattr(User, plan_col), getattr(User, exp_col)
+        lapsed = User.query.filter(plan_attr != 'free', exp_attr.isnot(None), exp_attr <= now).all()
+        for user in lapsed:
+            expired_count += len(expire_plans_for(user, notify=True))
+        soon = User.query.filter(plan_attr != 'free', exp_attr.isnot(None), exp_attr > now,
+                                 exp_attr <= now + timedelta(days=warn_days)).all()
+        for user in soon:
+            plan, exp = getattr(user, plan_col), getattr(user, exp_col)
+            already = PlanEvent.query.filter_by(user_id=user.id, plan_kind=kind, event='warned',
+                                                expires_at=exp).first()
+            if already:
+                continue
+            db.session.add(PlanEvent(user_id=user.id, plan_kind=kind, plan=plan, event='warned',
+                                     expires_at=exp, actor='system'))
+            db.session.commit()
+            _run_async(_send_plan_email, user.id, 'warned', kind, plan, exp.isoformat())
+            warned_count += 1
+    return expired_count, warned_count
+
+
+@app.before_request
+def lazy_plan_expiry():
+    """Every logged-in request checks the (already loaded) user's expiry dates in memory."""
+    if request.endpoint == 'static' or not current_user.is_authenticated:
+        return None
+    try:
+        expire_plans_for(current_user)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Plan expiry check failed')
+    return None
+
+
+@app.route('/internal/plans/sweep', methods=['POST', 'GET'])
+@csrf.exempt
+def internal_plan_sweep():
+    """For a Render Cron Job: curl -X POST -H "X-Cron-Secret: $CRON_SECRET" <site>/internal/plans/sweep"""
+    secret = os.getenv('CRON_SECRET', '')
+    supplied = request.headers.get('X-Cron-Secret', '')
+    if not secret or not hmac.compare_digest(secret.encode(), supplied.encode()):
+        return jsonify(error='forbidden'), 403
+    expired, warned = sweep_plans()
+    return jsonify(success=True, expired=expired, warned=warned)
+
+
+PHONE_RE = re.compile(r'^\+?[0-9][0-9\s\-]{6,19}$')
+
+
+@app.route('/api/call-request', methods=['POST'])
+@limiter.limit('5 per hour')
+def api_call_request():
+    """"Call me to buy a plan" form on the pricing page (works for guests and users)."""
+    data = request.get_json(silent=True) or {}
+    name = ' '.join(str(data.get('name') or '').split())[:120]
+    phone = ' '.join(str(data.get('phone') or '').split())
+    plan = str(data.get('plan') or '')
+    kind = 'tutor' if plan in TUTOR_PLANS and plan != 'free' else 'chat'
+    note = str(data.get('note') or '').strip()[:500]
+    try:
+        months = max(1, min(int(data.get('months') or 1), 12))
+    except (TypeError, ValueError):
+        months = 1
+    if len(name) < 2:
+        return jsonify(success=False, error='نام خود را وارد کنید.'), 400
+    if not PHONE_RE.match(phone):
+        return jsonify(success=False, error='شماره تماس معتبر وارد کنید (مثال: +93700000000).'), 400
+    if plan == 'free' or plan not in (set(CHAT_PLANS) | set(TUTOR_PLANS)):
+        return jsonify(success=False, error='پلان نامعتبر است.'), 400
+    # A person can have only a few open requests at once.
+    open_filter = [CallRequest.status.in_(('new', 'contacted'))]
+    if current_user.is_authenticated:
+        open_filter.append(CallRequest.user_id == current_user.id)
+    else:
+        open_filter.append(CallRequest.phone == phone)
+    if CallRequest.query.filter(*open_filter).count() >= 3:
+        return jsonify(success=False, error='درخواست‌های قبلی شما در حال بررسی است. به‌زودی با شما تماس می‌گیریم.'), 429
+    req = CallRequest(user_id=current_user.id if current_user.is_authenticated else None,
+                      name=name, phone=phone[:40], plan_kind=kind, plan=plan, months=months, note=note or None)
+    db.session.add(req)
+    db.session.commit()
+    notify_to = os.getenv('ADMIN_NOTIFY_EMAIL', '').strip()
+    if notify_to:
+        _run_async(lambda: send_card_email(notify_to, 'درخواست خرید جدید | New plan request',
+            'درخواست خرید جدید', f'{name} ({phone}) پلان {plan_label(plan)} را برای {months} ماه درخواست کرده است.',
+            [note] if note else []))
+    return jsonify(success=True, message='درخواست شما ثبت شد. به‌زودی با شما تماس می‌گیریم.')
+
+
+@app.route('/api/admin/call-requests', methods=['GET'])
+@login_required
+@admin_required
+def admin_call_requests():
+    status = request.args.get('status', '')
+    query = CallRequest.query
+    if status in ('new', 'contacted', 'paid', 'rejected'):
+        query = query.filter_by(status=status)
+    rows = query.order_by(CallRequest.created_at.desc()).limit(200).all()
+    users = {u.id: u for u in User.query.filter(User.id.in_([r.user_id for r in rows if r.user_id])).all()} if rows else {}
+    out = []
+    for r in rows:
+        d = r.to_dict()
+        u = users.get(r.user_id)
+        d['username'] = u.username if u else None
+        d['email'] = u.email if u else None
+        d['plan_label'] = plan_label(r.plan)
+        out.append(d)
+    return jsonify(out)
+
+
+@app.route('/api/admin/call-requests/<int:req_id>', methods=['POST'])
+@login_required
+@admin_required
+def admin_update_call_request(req_id):
+    req = db.session.get(CallRequest, req_id)
+    if not req:
+        return jsonify(success=False, error='not found'), 404
+    data = request.get_json(silent=True) or {}
+    status = str(data.get('status') or req.status)
+    if status not in ('new', 'contacted', 'paid', 'rejected'):
+        return jsonify(success=False, error='Invalid status'), 400
+    req.status = status
+    if 'admin_note' in data:
+        req.admin_note = str(data.get('admin_note') or '')[:500] or None
+    req.handled_at = datetime.utcnow() if status != 'new' else None
+    db.session.commit()
+    return jsonify(success=True)
+
+
+@app.route('/api/admin/call-requests/<int:req_id>/grant', methods=['POST'])
+@login_required
+@admin_required
+def admin_grant_from_request(req_id):
+    """After the customer has paid by phone: activate the plan and email them."""
+    req = db.session.get(CallRequest, req_id)
+    if not req:
+        return jsonify(success=False, error='not found'), 404
+    data = request.get_json(silent=True) or {}
+    user = db.session.get(User, req.user_id) if req.user_id else None
+    lookup = str(data.get('user') or '').strip().lower()
+    if lookup:   # request came from a guest: admin names the account (email or username)
+        user = User.query.filter((User.email == lookup) | (User.username == lookup)).first()
+    if not user:
+        return jsonify(success=False, error='این درخواست حساب کاربری ندارد؛ ایمیل یا نام کاربری را وارد کنید.'), 400
+    try:
+        months = int(data.get('months') or req.months or 1)
+        new_exp = grant_plan(user, req.plan_kind, req.plan, months=months, actor=current_user.username)
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    req.user_id = user.id
+    req.status = 'paid'
+    req.handled_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(success=True, expires_at=new_exp.isoformat() if new_exp else None)
+
+
+@app.route('/api/admin/sweep-plans', methods=['POST'])
+@login_required
+@admin_required
+def admin_sweep_plans():
+    expired, warned = sweep_plans()
+    return jsonify(success=True, expired=expired, warned=warned)
+
+
+@app.route('/api/admin/ip-debug')
+@login_required
+@admin_required
+def admin_ip_debug():
+    """Open once on the live site to confirm which CLIENT_IP_* setting identifies visitors."""
+    return jsonify(resolved=client_ip(), remote_addr=request.remote_addr,
+                   x_forwarded_for=request.headers.get('X-Forwarded-For'),
+                   cf_connecting_ip=request.headers.get('CF-Connecting-IP'),
+                   true_client_ip=request.headers.get('True-Client-IP'),
+                   settings={'CLIENT_IP_HEADER': CLIENT_IP_HEADER, 'CLIENT_IP_HOPS': CLIENT_IP_HOPS})
+
+
+@app.route('/api/admin/ai-log')
+@login_required
+@admin_required
+def admin_ai_log():
+    """Newest AI requests: which model/intent, what the user was charged, cost, latency."""
+    return jsonify(recent_requests(db, 80))
+
+
 @app.route('/forgot-password')
 def forgot_password_page():
     return render_template('forgot_password.html')
@@ -840,6 +1259,7 @@ def reset_password_page(token):
     return render_template('reset_password.html', token=token, valid=bool(token_user(token, 'reset', 1800)))
 
 @app.route('/api/forgot-password', methods=['POST'])
+@limiter.limit("5 per hour")
 def api_forgot_password():
     email = str((request.get_json(silent=True) or {}).get('email', '')).strip().lower()
     if not email or len(email) > 150: return jsonify({'error':'ایمیل معتبر وارد کنید'}), 400
@@ -850,6 +1270,7 @@ def api_forgot_password():
     return jsonify({'success':True, 'message':'اگر این ایمیل ثبت شده باشد، لینک بازیابی ارسال خواهد شد.'})
 
 @app.route('/api/reset-password', methods=['POST'])
+@limiter.limit("10 per hour")
 def api_reset_password():
     data = request.get_json(silent=True) or {}
     user = token_user(str(data.get('token', '')), 'reset', 1800)
@@ -873,6 +1294,7 @@ def verify_email(token):
 
 
 @app.route('/api/resend-verification', methods=['POST'])
+@limiter.limit("5 per hour")
 def resend_verification():
     data = request.get_json(silent=True) or {}
     email = str(data.get('email') or '').strip().lower()
@@ -898,20 +1320,24 @@ def api_me():
             "email":     current_user.email,
             "phone":     current_user.phone,
             "is_admin":  current_user.is_admin,
-            "plan":      getattr(current_user, 'plan', 'free') or 'free'
+            "is_verified": bool(current_user.email_verified),
+            "plan":      active_chat_plan(current_user),
+            "chat_plan": active_chat_plan(current_user),
+            "tutor_plan": active_tutor_plan(current_user),
+            "chat_plan_expires_at":  current_user.chat_plan_expires_at.isoformat() if current_user.chat_plan_expires_at else None,
+            "tutor_plan_expires_at": current_user.tutor_plan_expires_at.isoformat() if current_user.tutor_plan_expires_at else None,
         })
     return jsonify({"logged_in": False})
 
 @app.route("/api/usage")
 @login_required
 def api_usage():
-    ensure_api_meter(db)
-    plan = active_chat_plan(current_user)
     from metering import tier_summary
-    summary=tier_summary(db,current_user.id,'chat',PLAN_CONFIG[plan])
-    return jsonify({'plan':plan,'tutor_plan':active_tutor_tier(current_user),
-      'summary':summary,
-      'tutor_summary':tier_summary(db,current_user.id,'tutor',TUTOR_PLAN_CONFIG[active_tutor_tier(current_user)]),
+    plan = active_chat_plan(current_user)
+    tutor_tier_name = active_tutor_tier(current_user)
+    return jsonify({'plan':plan,'tutor_plan':active_tutor_plan(current_user),
+      'summary':tier_summary(db,current_user.id,'chat',PLAN_CONFIG[plan]),
+      'tutor_summary':tier_summary(db,current_user.id,'tutor',TUTOR_PLAN_CONFIG[tutor_tier_name]),
       'actual_api_usage':api_meter_summary(db,current_user.id),
       'voice_plan':active_voice_tier(current_user),
       'voice_quotas':VOICE_PLANS[active_voice_tier(current_user)]})
@@ -941,6 +1367,7 @@ def admin_panel():
 
 # ── CHAT API ──
 @app.route("/api/transcribe", methods=["POST"])
+@limiter.limit("15 per minute")
 @login_required
 def transcribe_audio():
     """Receive a browser-recorded audio file and return its transcription."""
@@ -1030,6 +1457,7 @@ def _owns_spoken_reply(user_id, spoken):
 
 
 @app.route('/api/tts', methods=['POST'])
+@limiter.limit("20 per minute")
 @login_required
 def text_to_speech():
     if not current_user.email_verified:
@@ -1064,10 +1492,15 @@ def text_to_speech():
         return jsonify(error='Voice generation failed; retry later'),502
 
 @app.route("/api/chat", methods=["POST"])
+@limiter.limit("30 per minute;400 per hour")
 def chat():
+    has_doc = False
     if request.content_type and 'multipart/form-data' in request.content_type:
         user_message = request.form.get("message", "")
-        history      = json.loads(request.form.get("history", "[]"))
+        try:
+            history = json.loads(request.form.get("history", "[]"))
+        except ValueError:
+            return jsonify(error='Invalid conversation history'), 400
         conv_id      = request.form.get("conversation_id")
         image_b64    = None
         image_type   = None
@@ -1087,6 +1520,9 @@ def chat():
             doc          = request.files['document']
             doc_bytes    = doc.read()
             doc_text     = extract_text_from_file(doc_bytes, doc.filename)
+            if len(doc_text) > 12000:
+                doc_text = doc_text[:12000] + "\n[... ادامه فایل به دلیل طولانی بودن کوتاه شد]"
+            has_doc      = True
             user_message = (user_message or "این سند را خلاصه کن") + \
                            f"\n\n[محتوای فایل]:\n{doc_text}"
     else:
@@ -1145,29 +1581,43 @@ def chat():
         # If no exact match, retain supplied history and create a new conversation
         # after the provider succeeds. This is safer than blocking all follow-ups.
 
-    user_memories = get_user_memories(user_id) if user_id else None
+    # Decide HOW to answer before spending anything (see router.py).
+    intent = khr.classify(user_message, history, has_image=bool(image_b64), has_doc=has_doc)
+    switched = False
+    reset_ts = None
+    if intent['level'] == 'canned':
+        reply = khr.canned_reply(user_message) or ''
+        model_used = 'canned'            # free: greetings never reach a paid model
+    else:
+        user_memories = get_user_memories(user_id) if user_id else None
+        try:
+            reply, switched, reset_ts, model_used = smart_chat(
+                system_prompt=build_system_prompt(user_memories, user_message,
+                                                  intent['kind'], intent['level']),
+                history=khr.trim_history(history),
+                user_message=user_message,
+                user_id=user_id,
+                plan=plan,
+                temperature=0.7,
+                image_b64=image_b64,
+                image_type=image_type,
+                intent=intent
+            )
+        except ValueError:
+            return jsonify(error='پیام یا فایل خیلی طولانی است؛ آن را کوتاه‌تر کنید.'), 413
+        except Exception:
+            app.logger.exception('Chat completion failed')
+            return jsonify(error='سرویس گفتگو موقتاً در دسترس نیست. دوباره تلاش کنید.'), 503
 
-    try:
-        reply, switched, reset_ts, model_used = smart_chat(
-            system_prompt=build_system_prompt(user_memories=user_memories),
-            history=history[-10:],
-            user_message=user_message,
-            user_id=user_id,
-            plan=plan,
-            temperature=0.7,
-            image_b64=image_b64,
-            image_type=image_type
-        )
-    except Exception:
-        app.logger.exception('Chat completion failed')
-        return jsonify(error='Chat service temporarily unavailable'), 503
-
+    if model_used == 'limited':
+        return jsonify({'reply': reply, 'limited': True, 'reset_ts': reset_ts,
+                        'switch_notice': False}), 429
+    if model_used == 'error':
+        return jsonify(error=reply), 503
     if not reply:
         reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
-    if model_used == 'limited':
-        return jsonify({'reply':reply,'limited':True,'switch_notice':False}),429
 
-    if user_id and model_used != 'limited':
+    if user_id:
         extract_and_save_memory(user_id, user_message)
 
     response_data = {"reply": reply}
@@ -1200,12 +1650,14 @@ def chat():
 
 # ── PERSONA API ──
 @app.route("/api/persona-chat", methods=["POST"])
+@login_required
+@limiter.limit("20 per minute")
 def persona_chat():
-    data           = request.get_json()
+    data           = request.get_json(silent=True) or {}
     user_message   = data.get("message", "")
     history        = data.get("history", [])
     persona_prompt = data.get("persona_prompt", "")
-    if not isinstance(persona_prompt,str) or len(persona_prompt)>10000 or not isinstance(history,list):
+    if not isinstance(persona_prompt,str) or len(persona_prompt)>2000 or not isinstance(history,list):
         return jsonify(error='Invalid input'),400
     history=[{'role':str(m.get('role')),'content':str(m.get('content',''))[:6000]}
              for m in history[-10:] if isinstance(m,dict) and m.get('role') in ('user','assistant')]
@@ -1273,7 +1725,7 @@ def get_memories():
 @app.route("/api/memories", methods=["POST"])
 @login_required
 def add_memory():
-    data    = request.get_json()
+    data    = request.get_json(silent=True) or {}
     content = data.get("content", "").strip()
     if not content:
         return jsonify({"success": False, "error": "محتوا خالی است"})
@@ -1297,38 +1749,44 @@ def delete_memory(memory_id):
 @login_required
 @admin_required
 def get_users():
-    users = User.query.order_by(User.created_at.desc()).all()
+    users = User.query.order_by(User.created_at.desc()).limit(1000).all()
     return jsonify([{
         "id":         u.id,
         "username":   u.username,
         "email":      u.email,
         "phone":      u.phone,
         "is_admin":   u.is_admin,
+        "is_verified": bool(u.email_verified),
         "plan":       active_chat_plan(u),
-        "tutor_plan": active_tutor_tier(u),
-        "created_at": u.created_at.isoformat()
+        "tutor_plan": active_tutor_plan(u),
+        "plan_expires_at":       u.chat_plan_expires_at.isoformat() if u.chat_plan_expires_at else None,
+        "tutor_plan_expires_at": u.tutor_plan_expires_at.isoformat() if u.tutor_plan_expires_at else None,
+        "created_at": u.created_at.isoformat() if u.created_at else None
     } for u in users])
 
 @app.route("/api/admin/users/<int:user_id>/plan", methods=["POST"])
 @login_required
 @admin_required
 def update_user_plan(user_id):
+    """Body: {plan, kind?('chat'|'tutor'), months? (renew/extend), expires_at? (explicit date),
+    notify?}. plan='free' revokes."""
     data=request.get_json(silent=True) or {}
     plan=str(data.get('plan') or 'free')
     kind=str(data.get('kind') or ('tutor' if plan=='tutor_pro' else 'chat'))
-    if kind=='chat' and plan not in PLAN_CONFIG:return jsonify(success=False,error='Invalid chat plan'),400
-    if kind=='tutor' and plan not in ('free','tutor_pro'):return jsonify(success=False,error='Invalid tutor plan'),400
-    user=User.query.get_or_404(user_id)
-    if kind=='chat':user.chat_plan=plan
-    else:user.tutor_plan=plan
-    # Optional expiration date; no automatic revocation or involuntary plan edits.
-    if 'expires_at' in data:
-        try: expires=datetime.fromisoformat(data['expires_at']) if data['expires_at'] else None
+    user=db.session.get(User,user_id)
+    if not user: return jsonify(success=False,error='not found'),404
+    expires=None
+    if data.get('expires_at'):
+        try: expires=datetime.fromisoformat(str(data['expires_at']))
         except (TypeError,ValueError):return jsonify(success=False,error='Invalid expiration'),400
-        if kind=='chat':user.chat_plan_expires_at=expires
-        else:user.tutor_plan_expires_at=expires
-    db.session.commit()
-    return jsonify(success=True,chat_plan=active_chat_plan(user),tutor_plan=active_tutor_tier(user))
+    try:
+        grant_plan(user,kind,plan,months=data.get('months') or 1,actor=current_user.username,
+                   expires_at=expires,notify=data.get('notify',True) is not False)
+    except ValueError as exc:
+        return jsonify(success=False,error=str(exc)),400
+    return jsonify(success=True,chat_plan=active_chat_plan(user),tutor_plan=active_tutor_plan(user),
+                   chat_plan_expires_at=user.chat_plan_expires_at.isoformat() if user.chat_plan_expires_at else None,
+                   tutor_plan_expires_at=user.tutor_plan_expires_at.isoformat() if user.tutor_plan_expires_at else None)
 
 @app.route("/api/admin/knowledge", methods=["GET"])
 @login_required
@@ -1346,7 +1804,7 @@ def get_examples():
 @login_required
 @admin_required
 def add_dialect():
-    data      = request.get_json()
+    data      = request.get_json(silent=True) or {}
     knowledge = load_knowledge()
     knowledge["dari_dialect"].append({
         "correct": data["correct"],
@@ -1370,7 +1828,7 @@ def delete_dialect(index):
 @login_required
 @admin_required
 def add_culture():
-    data      = request.get_json()
+    data      = request.get_json(silent=True) or {}
     knowledge = load_knowledge()
     knowledge["cultural_customs"].append({
         "topic":   data["topic"],
@@ -1393,7 +1851,7 @@ def delete_culture(index):
 @login_required
 @admin_required
 def add_example():
-    data     = request.get_json()
+    data     = request.get_json(silent=True) or {}
     examples = load_examples()
     examples["conversation_examples"].append({
         "user":      data["user"],
@@ -1747,6 +2205,7 @@ def build_tutor_system_prompt(subject, topic_title, topic_desc, chat_history_len
 
 # Step 3: durable per-topic history shared by text and realtime voice.
 # The old TutorProgress.chat_history remains untouched for compatibility.
+@_once
 def _ensure_lesson_storage():
     with db.engine.begin() as conn:
         conn.execute(sql_text("""CREATE TABLE IF NOT EXISTS tutor_lesson_histories (
@@ -1843,7 +2302,7 @@ def get_tutor_lesson_history(subject, topic_key):
 @login_required
 def start_topic():
     """Student starts or resumes a topic."""
-    data       = request.get_json()
+    data       = request.get_json(silent=True) or {}
     subject    = data.get("subject")
     topic_key  = data.get("topic_key")
     level      = data.get("level", 1)
@@ -1878,13 +2337,17 @@ def start_topic():
         "history": _lesson_history(current_user.id, subject, topic_key)
     })
 @app.route("/api/tutor/chat", methods=["POST"])
+@limiter.limit("30 per minute")
 @login_required
 def tutor_chat_new():
-    data      = request.get_json()
+    data      = request.get_json(silent=True) or {}
     subject   = data.get("subject")
     topic_key = data.get("topic_key")
-    level     = int(data.get("level", 1))
+    try: level = int(data.get("level", 1))
+    except (TypeError, ValueError): return jsonify({"error": "سطح نامعتبر"}), 400
     message   = data.get("message", "")
+    if not isinstance(message, str) or not message.strip() or len(message) > 6000:
+        return jsonify({"error": "پیام نامعتبر یا خیلی طولانی است"}), 400
 
     if subject not in CURRICULUM:
         return jsonify({"error": "مضمون پیدا نشد"}), 400
@@ -1913,7 +2376,7 @@ def tutor_chat_new():
     try:
         reply, is_limited, reset_ts = smart_tutor_chat(
             system_prompt=system_prompt,
-            history=chat_history[-20:],
+            history=chat_history,
             user_message=message,
             user_id=current_user.id,
             plan=plan,
@@ -1947,7 +2410,7 @@ def tutor_chat_new():
 @login_required
 def complete_topic():
     """Student marks a topic as complete."""
-    data      = request.get_json()
+    data      = request.get_json(silent=True) or {}
     subject   = data.get("subject")
     topic_key = data.get("topic_key")
     level     = int(data.get("level", 1))
@@ -1985,6 +2448,7 @@ def complete_topic():
     })
 
 # Step 4: server-scored quizzes; never trust browser-submitted scores or answer keys.
+@_once
 def _quiz_claim_table():
     with db.engine.begin() as conn:
         conn.execute(sql_text("""CREATE TABLE IF NOT EXISTS tutor_quiz_claims (
@@ -1994,6 +2458,7 @@ def _quiz_claim_table():
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"""))
 
 @app.route("/api/tutor/generate-quiz", methods=["POST"])
+@limiter.limit("10 per minute")
 @login_required
 def generate_quiz():
     data = request.get_json(silent=True) or {}
@@ -2013,10 +2478,11 @@ def generate_quiz():
 {{"questions":[{{"q":"سوال","options":["الف","ب","ج","د"],"correct":0,"explanation":"دلیل"}}]}}
 مقدار correct عدد صحیح 0 تا 3 باشد. دقیقا {count} سوال بساز."""
     try:
-        answer,_,_,_=_metered_completion('tutor','Generate valid educational quiz JSON.',
+        answer,_,_,answer_model=_metered_completion('tutor','Generate valid educational quiz JSON.',
             [{'role':'user','content':prompt}],current_user.id,
-            active_tutor_tier(current_user),max_output=2400)
-        if not answer:return jsonify(error='Tutor allowance exhausted'),429
+            active_tutor_tier(current_user),max_output=2400,level='standard',
+            json_mode=True,intent_label='quiz')
+        if not answer:return jsonify(error='Tutor allowance exhausted' if answer_model=='limited' else 'سرویس موقتاً در دسترس نیست'),(429 if answer_model=='limited' else 502)
         raw=answer.replace('```json','').replace('```','').strip()
         questions = json.loads(raw)['questions']
         if len(questions) != count: raise ValueError('Wrong question count')
@@ -2041,6 +2507,7 @@ def generate_quiz():
         return jsonify(error='خطا در ساخت کوییز؛ دوباره تلاش کنید'), 502
 
 @app.route('/api/tutor/submit-quiz', methods=['POST'])
+@limiter.limit("20 per minute")
 @login_required
 def submit_quiz():
     data = request.get_json(silent=True) or {}
@@ -2118,11 +2585,14 @@ def check_practice():
     return jsonify(correct=answer == q['correct'], correct_index=q['correct'], explanation=q['explanation'],xp_earned=0)
 
 @app.route("/api/tutor/placement-test", methods=["POST"])
+@limiter.limit("5 per minute")
 @login_required
 def placement_test():
     """Generates a placement test for a subject."""
-    data    = request.get_json()
+    data    = request.get_json(silent=True) or {}
     subject = data.get("subject")
+    if subject not in CURRICULUM:
+        return jsonify({"error": "مضمون پیدا نشد"}), 400
 
     subject_data = CURRICULUM.get(subject, {})
     subject_name = subject_data.get('name', subject)
@@ -2151,10 +2621,11 @@ def placement_test():
 }}"""
 
     try:
-        answer,_,_,_=_metered_completion('tutor','Generate a placement-test JSON object.',
+        answer,_,_,answer_model=_metered_completion('tutor','Generate a placement-test JSON object.',
             [{'role':'user','content':prompt}],current_user.id,
-            active_tutor_tier(current_user),max_output=2000)
-        if not answer:return jsonify(error='Tutor allowance exhausted'),429
+            active_tutor_tier(current_user),max_output=2000,level='standard',
+            json_mode=True,intent_label='placement')
+        if not answer:return jsonify(error='Tutor allowance exhausted' if answer_model=='limited' else 'سرویس موقتاً در دسترس نیست'),(429 if answer_model=='limited' else 502)
         raw = answer.strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
         return jsonify(json.loads(raw))
@@ -2166,7 +2637,7 @@ def placement_test():
 @login_required
 def placement_result():
     """Calculates recommended level from placement test answers."""
-    data    = request.get_json()
+    data    = request.get_json(silent=True) or {}
     subject = data.get("subject")
     answers = data.get("answers", [])  # list of {correct: bool, level: int}
 
@@ -2271,6 +2742,7 @@ def live_voice_page():
 
 # Durable voice-session mapping and turn-level deduplication. Additive schema only.
 # Created lazily so existing user data and conversation tables are untouched.
+@_once
 def _ensure_voice_storage():
     with db.engine.begin() as connection:
         connection.execute(sql_text("""CREATE TABLE IF NOT EXISTS voice_save_sessions (
@@ -2297,6 +2769,7 @@ def _voice_now():
 def _voice_day():
     return _voice_now().date().isoformat()
 
+@_once
 def _ensure_voice_quota_storage():
     with db.engine.begin() as conn:
         conn.execute(sql_text('''CREATE TABLE IF NOT EXISTS voice_daily_usage (
@@ -2443,6 +2916,7 @@ def voice_quota_finish():
 
 
 @app.route("/api/voice/session", methods=["POST"])
+@limiter.limit("10 per hour")
 @login_required
 def create_live_voice_session():
     if not current_user.email_verified:
@@ -2545,6 +3019,7 @@ def create_live_voice_session():
 
 
 @app.route("/api/voice/save", methods=["POST"])
+@limiter.limit("30 per minute")
 @login_required
 def save_live_voice_transcript():
     """Idempotent, session-bound voice saves, safe to retry after lost responses."""
@@ -2648,4 +3123,4 @@ def save_live_voice_transcript():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=os.getenv("FLASK_DEBUG", "").lower() == "true")
