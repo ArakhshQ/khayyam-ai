@@ -303,15 +303,21 @@ def _timing_finish(resp):
             resp.headers['Server-Timing'] = f'total;dur={total:.0f}, db;dur={dbm:.0f}, queries;desc="{dbn}"'
         rid = getattr(g, 'usage_rid', None)
         if rid:
-            db.session.execute(sql_text('UPDATE api_usage_requests SET total_ms=:t, db_ms=:d, db_queries=:n '
-                                        'WHERE request_id=:r'),
-                               {'t': int(total), 'd': int(dbm), 'n': int(dbn), 'r': rid})
-            db.session.commit()
+            # Written from a background thread on its own connection, so the visitor never
+            # waits for this bookkeeping (each database round trip can cost 100+ ms).
+            engine = db.engine
+            vals = {'t': int(total), 'd': int(dbm), 'n': int(dbn), 'r': rid}
+
+            def _store_timing():
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(sql_text('UPDATE api_usage_requests SET total_ms=:t, db_ms=:d, '
+                                              'db_queries=:n WHERE request_id=:r'), vals)
+                except Exception:
+                    pass
+            threading.Thread(target=_store_timing, daemon=True).start()
     except Exception:
-        try:
-            db.session.rollback()
-        except Exception:
-            pass
+        pass
     return resp
 
 @login_manager.user_loader
