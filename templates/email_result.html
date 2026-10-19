@@ -6,13 +6,16 @@
   <meta name="viewport"
         content="width=device-width, initial-scale=1">
   <title>تأیید حساب — خیام</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/auth.css">
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/khayyam.css?v=3">
+  <link rel="stylesheet" href="/static/auth.css?v=3">
 </head>
 <body class="auth-body">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mark" viewBox="0 0 40 40"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="9" y="9" width="22" height="22" rx="1.5"/><rect x="9" y="9" width="22" height="22" rx="1.5" transform="rotate(45 20 20)"/><circle cx="20" cy="20" r="4.4"/></g></symbol></svg>
+  <div class="auth-bg" aria-hidden="true"></div>
   <nav class="auth-nav">
     <a href="/" class="logo">
-      <span class="logo-mark">خ</span>
+      <svg class="logo-mark" aria-hidden="true"><use href="#mark"/></svg>
       <span class="logo-text">خیام</span>
     </a>
     <a href="/login" class="auth-nav-link">ورود</a>
@@ -22,7 +25,7 @@
     <section class="auth-card">
       <div class="auth-heading">
         <div class="auth-icon" aria-hidden="true">
-          {% if success %}✓{% else %}!{% endif %}
+          {% if success %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>{% else %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/></svg>{% endif %}
         </div>
         <h1>
           {% if success %}

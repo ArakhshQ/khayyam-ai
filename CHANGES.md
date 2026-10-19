@@ -59,3 +59,9 @@ Call-us: pricing page form (guests and users), `call_requests` table, admin tab 
 "paid - activate plan" which grants the plan and emails the customer), optional email alert to you.
 
 Token system: see `TOKEN_SYSTEM.md`.
+
+## Redesign (emerald, cream and gold)
+- New design system: static/khayyam.css, fonts.css (self-hosted Vazirmatn and Amiri, no Google Fonts), ui.js.
+- Homepage with scroll animations, login/register/email pages, new chat page, new tutor classroom page (interface only).
+- Old tutor stays at /tutor/classic until the new lesson engine is built.
+- pricing, profile, live voice and admin recolored through static/style.css variables; emoji removed.

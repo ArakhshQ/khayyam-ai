@@ -1,23 +1,22 @@
 /* ── KHAYYAM AI — SHARED STYLES ── */
-@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap');
 
 /* ── CSS VARIABLES ── */
 :root {
-  --bg:          #0f0e0c;
-  --surface:     #1a1814;
-  --surface2:    #232018;
-  --border:      #2e2a22;
-  --gold:        #c9a84c;
-  --gold-dim:    #8a6e2f;
-  --gold-glow:   rgba(201,168,76,0.12);
-  --text:        #ede8df;
-  --text-dim:    #7a7060;
-  --user-bg:     #1e2a1a;
-  --user-border: #3a5c2e;
-  --green:       #2a4a20;
-  --green-lt:    #7abf6a;
-  --red:         #4a2020;
-  --red-lt:      #bf6a6a;
+  --bg:          #04130f;
+  --surface:     #0a2b23;
+  --surface2:    #0f3a2f;
+  --border:      #1f4a3e;
+  --gold:        #d8b25a;
+  --gold-dim:    #a9822f;
+  --gold-glow:   rgba(216,178,90,0.14);
+  --text:        #f5eedb;
+  --text-dim:    #93aca1;
+  --user-bg:     #0f3a2f;
+  --user-border: #167a60;
+  --green:       #0f3a2f;
+  --green-lt:    #6fd3a8;
+  --red:         #3d1f1b;
+  --red-lt:      #f0a79d;
   --radius:      14px;
   --header-h:    56px;
   --bottom-nav-h:64px;
@@ -30,21 +29,11 @@ html { scroll-behavior: smooth; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'Vazirmatn', sans-serif;
+  font-family: 'Vazirmatn', Tahoma, sans-serif;
   direction: rtl;
   -webkit-font-smoothing: antialiased;
 }
 
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background-image:
-    repeating-linear-gradient(45deg, transparent, transparent 40px, rgba(201,168,76,0.015) 40px, rgba(201,168,76,0.015) 41px),
-    repeating-linear-gradient(-45deg, transparent, transparent 40px, rgba(201,168,76,0.015) 40px, rgba(201,168,76,0.015) 41px);
-  pointer-events: none;
-  z-index: 0;
-}
 
 /* ── HEADER ── */
 header {
@@ -52,7 +41,7 @@ header {
   top: 0; left: 0; right: 0;
   z-index: 100;
   height: var(--header-h);
-  background: rgba(26,24,20,0.95);
+  background: rgba(7,29,23,0.95);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -104,7 +93,7 @@ header {
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-dim);
-  font-family: 'Vazirmatn', sans-serif;
+  font-family: 'Vazirmatn', Tahoma, sans-serif;
   font-size: 13px;
   cursor: pointer;
   text-decoration: none;
@@ -125,7 +114,7 @@ header {
 
 .nav-cta {
   background: var(--gold);
-  color: #0f0e0c;
+  color: #1d1606;
   font-weight: 700;
   font-size: 13px;
   padding: 7px 16px;
@@ -160,8 +149,8 @@ header {
 /* ── BUTTONS ── */
 .btn-primary {
   background: var(--gold);
-  color: #0f0e0c;
-  font-family: 'Vazirmatn', sans-serif;
+  color: #1d1606;
+  font-family: 'Vazirmatn', Tahoma, sans-serif;
   font-weight: 700;
   font-size: 15px;
   padding: 13px 28px;
@@ -190,7 +179,7 @@ header {
 .btn-secondary {
   background: transparent;
   color: var(--text);
-  font-family: 'Vazirmatn', sans-serif;
+  font-family: 'Vazirmatn', Tahoma, sans-serif;
   font-weight: 500;
   font-size: 15px;
   padding: 13px 28px;
@@ -217,7 +206,7 @@ header {
   border: 1px solid var(--border);
   border-radius: 9px;
   color: var(--text);
-  font-family: 'Vazirmatn', sans-serif;
+  font-family: 'Vazirmatn', Tahoma, sans-serif;
   font-size: 15px;
   outline: none;
   transition: border-color 0.2s;
@@ -301,7 +290,7 @@ header {
   bottom: 0; left: 0; right: 0;
   z-index: 100;
   height: var(--bottom-nav-h);
-  background: rgba(26,24,20,0.98);
+  background: rgba(7,29,23,0.98);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
@@ -330,7 +319,7 @@ header {
   border: none;
   background: transparent;
   cursor: pointer;
-  font-family: 'Vazirmatn', sans-serif;
+  font-family: 'Vazirmatn', Tahoma, sans-serif;
 }
 
 .bottom-tab .tab-icon { font-size: 20px; line-height: 1; }
@@ -399,3 +388,7 @@ header {
   .nav-btn { padding: 5px 8px; font-size: 11px; }
   .nav-cta { padding: 5px 8px; font-size: 11px; }
 }
+
+/* ── brand mark (svg) and tab-bar icons ── */
+svg.logo-mark { width: 30px; height: 30px; border: none; border-radius: 0; color: var(--gold); flex: none; }
+.tab-icon svg { display: block; margin: 0 auto; }

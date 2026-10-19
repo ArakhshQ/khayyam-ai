@@ -16,8 +16,8 @@
         left: '50%', transform: 'translate(-50%, -12px)',
         zIndex: '99999', maxWidth: 'min(92vw, 440px)',
         padding: '11px 18px', borderRadius: '12px',
-        background: '#25221c', color: '#f4ede0',
-        border: '1px solid #b99a55',
+        background: '#0f3a2f', color: '#fbf7ec',
+        border: '1px solid #d8b25a',
         boxShadow: '0 8px 28px rgba(0,0,0,.35)',
         fontFamily: 'Vazirmatn, Tahoma, sans-serif',
         fontSize: '13px', textAlign: 'center', direction: 'rtl',
@@ -28,7 +28,7 @@
     }
     clearTimeout(toastTimer);
     toast.textContent = text;
-    toast.style.borderColor = isError ? '#d77575' : '#b99a55';
+    toast.style.borderColor = isError ? '#d77575' : '#d8b25a';
     toast.style.opacity = '1';
     toast.style.transform = 'translate(-50%, 0)';
     toastTimer = setTimeout(() => {
@@ -43,7 +43,9 @@
   const setButton = active => {
     const el = button(); if (!el) return;
     el.classList.toggle('recording', active);
-    el.textContent = active ? '⏹' : '🎙';
+    el.innerHTML = active
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></g></svg>';
     el.title = active ? 'پایان گفتگوی زنده' : 'شروع گفتگوی زنده';
     el.setAttribute('aria-label', el.title);
   };

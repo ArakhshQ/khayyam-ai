@@ -6,9 +6,9 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>قیمت‌گذاری — خیام</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/fonts.css?v=1">
+  <link rel="stylesheet" href="/static/style.css?v=3">
   <style>
     body { min-height:100vh; }
 
@@ -27,7 +27,7 @@
     }
     .nav-btn:hover { background:var(--surface2); color:var(--text); }
     .nav-btn.gold { border-color:var(--gold-dim); color:var(--gold); }
-    .nav-btn.gold:hover { background:var(--gold); color:#0f0e0c; }
+    .nav-btn.gold:hover { background:var(--gold); color:#1d1606; }
 
     .page {
       max-width:1060px; margin:0 auto;
@@ -38,7 +38,7 @@
     .page-top { text-align:center; margin-bottom:60px; }
     .page-badge {
       display:inline-block;
-      background:rgba(201,168,76,0.1); border:1px solid var(--gold-dim);
+      background:rgba(216,178,90,0.1); border:1px solid var(--gold-dim);
       color:var(--gold); font-size:12px; font-weight:500;
       padding:4px 16px; border-radius:99px; margin-bottom:20px;
     }
@@ -63,7 +63,7 @@
       font-size:14px; cursor:pointer; transition:all 0.2s;
     }
     .plan-tab:hover { border-color:var(--gold-dim); color:var(--text); }
-    .plan-tab.active { border-color:var(--gold); background:rgba(201,168,76,0.1); color:var(--gold); font-weight:700; }
+    .plan-tab.active { border-color:var(--gold); background:rgba(216,178,90,0.1); color:var(--gold); font-weight:700; }
 
     /* ── PLANS GRID ── */
     .plans-grid {
@@ -95,7 +95,7 @@
 
     .popular-tag {
       position:absolute; top:16px; left:16px;
-      background:var(--gold); color:#0f0e0c;
+      background:var(--gold); color:#1d1606;
       font-size:10px; font-weight:700;
       padding:3px 10px; border-radius:99px;
     }
@@ -151,7 +151,7 @@
     }
     .cta-free:hover { border-color:var(--gold-dim); color:var(--gold); }
     .cta-paid {
-      background:var(--gold); border:none; color:#0f0e0c;
+      background:var(--gold); border:none; color:#1d1606;
     }
     .cta-paid:hover { background:#e0bb60; transform:translateY(-1px); }
     .cta-premium {
@@ -184,7 +184,7 @@
     .call-form input:focus, .call-form select:focus, .call-form textarea:focus { border-color:var(--gold-dim); }
     .call-form .row { display:grid; grid-template-columns:2fr 1fr; gap:10px; }
     .call-form button {
-      padding:13px; background:var(--gold); color:#0f0e0c; border:none; border-radius:9px;
+      padding:13px; background:var(--gold); color:#1d1606; border:none; border-radius:9px;
       font-weight:700; font-size:14px; cursor:pointer; font-family:'Vazirmatn',sans-serif;
     }
     .call-form button:disabled { opacity:.6; cursor:not-allowed; }
@@ -209,7 +209,7 @@
 
 <nav>
   <a href="/" class="logo">
-    <div class="logo-mark">خ</div>
+    <svg class="logo-mark" viewBox="0 0 40 40" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="9" y="9" width="22" height="22" rx="1.500"/><rect x="9" y="9" width="22" height="22" rx="1.500" transform="rotate(45 20 20)"/><circle cx="20" cy="20" r="4.400"/></g></svg>
     <span class="logo-text">خیام</span>
   </a>
   <div class="nav-right">
@@ -225,7 +225,7 @@
 <div class="page">
 
   <div class="page-top">
-    <div class="page-badge">💎 پلان‌های خیام</div>
+    <div class="page-badge">پلان‌های خیام</div>
     <h1>هر سطحی که باشی<br/><span>پلانی برای تو داریم</span></h1>
     <p>از رایگان شروع کن. هر وقت خواستی ارتقا بده.</p>
   </div>
@@ -233,8 +233,8 @@
   <p style="text-align:center;color:var(--text-dim);font-size:12px;margin-bottom:24px">پیش‌نمایش پلان‌های پیشنهادی؛ قیمت‌ها و سهمیه‌های جدید پس از فعال‌سازی در سرور اعمال می‌شوند.</p>
 <!-- TABS -->
   <div class="plan-tabs">
-    <button class="plan-tab active" onclick="switchTab('general', this)">💬 چت عمومی</button>
-    <button class="plan-tab" onclick="switchTab('tutor', this)">📚 استاد خیام</button>
+    <button class="plan-tab active" onclick="switchTab('general', this)">چت عمومی</button>
+    <button class="plan-tab" onclick="switchTab('tutor', this)">استاد خیام</button>
   </div>
 
   <!-- GENERAL PLANS -->
@@ -446,7 +446,7 @@
     <div style="text-align:center;margin-bottom:40px;">
       <div style="display:inline-block;background:var(--surface);border:1px solid var(--border);
         border-radius:12px;padding:16px 24px;font-size:13px;color:var(--text-dim);line-height:1.8;max-width:500px;">
-        🎓 پلان استاد حرفه‌ای فقط برای بخش تدریس است؛ سهمیه صوتی آن جداگانه محاسبه می‌شود و با سهمیه چت عمومی جمع نمی‌شود.<br/>
+        پلان استاد حرفه‌ای فقط برای بخش تدریس است؛ سهمیه صوتی آن جداگانه محاسبه می‌شود و با سهمیه چت عمومی جمع نمی‌شود.<br/>
         برای استفاده از چت عمومی، یکی از پلان‌های چت را انتخاب کنید.
       </div>
     </div>
@@ -516,10 +516,10 @@
 
 <nav class="bottom-nav">
   <div class="bottom-nav-inner">
-    <a href="/" class="bottom-tab"><span class="tab-icon">🏠</span><span class="tab-label">خانه</span></a>
-    <a href="/chat" class="bottom-tab"><span class="tab-icon">💬</span><span class="tab-label">چت</span></a>
-    <a href="/tutor" class="bottom-tab"><span class="tab-icon">📚</span><span class="tab-label">بیاموز</span></a>
-    <a href="/profile" class="bottom-tab"><span class="tab-icon">👤</span><span class="tab-label">پروفایل</span></a>
+    <a href="/" class="bottom-tab"><span class="tab-icon"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v8.500a.5.5 0 0 1-.5.500H15v-5.500H9V20H4.500a.5.5 0 0 1-.5-.5V11Z"/></g></svg></span><span class="tab-label">خانه</span></a>
+    <a href="/chat" class="bottom-tab"><span class="tab-icon"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.600 7.100L4 20l1-4.200A8 8 0 1 1 20 12Z"/></g></svg></span><span class="tab-label">چت</span></a>
+    <a href="/tutor" class="bottom-tab"><span class="tab-icon"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m2.500 9 9.500-4.500L21.500 9 12 13.500 2.500 9Z"/><path d="M6.500 11.200v4.300c0 1.200 2.500 2.600 5.500 2.600s5.500-1.400 5.500-2.600v-4.300"/></g></svg></span><span class="tab-label">بیاموز</span></a>
+    <a href="/profile" class="bottom-tab"><span class="tab-icon"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.500" r="3.600"/><path d="M4.500 20c.9-3.600 3.900-5.500 7.500-5.500s6.600 1.900 7.500 5.500"/></g></svg></span><span class="tab-label">پروفایل</span></a>
   </div>
 </nav>
 

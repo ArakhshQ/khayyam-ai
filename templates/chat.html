@@ -1,490 +1,176 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="theme-color" content="#0a2b23">
   <script src="/static/main.js?v=2"></script>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>خیام</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <title>گفتگو — خیام</title>
+  <link rel="preload" href="/static/fonts/vazirmatn-var.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/khayyam.css?v=3">
+  <link rel="stylesheet" href="/static/chat.css?v=3">
   <script src="/static/vendor/marked.min.js"></script>
   <script src="/static/vendor/purify.min.js"></script>
-  <style>
-    body {
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    header {
-      position: relative; z-index: 20;
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0 16px; height: 56px;
-      background: var(--surface); border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-    }
-
-    .header-left { display: flex; align-items: center; gap: 10px; }
-
-    .sidebar-toggle {
-      width: 34px; height: 34px;
-      border: 1px solid var(--border); border-radius: 8px;
-      background: transparent; color: var(--text-dim);
-      cursor: pointer; display: flex; align-items: center; justify-content: center;
-      font-size: 16px; transition: all 0.2s;
-    }
-    .sidebar-toggle:hover { background: var(--surface2); color: var(--text); }
-
-    .nav-links { display: flex; gap: 4px; }
-    #upload-menu div:hover { background:var(--surface2); }
-    .nav-btn {
-      padding: 5px 12px; border-radius: 7px;
-      border: 1px solid var(--border); background: transparent;
-      color: var(--text-dim); font-family: 'Vazirmatn', sans-serif;
-      font-size: 13px; cursor: pointer; text-decoration: none; transition: all 0.2s;
-    }
-    .nav-btn:hover { background: var(--surface2); color: var(--text); }
-    .nav-btn.active { border-color: var(--gold-dim); color: var(--gold); }
-
-    .new-chat-btn {
-      padding: 5px 14px; border-radius: 7px;
-      border: 1px solid var(--gold-dim); background: transparent;
-      color: var(--gold); font-family: 'Vazirmatn', sans-serif;
-      font-size: 13px; cursor: pointer; transition: all 0.2s; white-space: nowrap;
-    }
-    .new-chat-btn:hover { background: var(--gold); color: #0f0e0c; }
-
-    .app-body {
-      position: relative; z-index: 1;
-      flex: 1; display: flex; overflow: hidden;
-    }
-
-    /* ── SIDEBAR ── */
-    .sidebar {
-      width: 260px; background: var(--surface);
-      border-left: 1px solid var(--border);
-      display: flex; flex-direction: column; flex-shrink: 0;
-      transition: width 0.25s ease, opacity 0.25s ease; overflow: hidden;
-    }
-    .sidebar.collapsed { width: 0; opacity: 0; border-left: none; }
-
-    .sidebar-header {
-      padding: 14px 14px 10px; border-bottom: 1px solid var(--border);
-      font-size: 11px; font-weight: 500; color: var(--text-dim);
-      letter-spacing: 0.08em; text-transform: uppercase; flex-shrink: 0;
-    }
-
-    .sidebar-list { flex: 1; overflow-y: auto; padding: 8px; }
-    .sidebar-list::-webkit-scrollbar { width: 3px; }
-    .sidebar-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-    .sidebar-empty {
-      padding: 32px 16px; text-align: center;
-      font-size: 13px; color: var(--text-dim); line-height: 1.8;
-    }
-
-    .conv-item {
-      padding: 9px 12px; border-radius: 9px; cursor: pointer;
-      border: 1px solid transparent; margin-bottom: 3px;
-      transition: all 0.15s; display: flex; align-items: center;
-      justify-content: space-between; gap: 8px;
-    }
-    .conv-item:hover { background: var(--surface2); border-color: var(--border); }
-    .conv-item.active { background: var(--surface2); border-color: var(--gold-dim); }
-
-    .conv-title {
-      font-size: 13px; color: var(--text);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;
-    }
-    .conv-date { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
-
-    .conv-delete {
-      width: 20px; height: 20px; border-radius: 4px; border: none;
-      background: transparent; color: var(--text-dim); cursor: pointer;
-      display: none; align-items: center; justify-content: center;
-      font-size: 13px; flex-shrink: 0; transition: all 0.15s;
-    }
-    .conv-item:hover .conv-delete { display: flex; }
-    .conv-delete:hover { background: #3a1a1a; color: #e06060; }
-
-    /* ── MAIN CHAT ── */
-    .chat-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-
-    .chat-wrapper {
-      flex: 1; overflow-y: auto;
-      padding: 32px 16px; scroll-behavior: smooth;
-    }
-    .chat-wrapper::-webkit-scrollbar { width: 4px; }
-    .chat-wrapper::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-    .messages {
-      max-width: 760px; margin: 0 auto;
-      display: flex; flex-direction: column; gap: 24px;
-    }
-
-    .welcome {
-      text-align: center; padding: 60px 20px;
-      animation: fadeUp 0.6s ease both;
-    }
-    .welcome-symbol { font-size: 44px; margin-bottom: 18px; display: block; }
-    .welcome h1 { font-size: 26px; font-weight: 700; color: var(--gold); margin-bottom: 10px; }
-    .welcome p { font-size: 14px; color: var(--text-dim); line-height: 1.8; max-width: 380px; margin: 0 auto 28px; }
-
-    .suggestion-grid {
-      display: grid; grid-template-columns: 1fr 1fr;
-      gap: 8px; max-width: 440px; margin: 0 auto;
-    }
-    .suggestion {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 10px; padding: 10px 14px; font-size: 13px;
-      color: var(--text-dim); cursor: pointer; text-align: right;
-      transition: all 0.2s; font-family: 'Vazirmatn', sans-serif; line-height: 1.6;
-    }
-    .suggestion:hover { border-color: var(--gold-dim); color: var(--text); background: var(--surface2); }
-
-    .message { display: flex; gap: 10px; animation: fadeUp 0.3s ease both; }
-    .message.user { flex-direction: row-reverse; }
-
-    .avatar {
-      width: 32px; height: 32px; border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 14px; flex-shrink: 0; margin-top: 2px;
-    }
-    .avatar.ai { background: var(--surface2); border: 1px solid var(--gold-dim); color: var(--gold); font-weight: 700; }
-    .avatar.user { background: var(--user-bg); border: 1px solid var(--user-border); }
-
-    .bubble {
-      max-width: 78%; padding: 12px 16px;
-      border-radius: 14px; font-size: 15px; line-height: 1.8;
-    }
-    .message.ai .bubble {
-      background: var(--surface); border: 1px solid var(--border);
-      border-top-right-radius: 4px;
-    }
-    .message.user .bubble {
-      background: var(--user-bg); border: 1px solid var(--user-border);
-      border-top-left-radius: 4px;
-    }
-
-    /* markdown */
-    .bubble p { margin-bottom: 10px; }
-    .bubble p:last-child { margin-bottom: 0; }
-    .bubble ul, .bubble ol { padding-right: 20px; margin-bottom: 10px; }
-    .bubble li { margin-bottom: 4px; line-height: 1.7; }
-    .bubble h1, .bubble h2, .bubble h3 {
-      font-size: 15px; font-weight: 700;
-      color: var(--gold); margin: 14px 0 6px;
-    }
-    .bubble h1:first-child,
-    .bubble h2:first-child,
-    .bubble h3:first-child { margin-top: 0; }
-    .bubble strong { color: var(--text); font-weight: 700; }
-    .bubble code {
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 4px; padding: 1px 6px;
-      font-size: 13px; direction: ltr; display: inline-block;
-    }
-    .bubble pre {
-      background: #0d1117; border: 1px solid var(--border);
-      border-radius: 8px; padding: 12px; overflow-x: auto;
-      margin: 10px 0; direction: ltr; text-align: left;
-    }
-    .bubble pre code {
-      background: none; border: none; padding: 0;
-      font-size: 13px; color: #e6edf3; display: block;
-    }
-    .bubble a { color: var(--gold); }
-    .bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
-    .bubble blockquote {
-      border-right: 3px solid var(--gold-dim);
-      padding: 6px 12px; margin: 8px 0; color: var(--text-dim);
-    }
-
-    /* typing */
-    .typing-dots { display: flex; gap: 5px; align-items: center; padding: 4px 0; }
-    .typing-dots span {
-      width: 7px; height: 7px; background: var(--gold-dim);
-      border-radius: 50%; animation: bounce 1.2s infinite;
-    }
-    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-    @keyframes bounce {
-      0%,60%,100% { transform: translateY(0); opacity: 0.4; }
-      30% { transform: translateY(-6px); opacity: 1; }
-    }
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(12px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
-    /* ── INPUT ── */
-    .input-area {
-      position: relative; 
-      padding: 14px 20px 18px;
-      background: var(--surface); border-top: 1px solid var(--border);
-      flex-shrink: 0;
-    }
-
-    .file-preview {
-      max-width: 760px; margin: 0 auto 8px;
-      display: none; align-items: center; gap: 8px;
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 8px; padding: 6px 12px;
-      font-size: 13px; color: var(--text-dim);
-    }
-    .file-preview.visible { display: flex; }
-    .file-preview-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .file-preview-remove {
-      cursor: pointer; color: var(--text-dim);
-      background: none; border: none; font-size: 14px; padding: 0 4px;
-    }
-    .file-preview-remove:hover { color: #e06060; }
-    .img-preview {
-      width: 36px; height: 36px; border-radius: 6px;
-      object-fit: cover; flex-shrink: 0;
-    }
-
-    .input-box {
-      max-width: 760px; margin: 0 auto;
-      display: flex; align-items: flex-end; gap: 10px;
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 14px; padding: 10px 12px; transition: border-color 0.2s;
-    }
-    .input-box:focus-within { border-color: var(--gold-dim); }
-
-    .upload-btn {
-      width: 34px; height: 34px; border-radius: 8px;
-      border: 1px solid var(--border); background: transparent;
-      color: var(--text-dim); font-size: 16px; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; transition: all 0.2s; position: relative;
-    }
-    .upload-btn:hover { background: var(--surface2); color: var(--text); }
-    .upload-btn input[type=file] {
-      position: absolute; inset: 0; opacity: 0;
-      cursor: pointer; width: 100%; height: 100%;
-    }
-
-    #user-input {
-      flex: 1; background: transparent; border: none; outline: none;
-      color: var(--text); font-family: 'Vazirmatn', sans-serif;
-      font-size: 15px; resize: none; max-height: 160px;
-      line-height: 1.6; direction: rtl;
-    }
-    #user-input::placeholder { color: var(--text-dim); }
-
-    #send-btn {
-      width: 34px; height: 34px; border-radius: 8px; border: none;
-      background: var(--gold); color: #0f0e0c; font-size: 16px;
-      cursor: pointer; display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; transition: all 0.2s;
-    }
-    #send-btn:hover { background: #e0bb60; transform: scale(1.05); }
-    #send-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
-
-    .voice-action-btn {
-      width:34px; height:34px; border-radius:8px; border:1px solid var(--border);
-      background:transparent; color:var(--text); font-size:16px; cursor:pointer;
-      display:flex; align-items:center; justify-content:center; flex-shrink:0;
-      transition:all .15s;
-    }
-    .voice-action-btn:hover { background:var(--surface); border-color:var(--gold-dim); }
-    .voice-action-btn.recording { background:rgba(220,60,60,.14); border-color:#d9534f; color:#e66; animation:voicePulse 1.2s infinite; }
-    .voice-action-btn:disabled { opacity:.55; cursor:wait; }
-    .voice-status { max-width:700px; margin:7px auto 0; min-height:0; font-size:12px; color:var(--text-dim); text-align:center; }
-    .voice-status:empty { display:none; }
-    .voice-status.error { color:#e57373; }
-    @keyframes voicePulse { 50% { box-shadow:0 0 0 4px rgba(220,60,60,.12); } }
-
-    .input-hint { text-align: center; font-size: 11px; color: var(--text-dim); margin-top: 7px; }
-
-    .limit-notice {
-      text-align: center; font-size: 12px; color: var(--gold);
-      background: rgba(201,168,76,0.08); border: 1px solid var(--gold-dim);
-      border-radius: 8px; padding: 8px 14px; margin: 0 auto;
-      max-width: 500px;
-    }
-
-    /* ── MOBILE ── */
-    @media (max-width: 640px) {
-      .sidebar {
-        position: fixed; top: 56px; right: 0; bottom: 64px;
-        z-index: 50; width: 260px;
-      }
-      .sidebar.collapsed { width: 0; }
-      .nav-links { display: none; }
-      .suggestion-grid { grid-template-columns: 1fr; }
-      .bubble { max-width: 88%; font-size: 14px; }
-      .new-chat-btn { font-size: 12px; padding: 5px 10px; }
-      .input-area { padding: 10px 12px 14px; }
-      .input-box { max-width: 100%; }
-      .app-body { padding-bottom: 64px; }
-      .input-area { position: fixed; bottom: 64px; left: 0; right: 0; }
-      .chat-wrapper { padding-bottom: 160px; }
-    }
-  
-    .speak-reply-btn {
-      display:inline-flex; align-items:center; gap:6px; margin-top:9px;
-      padding:5px 10px; border-radius:8px; border:1px solid var(--gold-dim);
-      background:rgba(201,168,76,0.07); color:var(--gold);
-      font-family:'Vazirmatn',sans-serif; font-size:12px; cursor:pointer;
-      transition:background .2s, border-color .2s;
-    }
-    .speak-reply-btn:hover { background:rgba(201,168,76,0.15); border-color:var(--gold); }
-    .speak-reply-btn:disabled { opacity:.65; cursor:wait; }
-    .speak-reply-btn .speak-icon { font-size:14px; }
-    .voice-disclosure { text-align:center; font-size:10px; color:var(--text-dim); margin-top:4px; }
-</style>
 </head>
-<body>
+<body class="app on-light">
 
-<header>
-  <div class="header-left">
-    <button class="sidebar-toggle" onclick="toggleSidebar()" title="تاریخچه">☰</button>
-    <a href="/" class="logo">
-      <div class="logo-mark">خ</div>
-      <span class="logo-text">خیام</span>
-    </a>
-  </div>
-  <nav class="nav-links">
-    <a href="/chat" class="nav-btn active">چت</a>
-    <a href="/tutor" class="nav-btn">بیاموز</a>
-    <a href="/pricing" class="nav-btn">قیمت‌ها</a>
-  </nav>
-  <div id="auth-buttons" style="display:flex; gap:6px;">
-    <a href="/login" class="nav-btn">ورود</a>
-    <a href="/register" class="nav-btn" style="border-color:var(--gold-dim);color:var(--gold);">ثبت‌نام</a>
-  </div>
-  <div id="user-menu" style="display:none; align-items:center; gap:6px;">
-    <a href="/profile" class="nav-btn" id="nav-username">پروفایل</a>
-    <a href="/logout" class="nav-btn">خروج</a>
-  </div>
-  <button class="new-chat-btn" onclick="newChat()">+ چت جدید</button>
-</header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 40 40"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="9" y="9" width="22" height="22" rx="1.5"/><rect x="9" y="9" width="22" height="22" rx="1.5" transform="rotate(45 20 20)"/><circle cx="20" cy="20" r="4.4"/></g></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12Z"/><path d="M9 11h6M9 14.5h3.5"/></g></symbol>
+  <symbol id="i-cap" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 9 9.5-4.5L21.5 9 12 13.5 2.5 9Z"/><path d="M6.5 11.2v4.3c0 1.2 2.5 2.6 5.5 2.6s5.5-1.4 5.5-2.6v-4.3M21.5 9v5"/></g></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></g></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.5 20c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5"/></g></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.2V4.5h7.7l9 9a1.8 1.8 0 0 1 0 2.5l-5.2 5.2a1.8 1.8 0 0 1-2.5 0l-9-9Z"/><circle cx="8" cy="9" r="1.2"/></g></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.5h6V7M6 7l1 13h10l1-13"/></g></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15V6.2C5 5.5 5.5 5 6.2 5H15"/></g></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6.5 9H3.5v6h3L11 19V5Z"/><path d="M15 9a4.2 4.2 0 0 1 0 6M17.8 6.5a8 8 0 0 1 0 11"/></g></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-4.5 3.5 3L16 12l4 4"/></g></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5h7L18.5 8.5v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1Z"/><path d="M13.5 3.5v5h5M8.5 13h7M8.5 16.5h5"/></g></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1.3-2h6.4l1.3 2h2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5v-9Z"/><circle cx="12" cy="13" r="3.4"/></g></symbol>
+  <symbol id="i-spin" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 1 1-8.5 8.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur=".9s" repeatCount="indefinite"/></path></symbol>
+</svg>
 
-<div class="app-body">
+<div class="app-shell">
 
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-header">تاریخچه گفتگوها</div>
+  <aside class="sidebar" id="sidebar" aria-label="تاریخچه و پیمایش">
+    <div class="side-top">
+      <a href="/" class="logo" aria-label="خیام"><svg class="logo-mark" aria-hidden="true"><use href="#mark"/></svg><span class="logo-text">خیام</span></a>
+      <button class="icon-btn side-close" type="button" onclick="toggleSidebar()" aria-label="بستن منو"><svg><use href="#i-close"/></svg></button>
+    </div>
+
+    <button class="new-chat" type="button" onclick="newChat()"><svg><use href="#i-plus"/></svg>گفتگوی تازه</button>
+
+    <nav class="side-nav" aria-label="بخش‌ها">
+      <a class="side-link active" href="/chat" aria-current="page"><svg><use href="#i-chat"/></svg>گفتگو</a>
+      <a class="side-link" href="/tutor"><svg><use href="#i-cap"/></svg>استاد</a>
+      <a class="side-link" href="/voice"><svg><use href="#i-mic"/></svg>صدای زنده</a>
+      <a class="side-link" href="/profile"><svg><use href="#i-user"/></svg>پروفایل</a>
+      <a class="side-link" href="/pricing"><svg><use href="#i-tag"/></svg>قیمت‌ها</a>
+    </nav>
+
+    <div class="side-label">گفتگوهای اخیر</div>
     <div class="sidebar-list" id="sidebar-list">
-      <div class="sidebar-empty" id="sidebar-empty">
-        هنوز گفتگویی ندارید.<br/>یک چت جدید شروع کنید.
+      <div class="sidebar-empty" id="sidebar-empty">هنوز گفتگویی ندارید.<br>پرسش اول را بنویسید.</div>
+    </div>
+
+    <div class="side-user">
+      <div id="auth-buttons">
+        <a href="/login" class="side-btn">ورود</a>
+        <a href="/register" class="side-btn gold">ثبت‌نام</a>
+      </div>
+      <div id="user-menu" style="display:none">
+        <div class="side-user-name"><span class="av" id="nav-avatar"></span><span id="nav-username">پروفایل</span></div>
+        <a href="/profile" class="side-btn">پروفایل</a>
+        <a href="/logout" class="side-btn">خروج</a>
       </div>
     </div>
   </aside>
+  <div class="scrim" id="scrim" onclick="toggleSidebar()"></div>
 
-  <div class="chat-main">
+  <main class="chat-main">
+    <div class="chat-top">
+      <button class="icon-btn" type="button" onclick="toggleSidebar()" aria-label="تاریخچه گفتگوها"><svg><use href="#i-menu"/></svg></button>
+      <span class="chat-title">گفتگو</span>
+      <span class="spacer"></span>
+    </div>
+
     <div class="chat-wrapper" id="chat-wrapper">
-      <div class="messages" id="messages">
-        <div class="welcome" id="welcome">
-          <span class="welcome-symbol">🕌</span>
-          <h1>سلام! خوش آمدید</h1>
-          <p>من خیام هستم — دستیار هوشمند افغانی شما.</p>
-          <div class="suggestion-grid">
-            <button class="suggestion" onclick="useSuggestion(this)">تاریخچه کابل را برایم بگو</button>
-            <button class="suggestion" onclick="useSuggestion(this)">یک شعر دری برایم بنویس</button>
-            <button class="suggestion" onclick="useSuggestion(this)">غذاهای مشهور افغانستان کدام‌اند؟</button>
-            <button class="suggestion" onclick="useSuggestion(this)">ولایات افغانستان را نام ببر</button>
-          </div>
-        </div>
-      </div>
+      <div class="messages" id="messages"></div>
     </div>
 
     <div class="input-area">
-      <div class="file-preview" id="file-preview">
-        <img class="img-preview" id="img-preview" style="display:none"/>
-        <span class="file-preview-name" id="file-preview-name"></span>
-        <button class="file-preview-remove" onclick="clearFile()">✕</button>
-      </div>
-      <div class="input-box">
-        <button class="upload-btn" id="upload-trigger" title="آپلود" onclick="showUploadMenu()">
-  📎
-</button>
+      <div class="composer">
+        <div class="file-preview" id="file-preview">
+          <img class="img-preview" id="img-preview" alt="" style="display:none">
+          <span class="file-preview-name" id="file-preview-name"></span>
+          <button class="file-preview-remove" type="button" onclick="clearFile()" aria-label="حذف پیوست"><svg><use href="#i-close"/></svg></button>
+        </div>
 
-<!-- upload menu -->
-<div id="upload-menu" style="
-  display:none; position:absolute; bottom:70px; right:20px;
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:12px; padding:8px; z-index:50;
-  box-shadow:0 8px 32px rgba(0,0,0,0.4); min-width:180px;">
-  <div onclick="triggerFileInput('image-input')" style="
-    display:flex; align-items:center; gap:10px;
-    padding:10px 12px; border-radius:8px; cursor:pointer;
-    font-size:13px; color:var(--text); transition:background 0.15s;">
-    🖼️ <span>انتخاب تصویر</span>
-  </div>
-  <div onclick="triggerFileInput('doc-input')" style="
-    display:flex; align-items:center; gap:10px;
-    padding:10px 12px; border-radius:8px; cursor:pointer;
-    font-size:13px; color:var(--text); transition:background 0.15s;">
-    📄 <span>انتخاب سند (PDF، Word)</span>
-  </div>
-  <div onclick="triggerCamera()" style="
-    display:flex; align-items:center; gap:10px;
-    padding:10px 12px; border-radius:8px; cursor:pointer;
-    font-size:13px; color:var(--text); transition:background 0.15s;">
-    📷 <span>عکس با دوربین</span>
-  </div>
+        <div class="upload-menu" id="upload-menu" role="menu">
+          <button class="upload-item" type="button" role="menuitem" onclick="triggerFileInput('image-input')"><svg><use href="#i-image"/></svg>انتخاب تصویر</button>
+          <button class="upload-item" type="button" role="menuitem" onclick="triggerFileInput('doc-input')"><svg><use href="#i-doc"/></svg>انتخاب سند (PDF یا Word)</button>
+          <button class="upload-item" type="button" role="menuitem" onclick="triggerCamera()"><svg><use href="#i-camera"/></svg>عکس با دوربین</button>
+        </div>
+        <input type="file" id="image-input" accept="image/*" hidden onchange="handleFileSelect(this, 'image')">
+        <input type="file" id="doc-input" accept=".pdf,.doc,.docx,.txt" hidden onchange="handleFileSelect(this, 'document')">
+        <input type="file" id="camera-input" accept="image/*" capture="environment" hidden onchange="handleFileSelect(this, 'image')">
+
+        <div class="input-box">
+          <button class="tool-btn" id="upload-trigger" type="button" title="پیوست" aria-label="پیوست" onclick="showUploadMenu()"><svg><use href="#i-plus"/></svg></button>
+          <textarea id="user-input" rows="1" placeholder="از خیام بپرسید…" aria-label="پیام شما"></textarea>
+          <button type="button" id="voice-record-btn" class="tool-btn voice-action-btn" onclick="openLiveVoiceChat()" title="گفتگوی صوتی زنده" aria-label="گفتگوی صوتی زنده"><svg><use href="#i-mic"/></svg></button>
+          <button id="send-btn" type="button" onclick="sendMessage()" aria-label="ارسال"><svg><use href="#i-send"/></svg></button>
+        </div>
+        <p class="input-hint">Enter برای ارسال، Shift+Enter برای سطر تازه</p>
+        <p id="voice-status" class="voice-status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;"></p>
+      </div>
+    </div>
+  </main>
 </div>
 
-<!-- hidden inputs -->
-<input type="file" id="image-input" accept="image/*"
-  style="display:none" onchange="handleFileSelect(this, 'image')"/>
-<input type="file" id="doc-input" accept=".pdf,.doc,.docx,.txt"
-  style="display:none" onchange="handleFileSelect(this, 'document')"/>
-<input type="file" id="camera-input" accept="image/*" capture="environment"
-  style="display:none" onchange="handleFileSelect(this, 'image')"/>
-        <textarea id="user-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
-        <button type="button" id="voice-record-btn" class="voice-action-btn" onclick="openLiveVoiceChat()" title="گفتگوی صوتی زنده" aria-label="گفتگوی صوتی زنده">🎙</button>
-        <button id="send-btn" onclick="sendMessage()">↑</button>
-      </div>
-      <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
-      <p id="voice-status" class="voice-status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;"></p>
+<div class="toast" id="toast" role="status"></div>
+
+<template id="welcome-tpl">
+  <div class="welcome" id="welcome">
+    <svg class="w-mark" aria-hidden="true"><use href="#mark"/></svg>
+    <h1>سلام، من خیام هستم</h1>
+    <p>هر پرسشی دارید به دری بپرسید.</p>
+    <div class="suggestion-grid">
+      <button class="suggestion" type="button" onclick="useSuggestion(this)">تاریخچهٔ کابل را برایم بگو</button>
+      <button class="suggestion" type="button" onclick="useSuggestion(this)">یک شعر دری برایم بنویس</button>
+      <button class="suggestion" type="button" onclick="useSuggestion(this)">غذاهای مشهور افغانستان کدام‌اند؟</button>
+      <button class="suggestion" type="button" onclick="useSuggestion(this)">ولایات افغانستان را نام ببر</button>
     </div>
   </div>
-
-</div>
-
-<nav class="bottom-nav">
-  <div class="bottom-nav-inner">
-    <a href="/" class="bottom-tab">
-      <span class="tab-icon">🏠</span>
-      <span class="tab-label">خانه</span>
-    </a>
-    <a href="/chat" class="bottom-tab active">
-      <span class="tab-icon">💬</span>
-      <span class="tab-label">چت</span>
-    </a>
-    <a href="/tutor" class="bottom-tab">
-      <span class="tab-icon">📚</span>
-      <span class="tab-label">بیاموز</span>
-    </a>
-    <a href="/profile" class="bottom-tab">
-      <span class="tab-icon">👤</span>
-      <span class="tab-label">پروفایل</span>
-    </a>
-  </div>
-</nav>
+</template>
 
 <script>
   marked.setOptions({ breaks: true, gfm: true });
+
+  const ICON = id => `<svg aria-hidden="true"><use href="#${id}"/></svg>`;
 
   // ── STATE ──
   let currentUser       = null;
   let currentConvId     = null;
   let history           = [];
   let isLoading         = false;
-  let sidebarOpen       = true;
+  let sidebarOpen       = window.innerWidth > 860;
   let switchNoticeShown = false;
   let selectedFile      = null;
   let selectedFileType  = null;
 
+  const isMobile = () => window.innerWidth <= 860;
+
+  function toast(text) {
+    const el = document.getElementById('toast');
+    el.textContent = text; el.classList.add('show');
+    clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 3200);
+  }
+
+  function showWelcome() {
+    const messagesEl = document.getElementById('messages');
+    messagesEl.innerHTML = '';
+    messagesEl.appendChild(document.getElementById('welcome-tpl').content.cloneNode(true));
+  }
+
+  function applySidebar() {
+    document.getElementById('sidebar').classList.toggle('collapsed', !sidebarOpen);
+    document.getElementById('scrim').classList.toggle('show', sidebarOpen && isMobile());
+  }
+
   // ── INIT ──
   async function init() {
+    showWelcome();
+    applySidebar();
+
     const res  = await fetch('/api/me');
     const data = await res.json();
 
@@ -494,14 +180,13 @@
       const menu = document.getElementById('user-menu');
       menu.style.display = 'flex';
       document.getElementById('nav-username').textContent = data.username;
+      document.getElementById('nav-avatar').textContent = (data.username || '').trim().charAt(0).toUpperCase();
 
       if (data.is_admin) {
         const adminLink       = document.createElement('a');
         adminLink.href        = '/admin';
-        adminLink.className   = 'nav-btn';
-        adminLink.textContent = '⚙️ ادمین';
-        adminLink.style.borderColor = 'var(--gold-dim)';
-        adminLink.style.color       = 'var(--gold)';
+        adminLink.className   = 'side-btn gold';
+        adminLink.textContent = 'مدیریت';
         menu.appendChild(adminLink);
       }
 
@@ -509,13 +194,18 @@
       await loadUsageState();
     } else {
       document.getElementById('sidebar-empty').innerHTML =
-        'برای ذخیره گفتگوها <a href="/login" style="color:var(--gold)">وارد شوید</a>';
+        'برای نگه داشتن گفتگوها <a href="/login">وارد شوید</a>.';
     }
 
     const params = new URLSearchParams(window.location.search);
     const convId = params.get('conv');
     if (convId && currentUser) {
       await loadConversation(parseInt(convId));
+    } else if (params.get('q')) {
+      const box = document.getElementById('user-input');
+      box.value = params.get('q').slice(0, 500);
+      box.dispatchEvent(new Event('input'));
+      box.focus();
     }
   }
 
@@ -527,24 +217,13 @@
       const data = await res.json();
       if (!data.summary || data.summary.length === 0) return;
 
-      const now   = Date.now() / 1000; // current time in unix seconds
+      const now   = Date.now() / 1000;
       const tier1 = data.summary[0];
-      const tier2 = data.summary.length > 1 ? data.summary[1] : null;
-
-      // check if tier1 reset has passed — if so treat as fresh
       const tier1Reset = tier1?.reset_ts || 0;
       const tier1Exhausted = tier1 && tier1.remaining <= 0 && now < tier1Reset;
-
-      const tier2Reset = tier2?.reset_ts || 0;
-      const tier2Exhausted = tier2 && tier2.remaining <= 0 && now < tier2Reset;
-
-      // if mini is exhausted and window has not reset yet
-      // mark notice as already shown so no popup on first message
-      if (tier1Exhausted) {
-        switchNoticeShown = true;
-      }
-
-      console.log(`Usage: tier1 remaining=${tier1?.remaining} exhausted=${tier1Exhausted} | tier2 remaining=${tier2?.remaining} exhausted=${tier2Exhausted}`);
+      // If the first model's allowance is already used up, the "switched model"
+      // notice would be noise on the first message.
+      if (tier1Exhausted) switchNoticeShown = true;
     } catch (e) {
       console.log('usage state load failed', e);
     }
@@ -553,7 +232,7 @@
   // ── SIDEBAR ──
   function toggleSidebar() {
     sidebarOpen = !sidebarOpen;
-    document.getElementById('sidebar').classList.toggle('collapsed', !sidebarOpen);
+    applySidebar();
   }
 
   async function loadSidebar() {
@@ -564,7 +243,7 @@
       const convs = await res.json();
 
       if (convs.length === 0) {
-        list.innerHTML = '<div class="sidebar-empty">هنوز گفتگویی ندارید.<br/>یک چت جدید شروع کنید.</div>';
+        list.innerHTML = '<div class="sidebar-empty">هنوز گفتگویی ندارید.<br>پرسش اول را بنویسید.</div>';
         return;
       }
 
@@ -575,13 +254,13 @@
         item.innerHTML = `
           <span class="conv-title">${escapeHtml(conv.title)}</span>
           <span class="conv-date">${formatDate(conv.updated_at)}</span>
-          <button class="conv-delete" onclick="deleteConv(event, ${conv.id})" title="حذف">✕</button>
+          <button class="conv-delete" type="button" onclick="deleteConv(event, ${conv.id})" title="حذف" aria-label="حذف گفتگو">${ICON('i-trash')}</button>
         `;
         item.addEventListener('click', () => loadConversation(conv.id));
         list.appendChild(item);
       });
     } catch (err) {
-      list.innerHTML = '<div class="sidebar-empty">خطا در بارگذاری</div>';
+      list.innerHTML = '<div class="sidebar-empty">بارگذاری نشد. صفحه را تازه کنید.</div>';
     }
   }
 
@@ -605,18 +284,17 @@
       await loadSidebar();
       scrollToBottom();
 
-      if (window.innerWidth <= 640) {
-        sidebarOpen = false;
-        document.getElementById('sidebar').classList.add('collapsed');
-      }
+      if (isMobile()) { sidebarOpen = false; applySidebar(); }
     } catch (err) {
       console.error('Failed to load conversation', err);
+      toast('این گفتگو باز نشد. دوباره تلاش کنید.');
     }
   }
 
   async function deleteConv(e, id) {
     e.stopPropagation();
     if (isLoading) return;
+    if (!confirm('این گفتگو حذف شود؟')) return;
     await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
     if (currentConvId === id) newChat();
     else await loadSidebar();
@@ -628,19 +306,9 @@
     currentConvId = null;
     window.history.replaceState(null, '', '/chat');
     history       = [];
-    document.getElementById('messages').innerHTML = `
-      <div class="welcome" id="welcome">
-        <span class="welcome-symbol">🕌</span>
-        <h1>سلام! خوش آمدید</h1>
-        <p>من خیام هستم — دستیار هوشمند افغانی شما.</p>
-        <div class="suggestion-grid">
-          <button class="suggestion" onclick="useSuggestion(this)">تاریخچه کابل را برایم بگو</button>
-          <button class="suggestion" onclick="useSuggestion(this)">یک شعر دری برایم بنویس</button>
-          <button class="suggestion" onclick="useSuggestion(this)">غذاهای مشهور افغانستان کدام‌اند؟</button>
-          <button class="suggestion" onclick="useSuggestion(this)">ولایات افغانستان را نام ببر</button>
-        </div>
-      </div>`;
+    showWelcome();
     loadSidebar();
+    if (isMobile()) { sidebarOpen = false; applySidebar(); }
     document.getElementById('user-input').focus();
   }
 
@@ -664,13 +332,13 @@
   function appendBubble(role, text) {
     const messagesEl = document.getElementById('messages');
     const welcome = document.getElementById('welcome');
-    if (welcome) welcome.style.display = 'none';
+    if (welcome) welcome.remove();
 
     const div = document.createElement('div');
     div.className = `message ${role}`;
     const avatar = document.createElement('div');
     avatar.className = `avatar ${role}`;
-    avatar.textContent = role === 'ai' ? 'خ' : '👤';
+    avatar.innerHTML = role === 'ai' ? ICON('mark') : ICON('i-user');
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
@@ -679,13 +347,30 @@
     if (role === 'ai') {
       content.innerHTML = renderMarkdown(text);
       bubble.appendChild(content);
+
+      const actions = document.createElement('div');
+      actions.className = 'msg-actions';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button'; copyBtn.className = 'act';
+      copyBtn.innerHTML = ICON('i-copy') + '<span>رونوشت</span>';
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(content.innerText);
+          copyBtn.innerHTML = ICON('i-check') + '<span>رونوشت شد</span>'; copyBtn.classList.add('on');
+          setTimeout(() => { copyBtn.innerHTML = ICON('i-copy') + '<span>رونوشت</span>'; copyBtn.classList.remove('on'); }, 1800);
+        } catch (_) { toast('رونوشت انجام نشد.'); }
+      });
+      actions.appendChild(copyBtn);
+
       const speakBtn = document.createElement('button');
       speakBtn.type = 'button';
-      speakBtn.className = 'speak-reply-btn';
-      speakBtn.innerHTML = '<span class="speak-icon">🔊</span><span>شنیدن پاسخ</span>';
+      speakBtn.className = 'act speak-reply-btn';
+      speakBtn.innerHTML = ICON('i-speaker') + '<span>شنیدن پاسخ</span>';
       speakBtn.title = 'خواندن پاسخ با صدای تولیدشده توسط هوش مصنوعی';
       speakBtn.addEventListener('click', () => speakReply(content.innerText, speakBtn));
-      bubble.appendChild(speakBtn);
+      actions.appendChild(speakBtn);
+      bubble.appendChild(actions);
     } else {
       content.textContent = text;
       bubble.appendChild(content);
@@ -705,7 +390,8 @@
   function resetSpeakButton(button) {
     if (!button) return;
     button.disabled = false;
-    button.innerHTML = '<span class="speak-icon">🔊</span><span>شنیدن پاسخ</span>';
+    button.classList.remove('on');
+    button.innerHTML = ICON('i-speaker') + '<span>شنیدن پاسخ</span>';
   }
 
   async function speakReply(text, button) {
@@ -730,7 +416,7 @@
     }
 
     button.disabled = true;
-    button.innerHTML = '<span class="speak-icon">⏳</span><span>در حال ساخت صدا...</span>';
+    button.innerHTML = ICON('i-spin') + '<span>در حال ساخت صدا…</span>';
     khayyamActiveButton = button;
 
     try {
@@ -758,19 +444,20 @@
       };
       await khayyamAudio.play();
       button.disabled = false;
-      button.innerHTML = '<span class="speak-icon">⏹</span><span>توقف صدا</span>';
+      button.classList.add('on');
+      button.innerHTML = ICON('i-stop') + '<span>توقف صدا</span>';
     } catch (error) {
       console.error('Khayyam TTS error:', error);
       resetSpeakButton(button);
       khayyamActiveButton = null;
-      alert(error.message || 'پخش صدا ناموفق بود. لطفاً دوباره تلاش کنید.');
+      toast(error.message || 'پخش صدا ناموفق بود. دوباره تلاش کنید.');
     }
   }
 
   function showTyping() {
     const messagesEl = document.getElementById('messages');
     const welcome    = document.getElementById('welcome');
-    if (welcome) welcome.style.display = 'none';
+    if (welcome) welcome.remove();
 
     const div      = document.createElement('div');
     div.className  = 'message ai';
@@ -778,11 +465,11 @@
 
     const avatar       = document.createElement('div');
     avatar.className   = 'avatar ai';
-    avatar.textContent = 'خ';
+    avatar.innerHTML   = ICON('mark');
 
     const bubble     = document.createElement('div');
     bubble.className = 'bubble';
-    bubble.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    bubble.innerHTML = '<div class="typing-dots" aria-label="در حال نوشتن"><span></span><span></span><span></span></div>';
 
     div.appendChild(avatar);
     div.appendChild(bubble);
@@ -830,37 +517,34 @@
   function clearFile() {
     selectedFile     = null;
     selectedFileType = null;
-    document.getElementById('file-input').value  = '';
+    ['image-input', 'doc-input', 'camera-input'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
     document.getElementById('file-preview').classList.remove('visible');
     document.getElementById('img-preview').src   = '';
     document.getElementById('img-preview').style.display = 'none';
   }
 
-  // ── SEND MESSAGE ──
+  // ── UPLOAD MENU ──
   function showUploadMenu() {
-    const menu = document.getElementById('upload-menu');
-    const isVisible = menu.style.display === 'block';
-    menu.style.display = isVisible ? 'none' : 'block';
+    document.getElementById('upload-menu').classList.toggle('open');
   }
-
   function triggerFileInput(id) {
-    document.getElementById('upload-menu').style.display = 'none';
+    document.getElementById('upload-menu').classList.remove('open');
     document.getElementById(id).click();
   }
-
   function triggerCamera() {
-    document.getElementById('upload-menu').style.display = 'none';
+    document.getElementById('upload-menu').classList.remove('open');
     document.getElementById('camera-input').click();
   }
-
-  // close menu when clicking outside
   document.addEventListener('click', (e) => {
     const menu    = document.getElementById('upload-menu');
     const trigger = document.getElementById('upload-trigger');
-    if (menu && !menu.contains(e.target) && e.target !== trigger) {
-      menu.style.display = 'none';
-    }
+    if (menu && !menu.contains(e.target) && !trigger.contains(e.target)) menu.classList.remove('open');
   });
+
+  // ── SEND MESSAGE ──
   async function sendMessage() {
     const input = document.getElementById('user-input');
     const text  = input.value.trim();
@@ -873,7 +557,7 @@
     input.value = '';
     input.style.height = 'auto';
 
-    const displayText = text || (selectedFileType === 'image' ? '📷 تصویر' : '📄 فایل');
+    const displayText = text || (selectedFileType === 'image' ? 'تصویر' : 'فایل');
     appendBubble('user', displayText);
     showTyping();
     // The backend appends the new user message itself. Do not send it again as
@@ -931,9 +615,9 @@
           tomorrow.setDate(tomorrow.getDate() + 1);
           const isTomorrow = resetDate.toDateString() === tomorrow.toDateString();
           const dayStr     = isTomorrow ? 'فردا ساعت ' : 'امروز ساعت ';
-          notice.textContent = `⚡ خیام در حال تنظیم است — بازنشینی ${dayStr}${timeStr}`;
+          notice.textContent = `خیام در حال تنظیم است. بازنشانی ${dayStr}${timeStr}`;
         } else {
-          notice.textContent = '⚡ خیام در حال تنظیم است — حالت استاندارد فعال شد';
+          notice.textContent = 'خیام در حال تنظیم است. حالت استاندارد فعال شد.';
         }
         document.getElementById('messages').appendChild(notice);
         scrollToBottom();
@@ -999,9 +683,10 @@
   inputEl.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
+  window.addEventListener('resize', applySidebar);
 
   init();
 </script>
-<script src="/static/voice_inline.js?v=6"></script>
+<script src="/static/voice_inline.js?v=7"></script>
 </body>
 </html>

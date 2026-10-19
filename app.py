@@ -1460,6 +1460,10 @@ def figures_page():
 def tutor_page():
     return render_template("tutor.html")
 
+@app.route("/tutor/classic")
+def tutor_classic_page():
+    return render_template("tutor_classic.html")
+
 @app.route("/admin")
 @login_required
 @admin_required

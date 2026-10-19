@@ -1,275 +1,83 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="theme-color" content="#04130f">
   <script src="/static/main.js?v=2"></script>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>ثبت‌نام — خیام</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/auth.css">
-  <style>
-  body {
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
-
-  nav {
-    position: relative;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 24px;
-    height: 56px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-  }
-
-  .nav-link {
-    color: var(--text-dim);
-    text-decoration: none;
-    font-size: 13px;
-    padding: 5px 12px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    transition: all 0.2s;
-  }
-  .nav-link:hover { color: var(--text); background: var(--surface2); }
-
-  .page {
-    position: relative;
-    z-index: 1;
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 40px 16px 100px;
-  }
-
-  .card {
-    width: 100%;
-    max-width: 440px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 36px 32px;
-    animation: fadeUp 0.5s ease both;
-  }
-
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(16px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  .card-top { text-align: center; margin-bottom: 28px; }
-  .card-icon { font-size: 36px; display: block; margin-bottom: 12px; }
-  .card-top h1 { font-size: 22px; font-weight: 700; color: var(--gold); margin-bottom: 6px; }
-  .card-top p  { font-size: 13px; color: var(--text-dim); line-height: 1.7; }
-
-  .form-group { margin-bottom: 16px; }
-  .form-label {
-    display: block;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-dim);
-    margin-bottom: 7px;
-    letter-spacing: 0.05em;
-  }
-
-  .form-input {
-    width: 100%;
-    padding: 11px 14px;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    color: var(--text);
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 14px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .form-input:focus { border-color: var(--gold-dim); }
-  .form-input::placeholder { color: var(--text-dim); }
-
-  .method-toggle {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 12px;
-  }
-
-  .method-btn {
-    flex: 1;
-    padding: 8px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text-dim);
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .method-btn.active {
-    border-color: var(--gold);
-    background: rgba(201,168,76,0.1);
-    color: var(--gold);
-    font-weight: 500;
-  }
-
-  .password-hint {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-top: 5px;
-    padding-right: 4px;
-  }
-
-  .submit-btn {
-    width: 100%;
-    padding: 13px;
-    background: var(--gold);
-    color: #0f0e0c;
-    border: none;
-    border-radius: 9px;
-    font-family: 'Vazirmatn', sans-serif;
-    font-size: 15px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 0.2s;
-    margin-top: 4px;
-  }
-  .submit-btn:hover { background: #e0bb60; transform: translateY(-1px); }
-  .submit-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; transform: none; }
-
-  .error-box {
-    background: var(--red);
-    border: 1px solid #6a2a2a;
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 13px;
-    color: var(--red-lt);
-    margin-bottom: 16px;
-    display: none;
-  }
-
-  .success-box {
-    background: var(--green);
-    border: 1px solid #3a6a2a;
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 13px;
-    color: var(--green-lt);
-    margin-bottom: 16px;
-    display: none;
-  }
-
-  .footer-link {
-    text-align: center;
-    margin-top: 20px;
-    font-size: 13px;
-    color: var(--text-dim);
-  }
-  .footer-link a { color: var(--gold); text-decoration: none; }
-  .footer-link a:hover { text-decoration: underline; }
-
-  @media (max-width: 600px) {
-    nav { padding: 0 14px; }
-    .card { padding: 28px 18px; }
-  }
-</style>
+  <title>ساخت حساب — خیام</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/khayyam.css?v=3">
+  <link rel="stylesheet" href="/static/auth.css?v=3">
 </head>
-<body>
-  <nav>
+<body class="auth-body">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mark" viewBox="0 0 40 40"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="9" y="9" width="22" height="22" rx="1.5"/><rect x="9" y="9" width="22" height="22" rx="1.5" transform="rotate(45 20 20)"/><circle cx="20" cy="20" r="4.4"/></g></symbol></svg>
+  <div class="auth-bg" aria-hidden="true"></div>
+
+  <nav class="auth-nav">
     <a href="/" class="logo">
-      <div class="logo-mark">خ</div>
+      <svg class="logo-mark" aria-hidden="true"><use href="#mark"/></svg>
       <span class="logo-text">خیام</span>
     </a>
-    <a href="/login" class="nav-link">ورود</a>
+    <a href="/login" class="auth-nav-link">ورود</a>
   </nav>
 
-  <div class="page">
-    <div class="card">
-      <div class="card-top">
-        <span class="card-icon">✨</span>
-        <h1>ثبت‌نام در خیام</h1>
-        <p>حساب رایگان بسازید و گفتگوهای خود را ذخیره کنید</p>
+  <main class="auth-main">
+    <section class="auth-card">
+      <div class="auth-heading">
+        <div class="auth-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.5 20c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5"/></svg>
+        </div>
+        <h1>ساخت حساب</h1>
+        <p>حساب رایگان بسازید و گفتگوهای خود را نگه دارید.</p>
       </div>
 
-      <div id="error-box" class="error-box"></div>
-      <div id="success-box" class="success-box"></div>
+      <div id="error-box" class="auth-notice error" role="alert"></div>
+      <div id="success-box" class="auth-notice success" role="status"></div>
 
-      <div class="form-group">
-        <label class="form-label">نام کاربری</label>
-        <input class="form-input" type="text" id="username" placeholder="مثال: ahmad123"/>
-      </div>
+      <form id="register-form" novalidate>
+        <div class="auth-field">
+          <label class="auth-label" for="username">نام کاربری</label>
+          <input class="auth-input" type="text" id="username" autocomplete="username" dir="ltr" placeholder="ahmad123" maxlength="40">
+        </div>
+        <div class="auth-field">
+          <label class="auth-label" for="email">ایمیل</label>
+          <input class="auth-input" type="email" id="email" autocomplete="email" required placeholder="example@gmail.com" dir="ltr">
+        </div>
+        <div class="auth-field">
+          <label class="auth-label" for="password">رمز عبور</label>
+          <input class="auth-input" type="password" id="password" autocomplete="new-password" placeholder="دست‌کم ۸ حرف">
+          <span class="auth-hint">دست‌کم ۸ حرف؛ ترکیب حرف و عدد امن‌تر است.</span>
+        </div>
+        <div class="auth-field">
+          <label class="auth-label" for="password2">تکرار رمز عبور</label>
+          <input class="auth-input" type="password" id="password2" autocomplete="new-password" placeholder="رمز عبور را دوباره بنویسید">
+        </div>
+        <button class="auth-button" id="submit-btn" type="submit">ساخت حساب</button>
+      </form>
 
-      <div class="form-group">
-        <label class="form-label">ایمیل</label>
-        <input class="form-input" type="email" id="email" required placeholder="example@gmail.com" style="direction:ltr"/>
-      </div>
+      <div class="auth-footer">قبلاً حساب ساخته‌اید؟ <a href="/login">وارد شوید</a></div>
+    </section>
+  </main>
 
-      <div class="form-group">
-        <label class="form-label">رمز عبور</label>
-        <input class="form-input" type="password" id="password" placeholder="حداقل ۸ حرف"/>
-        <div class="password-hint">رمز عبور باید حداقل ۸ حرف داشته باشد</div>
-      </div>
-
-      <div class="form-group">
-        <label class="form-label">تکرار رمز عبور</label>
-        <input class="form-input" type="password" id="password2" placeholder="رمز عبور را دوباره وارد کنید"/>
-      </div>
-
-      <button class="submit-btn" id="submit-btn" onclick="register()">
-        ساختن حساب ←
-      </button>
-
-      <div class="footer-link">
-        قبلاً حساب دارید؟ <a href="/login">وارد شوید</a>
-      </div>
-    </div>
-  </div>
-<!-- BOTTOM NAV — mobile only -->
-<nav class="bottom-nav">
-  <div class="bottom-nav-inner">
-    <a href="/" class="bottom-tab">
-      <span class="tab-icon">🏠</span>
-      <span class="tab-label">خانه</span>
-    </a>
-    <a href="/chat" class="bottom-tab">
-      <span class="tab-icon">💬</span>
-      <span class="tab-label">چت</span>
-    </a>
-    <a href="/tutor" class="bottom-tab">
-      <span class="tab-icon">📚</span>
-      <span class="tab-label">بیاموز</span>
-    </a>
-    <a href="/profile" class="bottom-tab">
-      <span class="tab-icon">👤</span>
-      <span class="tab-label">پروفایل</span>
-    </a>
-  </div>
-</nav>
   <script>
+    const errBox = document.getElementById('error-box');
+    const okBox = document.getElementById('success-box');
+    const btn = document.getElementById('submit-btn');
+
     function showError(msg) {
-      const box = document.getElementById('error-box');
-      box.textContent = msg;
-      box.style.display = 'block';
-      document.getElementById('success-box').style.display = 'none';
+      errBox.textContent = msg; errBox.classList.add('visible');
+      okBox.classList.remove('visible');
     }
-
     function showSuccess(msg) {
-      const box = document.getElementById('success-box');
-      box.textContent = msg;
-      box.style.display = 'block';
-      document.getElementById('error-box').style.display = 'none';
+      okBox.textContent = msg; okBox.classList.add('visible');
+      errBox.classList.remove('visible');
     }
 
-    // allow Enter key
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Enter') register();
+    document.getElementById('register-form').addEventListener('submit', event => {
+      event.preventDefault();
+      register();
     });
 
     async function register() {
@@ -279,15 +87,14 @@
       const email     = document.getElementById('email').value.trim().toLowerCase();
       const phone     = null;
 
-      if (!username)           return showError('نام کاربری الزامی است');
-      if (username.length < 3) return showError('نام کاربری باید حداقل ۳ حرف باشد');
-      if (!email || !document.getElementById('email').checkValidity()) return showError('ایمیل معتبر الزامی است');
-      if (password.length < 8) return showError('رمز عبور باید حداقل ۸ حرف باشد');
-      if (password !== password2) return showError('رمزهای عبور یکسان نیستند');
+      if (!username)           return showError('نام کاربری را وارد کنید.');
+      if (username.length < 3) return showError('نام کاربری باید دست‌کم ۳ حرف باشد.');
+      if (!email || !document.getElementById('email').checkValidity()) return showError('یک ایمیل معتبر وارد کنید.');
+      if (password.length < 8) return showError('رمز عبور باید دست‌کم ۸ حرف باشد.');
+      if (password !== password2) return showError('رمز عبور و تکرار آن یکسان نیستند.');
 
-      const btn = document.getElementById('submit-btn');
       btn.disabled = true;
-      btn.textContent = 'در حال ثبت‌نام...';
+      btn.textContent = 'در حال ساخت حساب...';
 
       try {
         const res  = await fetch('/api/register', {
@@ -299,18 +106,18 @@
 
         if (data.success) {
           showSuccess(data.verification_email_sent
-            ? 'حساب شما ساخته شد! لطفاً ایمیل خود را برای تأیید بررسی کنید.'
-            : 'حساب ساخته شد، اما ایمیل ارسال نشد. در صفحه بعد درخواست ارسال دوباره کنید.');
+            ? 'حساب شما ساخته شد. برای تأیید، ایمیل خود را بررسی کنید.'
+            : 'حساب ساخته شد، اما ایمیل ارسال نشد. در صفحهٔ بعد دوباره درخواست دهید.');
           setTimeout(() => window.location.href = '/check-email', 1500);
         } else {
-          showError(data.error);
+          showError(data.error || 'ساخت حساب ناموفق بود.');
           btn.disabled = false;
-          btn.textContent = 'ساختن حساب ←';
+          btn.textContent = 'ساخت حساب';
         }
       } catch (err) {
-        showError('خطای اتصال. دوباره امتحان کنید.');
+        showError('ارتباط با سرور برقرار نشد. دوباره تلاش کنید.');
         btn.disabled = false;
-        btn.textContent = 'ساختن حساب ←';
+        btn.textContent = 'ساخت حساب';
       }
     }
   </script>
