@@ -10,7 +10,7 @@
   <link rel="preload" href="/static/fonts/vazirmatn-var.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
-  <link rel="stylesheet" href="/static/chat.css?v=20261020">
+  <link rel="stylesheet" href="/static/chat.css?v=20261021">
   <script src="/static/vendor/marked.min.js"></script>
   <script src="/static/vendor/purify.min.js"></script>
 </head>
@@ -379,6 +379,7 @@
     div.appendChild(bubble);
     messagesEl.appendChild(div);
     scrollToBottom();
+    return div;
   }
 
   // Only generates audio after the user clicks a reply's speaker button.
@@ -543,11 +544,155 @@
     if (menu && !menu.contains(e.target) && !trigger.contains(e.target)) menu.classList.remove('open');
   });
 
-  // ── SEND MESSAGE ──
+  // ── SEND MESSAGE (answers are written live, word by word) ──
+  let streamCtl = null;               // AbortController of the answer being written
+
+  function setSendMode(mode) {
+    const btn = document.getElementById('send-btn');
+    btn.disabled = false;
+    if (mode === 'stop') {
+      btn.innerHTML = '<svg><use href="#i-stop"/></svg>';
+      btn.setAttribute('aria-label', 'توقف'); btn.title = 'توقف نوشتن';
+    } else {
+      btn.innerHTML = '<svg><use href="#i-send"/></svg>';
+      btn.setAttribute('aria-label', 'ارسال'); btn.removeAttribute('title');
+    }
+  }
+
+  function showSwitchNotice(resetTs) {
+    if (switchNoticeShown) return;
+    switchNoticeShown  = true;
+    const notice       = document.createElement('div');
+    notice.className   = 'limit-notice';
+    if (resetTs) {
+      const resetDate  = new Date(resetTs * 1000);
+      const now        = new Date();
+      const timeStr    = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const tomorrow   = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const isTomorrow = resetDate.toDateString() === tomorrow.toDateString();
+      const dayStr     = isTomorrow ? 'فردا ساعت ' : 'امروز ساعت ';
+      notice.textContent = `خیام در حال تنظیم است. بازنشانی ${dayStr}${timeStr}`;
+    } else {
+      notice.textContent = 'خیام در حال تنظیم است. حالت استاندارد فعال شد.';
+    }
+    document.getElementById('messages').appendChild(notice);
+    scrollToBottom();
+  }
+
+  // Answers that are not a live stream (greeting, limit reached, errors): plain JSON.
+  async function showJsonReply(res) {
+    const data = await res.json();
+    removeTyping();
+    // Do not add failed/limited turns to client history as though they were completed.
+    if (!res.ok || !data.reply) {
+      if (history.length && history[history.length - 1].role === 'user') history.pop();
+      appendBubble('ai', data.error || data.reply || 'متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.');
+      return;
+    }
+    if (data.switch_notice) showSwitchNotice(data.reset_ts);
+    // Commit the server-assigned conversation ID before any optional UI work.
+    if (data.conversation_id) {
+      currentConvId = Number(data.conversation_id);
+      window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
+    }
+    history.push({ role: 'assistant', content: data.reply });
+    try { appendBubble('ai', data.reply); }
+    catch (renderError) {
+      console.error('AI message rendering failed:', renderError);
+      const fallback = document.createElement('div');
+      fallback.className = 'message ai';
+      fallback.textContent = data.reply;
+      document.getElementById('messages').appendChild(fallback);
+    }
+    try { clearFile(); } catch (uiError) { console.warn('Attachment UI reset failed:', uiError); }
+    if (data.conversation_id && currentUser) {
+      try { await loadSidebar(); } catch (e) { console.warn('Conversation sidebar refresh failed:', e); }
+    }
+  }
+
+  // Reads the server's event stream and writes the answer into a live bubble.
+  async function readAnswerStream(res, ctl) {
+    removeTyping();
+    const msgEl   = appendBubble('ai', '');
+    const content = msgEl.querySelector('.bubble-content');
+    msgEl.classList.add('streaming');
+    setSendMode('stop');
+
+    let acc = '', buf = '', rafId = 0, finalData = null, switched = false, broke = false;
+    const wrapper = document.getElementById('chat-wrapper');
+
+    function paint() {
+      rafId = 0;
+      const near = wrapper.scrollHeight - wrapper.scrollTop - wrapper.clientHeight < 140;
+      content.innerHTML = renderMarkdown(acc);
+      const caret = document.createElement('span'); caret.className = 'caret';
+      const last = content.lastElementChild;
+      (last && last.tagName !== 'PRE' && last.tagName !== 'TABLE' ? last : content).appendChild(caret);
+      if (near) wrapper.scrollTop = wrapper.scrollHeight;
+    }
+    function schedule() { if (!rafId) rafId = requestAnimationFrame(paint); }
+    function handle(block) {
+      const m = /^event: (\w+)\ndata: ([\s\S]*)$/.exec(block);
+      if (!m) return;
+      let d; try { d = JSON.parse(m[2]); } catch (_) { return; }
+      if (m[1] === 'delta') { acc += d.t; schedule(); }
+      else if (m[1] === 'meta') { switched = !!d.switched; }
+      else if (m[1] === 'error') { broke = true; }
+      else if (m[1] === 'done') { finalData = d; }
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder('utf-8');
+    let aborted = false;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) { handle(buf.slice(0, i)); buf = buf.slice(i + 2); }
+      }
+    } catch (err) {
+      if (err && err.name === 'AbortError') aborted = true; else broke = true;
+    }
+    if (rafId) cancelAnimationFrame(rafId);
+
+    const finalText = (finalData && finalData.reply) || acc;
+    msgEl.classList.remove('streaming');
+    if (!finalText) {                          // nothing arrived: show a normal error instead of an empty bubble
+      msgEl.remove();
+      if (history.length && history[history.length - 1].role === 'user') history.pop();
+      appendBubble('ai', 'ارتباط قطع شد و پاسخی نرسید. لطفاً دوباره امتحان کنید.');
+      return;
+    }
+    content.innerHTML = renderMarkdown(finalText);
+    wrapper.scrollTop = wrapper.scrollTop;     // keep the reader where they are
+    history.push({ role: 'assistant', content: finalText });
+    if (broke || aborted) {
+      const n = document.createElement('div');
+      n.className = 'limit-notice';
+      n.textContent = aborted ? 'نوشتن پاسخ متوقف شد.' : 'ارتباط قطع شد و پاسخ ناقص ماند.';
+      document.getElementById('messages').appendChild(n);
+    }
+    if (finalData && finalData.conversation_id) {
+      currentConvId = Number(finalData.conversation_id);
+      window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
+    }
+    if (switched || (finalData && finalData.switch_notice)) showSwitchNotice(finalData && finalData.reset_ts);
+    try { clearFile(); } catch (uiError) { console.warn('Attachment UI reset failed:', uiError); }
+    if (currentUser && (finalData ? finalData.conversation_id : true)) {
+      // after a stop the server saves the partial answer a moment later
+      try { if (aborted) await new Promise(r => setTimeout(r, 700)); await loadSidebar(); }
+      catch (e) { console.warn('Conversation sidebar refresh failed:', e); }
+    }
+  }
+
   async function sendMessage() {
+    if (isLoading) { if (streamCtl) streamCtl.abort(); return; }   // the button is "stop" while writing
     const input = document.getElementById('user-input');
     const text  = input.value.trim();
-    if ((!text && !selectedFile) || isLoading) return;
+    if (!text && !selectedFile) return;
     // Finish and persist the voice session before sending a text turn.
     if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
 
@@ -564,9 +709,10 @@
     const priorHistory = history.slice(-10);
     history.push({ role: 'user', content: text || displayText });
 
+    const ctl = new AbortController();
+    streamCtl = ctl;
     try {
       let res;
-
       if (selectedFile) {
         const formData = new FormData();
         formData.append('message', text);
@@ -577,11 +723,12 @@
         } else {
           formData.append('document', selectedFile);
         }
-        res = await fetch('/api/chat', { method: 'POST', body: formData });
+        res = await fetch('/api/chat/stream', { method: 'POST', body: formData, signal: ctl.signal });
       } else {
-        res = await fetch('/api/chat', {
+        res = await fetch('/api/chat/stream', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal:  ctl.signal,
           body: JSON.stringify({
             message:         text,
             history:         priorHistory,
@@ -589,70 +736,20 @@
           })
         });
       }
-
-      const data = await res.json();
-      removeTyping();
-
-      // Do not add failed/limited turns to client history as though they were
-      // completed. Display the error and let the user retry in the same chat.
-      if (!res.ok || !data.reply) {
-        if (history.length && history[history.length - 1].role === 'user') history.pop();
-        appendBubble('ai', data.error || data.reply || 'متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.');
-        return;
+      if ((res.headers.get('content-type') || '').indexOf('text/event-stream') >= 0 && res.body) {
+        await readAnswerStream(res, ctl);
+      } else {
+        await showJsonReply(res);
       }
-
-      // show switch notice exactly once when model changes mid-conversation
-      if (data.switch_notice && !switchNoticeShown) {
-        switchNoticeShown  = true;
-        const notice       = document.createElement('div');
-        notice.className   = 'limit-notice';
-        if (data.reset_ts) {
-          const resetDate  = new Date(data.reset_ts * 1000);
-          const now        = new Date();
-          const timeStr    = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const tomorrow   = new Date(now);
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          const isTomorrow = resetDate.toDateString() === tomorrow.toDateString();
-          const dayStr     = isTomorrow ? 'فردا ساعت ' : 'امروز ساعت ';
-          notice.textContent = `خیام در حال تنظیم است. بازنشانی ${dayStr}${timeStr}`;
-        } else {
-          notice.textContent = 'خیام در حال تنظیم است. حالت استاندارد فعال شد.';
-        }
-        document.getElementById('messages').appendChild(notice);
-        scrollToBottom();
-      }
-
-      // Commit the server-assigned conversation ID before any optional UI work.
-      // A UI exception after a successful API response must not create a false
-      // error bubble or lose the ID needed for the next message.
-      if (data.conversation_id) {
-        currentConvId = Number(data.conversation_id);
-        window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
-      }
-      history.push({ role: 'assistant', content: data.reply });
-      try { appendBubble('ai', data.reply); }
-      catch (renderError) {
-        console.error('AI message rendering failed:', renderError);
-        const fallback = document.createElement('div');
-        fallback.className = 'message ai';
-        fallback.textContent = data.reply;
-        document.getElementById('messages').appendChild(fallback);
-      }
-      try { clearFile(); }
-      catch (uiError) { console.warn('Attachment UI reset failed:', uiError); }
-      if (data.conversation_id && currentUser) {
-        try { await loadSidebar(); }
-        catch (sidebarError) { console.warn('Conversation sidebar refresh failed:', sidebarError); }
-      }
-
     } catch (err) {
       removeTyping();
       console.error('sendMessage error:', err);
       if (history.length && history[history.length - 1].role === 'user') history.pop();
-      appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+      if (!(err && err.name === 'AbortError')) appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
     } finally {
+      streamCtl = null;
       isLoading = false;
-      document.getElementById('send-btn').disabled = false;
+      setSendMode('send');
       input.focus();
     }
   }
@@ -680,7 +777,7 @@
     inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
   });
   inputEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!isLoading) sendMessage(); }
   });
   window.addEventListener('resize', applySidebar);
 

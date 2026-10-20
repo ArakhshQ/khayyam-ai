@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file
+from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, Response, stream_with_context
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from database import (db, User, Conversation, Message, Memory, UserTokenUsage, SiteConfig, TutorProgress,
     QuizResult, StudentBadge, CallRequest, PlanEvent)
@@ -736,9 +736,8 @@ def build_tutor_prompt(subject, grade):
 - جواب غلط: با مهربانی تصحیح کن و دوباره توضیح بده"""
 
 # ── CHAT FUNCTIONS ──
-def call_openai_model(model, system_prompt, messages, temperature=.7,
-                      image_b64=None, image_type=None, return_response=False,
-                      max_output=1000, effort=None, json_mode=False):
+def _openai_kwargs(model, system_prompt, messages, temperature, image_b64, image_type,
+                   max_output, effort, json_mode):
     formatted=[]
     for m in messages:
         if m.get('role')=='user' and image_b64 and m is messages[-1]:
@@ -752,6 +751,14 @@ def call_openai_model(model, system_prompt, messages, temperature=.7,
     if not is_reasoning:kwargs['temperature']=temperature
     if json_mode:kwargs['response_format']={'type':'json_object'}
     if effort and is_reasoning:kwargs['reasoning_effort']=effort
+    return kwargs
+
+
+def call_openai_model(model, system_prompt, messages, temperature=.7,
+                      image_b64=None, image_type=None, return_response=False,
+                      max_output=1000, effort=None, json_mode=False):
+    kwargs=_openai_kwargs(model, system_prompt, messages, temperature, image_b64, image_type,
+                          max_output, effort, json_mode)
     try:
         response=openai_client.chat.completions.create(**kwargs)
     except Exception as exc:
@@ -792,6 +799,204 @@ def smart_chat(system_prompt, history, user_message, user_id=None, plan='free',
             return 'سرویس موقتاً در دسترس نیست. چیزی از سهمیه شما کم نشد؛ لطفاً چند لحظه بعد دوباره تلاش کنید.', False, None, 'error'
         return 'محدودیت استفاده تکمیل شده است. بعداً دوباره تلاش کنید.', True, reset_ts, 'limited'
     return reply,switched,reset_ts,model
+
+# ── STREAMING (one reservation per answer, settled when the stream ends) ──
+def _open_openai_stream(model, system_prompt, messages, temperature, image_b64, image_type, max_output, effort):
+    kwargs = _openai_kwargs(model, system_prompt, messages, temperature, image_b64, image_type,
+                            max_output, effort, False)
+    kwargs['stream'] = True
+    kwargs['stream_options'] = {'include_usage': True}      # the final chunk carries the real token counts
+    try:
+        return openai_client.chat.completions.create(**kwargs)
+    except Exception as exc:
+        if type(exc).__name__ == 'BadRequestError' and 'reasoning_effort' in str(exc).lower():
+            kwargs.pop('reasoning_effort', None)
+            return openai_client.chat.completions.create(**kwargs)
+        raise
+
+
+def _open_groq_stream(system_prompt, messages, temperature, model):
+    if model not in ('openai/gpt-oss-20b', 'openai/gpt-oss-120b'):
+        raise ValueError('Unsupported fallback model')
+    kw = dict(model=model, messages=[{'role': 'system', 'content': system_prompt}] + messages,
+              temperature=temperature, max_tokens=650, stream=True)
+    try:
+        return groq_client.chat.completions.create(stream_options={'include_usage': True}, **kw)
+    except TypeError:
+        return groq_client.chat.completions.create(**kw)
+    except Exception as exc:
+        if type(exc).__name__ == 'BadRequestError' and 'stream_options' in str(exc).lower():
+            return groq_client.chat.completions.create(**kw)
+        raise
+
+
+def _chunk_text(chunk):
+    choices = getattr(chunk, 'choices', None)
+    if not choices:
+        return ''
+    delta = getattr(choices[0], 'delta', None)
+    return (getattr(delta, 'content', None) or '') if delta is not None else ''
+
+
+def _chunk_usage(chunk):
+    """(input, output) tokens when this chunk carries the provider's final counts, else None."""
+    u = getattr(chunk, 'usage', None)
+    if u is None:
+        xg = getattr(chunk, 'x_groq', None)          # Groq reports usage here
+        u = getattr(xg, 'usage', None) if xg is not None else None
+    if u is None:
+        return None
+    inp, out = getattr(u, 'prompt_tokens', None), getattr(u, 'completion_tokens', None)
+    if inp is None or out is None:
+        return None
+    return max(0, int(inp)), max(0, int(out))
+
+
+def _close_quietly(stream):
+    try:
+        close = getattr(stream, 'close', None)
+        if close:
+            close()
+    except Exception:
+        pass
+
+
+def _open_metered_stream(feature, system_prompt, messages, user_id, plan, temperature=.7,
+                         image_b64=None, image_type=None, max_output=1000, level='standard',
+                         effort=None, intent_label=None):
+    """Route -> reserve -> start the provider stream and wait for its FIRST text.
+
+    Everything that can fail cleanly (no allowance, provider error, empty answer) happens here,
+    before the browser has received a single byte, so it still refunds and falls back to the next
+    model exactly like _metered_completion. Returns a dict with status:
+      'ok'      -> {'grant','it','first','usage','switched','t0'}   (feed it to _pump_stream)
+      'limited' -> {'reset_ts'}        'error' -> {}
+    """
+    from metering import reserve, guest_global_spent_micro
+    guest_key = (hashlib.sha256((app.secret_key + ':' + client_ip()).encode()).hexdigest()
+                 if user_id is None else None)
+    config = PLAN_CONFIG.get(plan, PLAN_CONFIG['free']) if feature == 'chat' \
+        else TUTOR_PLAN_CONFIG.get(plan, TUTOR_PLAN_CONFIG['free'])
+    options = [o for o in khr.order_options(config, level)
+               if not (image_b64 and o['model'].startswith('openai/gpt-oss'))]
+    overhead = khr.estimate_tokens(system_prompt) + 15
+    body = sum(khr.estimate_tokens(m.get('content', '')) + 10 for m in messages) + (2500 if image_b64 else 0)
+    total_chars = len(system_prompt) + sum(len(str(m.get('content', ''))) for m in messages)
+    if total_chars > 60000:
+        raise ValueError('Message history is too long')
+    estimated = overhead + body
+
+    if user_id is None:
+        cap = float(os.getenv('GUEST_GLOBAL_DAILY_USD', '3.0'))
+        if guest_global_spent_micro(db) >= cap * 1e6:
+            return {'status': 'limited', 'reset_ts': _next_reset_ts([{'reset': 'daily'}])}
+
+    first_choice, attempts = None, 0
+    while options and attempts < 3:
+        attempts += 1
+        grant, idx = reserve(db, user_id, feature, plan, options, estimated, max_output,
+                             guest_key=guest_key, overhead_tokens=overhead, intent=intent_label or level)
+        if not grant:
+            if first_choice is None:
+                return {'status': 'limited', 'reset_ts': _next_reset_ts(options)}
+            break
+        if first_choice is None:
+            first_choice = options[0]['model']
+        grant['sys_share'] = len(system_prompt) / max(1, total_chars)
+        grant['estimated'] = estimated
+        model = grant['model']
+        t0 = time.monotonic()
+        ms = lambda: int((time.monotonic() - t0) * 1000)
+        try:
+            from flask import g, has_request_context
+            if has_request_context():
+                g.usage_rid = grant['id']
+        except Exception:
+            pass
+        stream, first, usage = None, None, None
+        try:
+            if model.startswith('openai/gpt-oss'):
+                stream = _open_groq_stream(system_prompt, messages, temperature, model)
+            else:
+                stream = _open_openai_stream(model, system_prompt, messages, temperature, image_b64,
+                                             image_type, grant['max_output'], effort)
+            it = iter(stream)
+            for chunk in it:
+                usage = _chunk_usage(chunk) or usage
+                t = _chunk_text(chunk)
+                if t:
+                    first = t
+                    break
+        except Exception as exc:
+            _close_quietly(stream)
+            app.logger.exception('Provider stream failed (%s); trying the next affordable model', model)
+            try:
+                finalize_api(db, grant, uncertain=_maybe_billed(exc), failed=not _maybe_billed(exc), latency_ms=ms())
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('Could not settle reservation after stream error')
+            options = options[idx + 1:]
+            continue
+        if first is None:                                    # the provider ended without any visible text
+            _close_quietly(stream)
+            app.logger.error('Provider stream (%s) returned no visible answer', model)
+            try:
+                if usage:
+                    finalize_api(db, grant, usage[0], usage[1], latency_ms=ms())
+                else:
+                    finalize_api(db, grant, uncertain=True, latency_ms=ms())
+            except Exception:
+                db.session.rollback()
+            options = options[idx + 1:]
+            continue
+        return {'status': 'ok', 'grant': grant, 'it': it, 'stream': stream, 'first': first, 'usage': usage,
+                'switched': model != first_choice, 't0': t0}
+    return {'status': 'error'}
+
+
+def _pump_stream(op):
+    """Yield the answer text piece by piece, then settle the reservation EXACTLY ONCE (in `finally`).
+
+    Normal end      -> charged from the provider's real token counts.
+    Stopped / cut   -> charged for what was really generated (estimate), never the full reservation.
+    Sets op['text'] and op['state'] ('done' | 'aborted' | 'error') for the caller.
+    """
+    grant = op['grant']
+    parts, usage, state = [op['first']], op.get('usage'), 'aborted'
+    ms = lambda: int((time.monotonic() - op['t0']) * 1000)
+    try:
+        yield op['first']
+        for chunk in op['it']:
+            usage = _chunk_usage(chunk) or usage
+            t = _chunk_text(chunk)
+            if t:
+                parts.append(t)
+                yield t
+        state = 'done'
+    except GeneratorExit:
+        state = 'aborted'
+        raise
+    except Exception:
+        state = 'error'
+        app.logger.exception('Provider stream broke mid-answer (%s)', grant['model'])
+    finally:
+        text = ''.join(parts)
+        op['text'], op['state'] = text, state
+        try:
+            if state == 'done' and usage:
+                finalize_api(db, grant, usage[0], usage[1], latency_ms=ms())
+            elif state == 'done':
+                finalize_api(db, grant, uncertain=True, latency_ms=ms())
+            else:
+                finalize_api(db, grant,
+                             usage[0] if usage else int(grant.get('estimated') or 0),
+                             usage[1] if usage else khr.estimate_tokens(text), latency_ms=ms())
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('Could not settle reservation after stream')
+        _close_quietly(op.get('stream'))
+        app.logger.info('ai_stream model=%s state=%s in=%s out=%s ms=%s', grant['model'], state,
+                        usage[0] if usage else '?', usage[1] if usage else '~%d' % khr.estimate_tokens(text), ms())
 
 # ── DOCUMENT EXTRACTION ──
 def extract_text_from_file(file_bytes, filename):
@@ -1597,9 +1802,9 @@ def text_to_speech():
         app.logger.exception('Text playback failed')
         return jsonify(error='Voice generation failed; retry later'),502
 
-@app.route("/api/chat", methods=["POST"])
-@limiter.limit("30 per minute;400 per hour")
-def chat():
+def _chat_prepare():
+    """Parse and validate the request, load the conversation, decide how to answer.
+    Returns a dict on success, or a ready (response, status) tuple on a bad request."""
     has_doc = False
     if request.content_type and 'multipart/form-data' in request.content_type:
         user_message = request.form.get("message", "")
@@ -1689,15 +1894,12 @@ def chat():
 
     # Decide HOW to answer before spending anything (see router.py).
     intent = khr.classify(user_message, history, has_image=bool(image_b64), has_doc=has_doc)
-    switched = False
-    reset_ts = None
+    canned, system_prompt, poem_ctx = None, None, None
     if intent['level'] == 'canned':
-        reply = khr.canned_reply(user_message) or ''
-        model_used = 'canned'            # free: greetings never reach a paid model
+        canned = khr.canned_reply(user_message) or ''        # free: greetings never reach a paid model
     else:
         user_memories = get_user_memories(user_id) if user_id else None
         system_prompt = build_system_prompt(user_memories, user_message, intent['kind'], intent['level'])
-        poem_ctx = None
         if not has_doc and not image_b64:
             try:   # verified poems from the local collection (poetry_search.py); never blocks the chat
                 poem_ctx = poetry_search.build_context(user_message, history, intent['kind'])
@@ -1705,33 +1907,19 @@ def chat():
                 app.logger.exception('Poetry lookup failed')
             if poem_ctx:
                 system_prompt += '\n\n' + poem_ctx['prompt']
-        try:
-            reply, switched, reset_ts, model_used = smart_chat(
-                system_prompt=system_prompt,
-                history=khr.trim_history(history),
-                user_message=user_message,
-                user_id=user_id,
-                plan=plan,
-                temperature=0.7,
-                image_b64=image_b64,
-                image_type=image_type,
-                intent=intent
-            )
-        except ValueError:
-            return jsonify(error='پیام یا فایل خیلی طولانی است؛ آن را کوتاه‌تر کنید.'), 413
-        except Exception:
-            app.logger.exception('Chat completion failed')
-            return jsonify(error='سرویس گفتگو موقتاً در دسترس نیست. دوباره تلاش کنید.'), 503
+    return {'user_message': user_message, 'history': history, 'conv': conv, 'user_id': user_id, 'plan': plan,
+            'image_b64': image_b64, 'image_type': image_type, 'intent': intent, 'canned': canned,
+            'system_prompt': system_prompt, 'poem_ctx': poem_ctx}
 
-    if model_used == 'limited':
-        return jsonify({'reply': reply, 'limited': True, 'reset_ts': reset_ts,
-                        'switch_notice': False}), 429
-    if model_used == 'error':
-        return jsonify(error=reply), 503
+
+def _chat_finish(ctx, reply, switched=False, reset_ts=None, with_sources=True, model_used=''):
+    """Everything after the answer exists: source line, memory, saving the conversation.
+    Returns the JSON-able dict the browser receives."""
+    user_id, user_message, conv = ctx['user_id'], ctx['user_message'], ctx['conv']
     if not reply:
         reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
-    elif model_used != 'canned':
-        reply = poetry_search.add_sources(reply, poem_ctx)   # source line only for poems really quoted
+    elif with_sources and model_used != 'canned':
+        reply = poetry_search.add_sources(reply, ctx['poem_ctx'])   # source line only for poems really quoted
 
     if user_id:
         extract_and_save_memory(user_id, user_message)
@@ -1758,10 +1946,116 @@ def chat():
         ))
         conv.updated_at = datetime.utcnow()
         db.session.commit()
+        ctx['conv'] = conv
         response_data["conversation_id"] = conv.id
+    return response_data
 
-    return jsonify(response_data)
 
+_MSG_UNAVAILABLE = 'سرویس موقتاً در دسترس نیست. چیزی از سهمیه شما کم نشد؛ لطفاً چند لحظه بعد دوباره تلاش کنید.'
+_MSG_LIMITED = 'محدودیت استفاده تکمیل شده است. بعداً دوباره تلاش کنید.'
+
+
+@app.route("/api/chat", methods=["POST"])
+@limiter.limit("30 per minute;400 per hour")
+def chat():
+    ctx = _chat_prepare()
+    if not isinstance(ctx, dict):
+        return ctx
+    switched = False
+    reset_ts = None
+    if ctx['canned'] is not None:
+        reply, model_used = ctx['canned'], 'canned'
+    else:
+        try:
+            reply, switched, reset_ts, model_used = smart_chat(
+                system_prompt=ctx['system_prompt'],
+                history=khr.trim_history(ctx['history']),
+                user_message=ctx['user_message'],
+                user_id=ctx['user_id'],
+                plan=ctx['plan'],
+                temperature=0.7,
+                image_b64=ctx['image_b64'],
+                image_type=ctx['image_type'],
+                intent=ctx['intent']
+            )
+        except ValueError:
+            return jsonify(error='پیام یا فایل خیلی طولانی است؛ آن را کوتاه‌تر کنید.'), 413
+        except Exception:
+            app.logger.exception('Chat completion failed')
+            return jsonify(error='سرویس گفتگو موقتاً در دسترس نیست. دوباره تلاش کنید.'), 503
+
+    if model_used == 'limited':
+        return jsonify({'reply': reply, 'limited': True, 'reset_ts': reset_ts,
+                        'switch_notice': False}), 429
+    if model_used == 'error':
+        return jsonify(error=reply), 503
+    return jsonify(_chat_finish(ctx, reply, switched, reset_ts, model_used=model_used))
+
+
+def _sse(event, data):
+    return 'event: %s\ndata: %s\n\n' % (event, json.dumps(data, ensure_ascii=False))
+
+
+@app.route("/api/chat/stream", methods=["POST"])
+@limiter.limit("30 per minute;400 per hour")
+def chat_stream():
+    """Same as /api/chat, but the answer arrives piece by piece (Server-Sent Events).
+
+    Anything that is not a live stream (greeting, limit reached, errors) is answered with ordinary
+    JSON and the same status codes as /api/chat, so the browser handles both with one code path.
+    """
+    ctx = _chat_prepare()
+    if not isinstance(ctx, dict):
+        return ctx
+    if ctx['canned'] is not None:
+        return jsonify(_chat_finish(ctx, ctx['canned'], model_used='canned'))
+    intent = ctx['intent']
+    messages = khr.trim_history(ctx['history']) + [{'role': 'user', 'content': ctx['user_message']}]
+    try:
+        op = _open_metered_stream(
+            'chat', ctx['system_prompt'], messages, ctx['user_id'], ctx['plan'], .7,
+            ctx['image_b64'], ctx['image_type'], max_output=intent['max_output'], level=intent['level'],
+            effort=intent.get('effort'),
+            intent_label=(intent['level'] if intent.get('kind') in (None, '', 'chat')
+                          else f"{intent['level']}/{intent['kind']}"))
+    except ValueError:
+        return jsonify(error='پیام یا فایل خیلی طولانی است؛ آن را کوتاه‌تر کنید.'), 413
+    except Exception:
+        app.logger.exception('Chat stream could not start')
+        return jsonify(error='سرویس گفتگو موقتاً در دسترس نیست. دوباره تلاش کنید.'), 503
+    if op['status'] == 'limited':
+        return jsonify({'reply': _MSG_LIMITED, 'limited': True, 'reset_ts': op.get('reset_ts'),
+                        'switch_notice': False}), 429
+    if op['status'] != 'ok':
+        return jsonify(error=_MSG_UNAVAILABLE), 503
+
+    def events():
+        yield _sse('meta', {'switched': bool(op['switched'])})
+        pump = _pump_stream(op)
+        saved = False
+        try:
+            for piece in pump:
+                yield _sse('delta', {'t': piece})
+            pump.close()
+            data = _chat_finish(ctx, op['text'], op['switched'], None, with_sources=(op['state'] == 'done'))
+            saved = True
+            if op['state'] != 'done':
+                data['partial'] = True
+                yield _sse('error', {'message': 'ارتباط قطع شد و پاسخ ناقص ماند. دوباره تلاش کنید.'})
+            yield _sse('done', data)
+        finally:
+            pump.close()                      # client left (stop button / closed tab): settle now
+            if not saved and op.get('text'):
+                try:                          # keep what was already written in the saved conversation
+                    _chat_finish(ctx, op['text'], with_sources=False)
+                except Exception:
+                    db.session.rollback()
+                    app.logger.exception('Could not save a stopped answer')
+
+    resp = Response(stream_with_context(events()), mimetype='text/event-stream')
+    resp.headers['Cache-Control'] = 'no-cache, no-transform'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp
 
 
 # ── PERSONA API ──

@@ -216,3 +216,9 @@ body.app { overflow: hidden; background: var(--paper); color: var(--ink); displa
   .input-hint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .message { animation: none; } .typing-dots span { animation: none; opacity: .6; } }
+
+/* live answer: hide the action row until the text is finished, and show a soft gold caret */
+.message.streaming .msg-actions { visibility: hidden; }
+.caret { display: inline-block; width: 7px; height: 1.05em; margin-inline-start: 3px; vertical-align: text-bottom; border-radius: 2px; background: var(--gold); animation: caretBlink 1s steps(2, start) infinite; }
+@keyframes caretBlink { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
