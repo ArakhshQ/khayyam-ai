@@ -270,7 +270,7 @@ with app.app_context():
                 except Exception:
                     app.logger.exception('Could not relax %s.%s', table.name, name)
 
-    for _model in (CallRequest, PlanEvent):
+    for _model in (CallRequest, PlanEvent, Conversation):
         _sync_table_columns(_model)
 
     # Per-request timing (database time and query count), shown in the admin AI log.
@@ -475,17 +475,21 @@ def _next_reset_ts(options):
     return min((next_reset_ts(p) for p in periods), default=None)
 
 
+_nolang = threading.local()      # set while writing a conversation summary (no language reminder there)
+
+
 def _lang(messages, feature):
     """Chat only: a short reminder placed after the whole conversation, where models listen best.
     It carries the language the user asked for (if any), worked out from the whole conversation."""
-    if feature != 'chat':
+    if feature != 'chat' or getattr(_nolang, 'on', False):
         return messages
     try:
         from flask import g, has_request_context
         lang = getattr(g, 'chat_lang', None) if has_request_context() else None
+        ask = getattr(g, 'chat_lang_ask', None) if has_request_context() else None
     except Exception:
-        lang = None
-    return list(messages) + [{'role': 'system', 'content': khr.lang_reminder(lang)}]
+        lang, ask = None, None
+    return list(messages) + [{'role': 'system', 'content': khr.lang_reminder(lang, ask)}]
 
 
 def _attempt(grant, system_prompt, messages, temperature, image_b64, image_type, effort, json_mode):
@@ -1898,7 +1902,9 @@ def _chat_prepare(allow_tools=False):
                  .order_by(Message.id.desc()).limit(khr.HISTORY_MESSAGES + 2).all())
         history = [{'role':m.role,'content':m.content[:6000]}
                    for m in reversed(prior) if m.role in ('user','assistant')]
-        try:    # what lies before the recent window: the first request + older user messages
+        try:    # what lies before the recent window: the first request + the rolling summary / older user messages
+            if prior and conv.summary and len(prior) < khr.HISTORY_MESSAGES + 2:
+                memory_note = khr.conversation_memory(None, [], conv.summary)
             if prior and len(prior) >= khr.HISTORY_MESSAGES + 2:
                 cutoff = min(m.id for m in prior[:khr.HISTORY_MESSAGES])
                 first = (Message.query.filter_by(conversation_id=conv.id, role='user')
@@ -1908,9 +1914,9 @@ def _chat_prepare(allow_tools=False):
                          .order_by(Message.id.asc()).limit(80).all()]
                 if first and first.id < cutoff:
                     older = older[1:]
-                    memory_note = khr.conversation_memory(first.content, older)
+                    memory_note = khr.conversation_memory(first.content, older, conv.summary)
                 else:
-                    memory_note = khr.conversation_memory(None, older)
+                    memory_note = khr.conversation_memory(None, older, conv.summary)
         except Exception:
             db.session.rollback()
             app.logger.exception('Conversation memory failed')
@@ -1935,24 +1941,53 @@ def _chat_prepare(allow_tools=False):
         # If no exact match, retain supplied history and create a new conversation
         # after the provider succeeds. This is safer than blocking all follow-ups.
 
-    # Did the user ask for another language earlier in this conversation? (the whole chat is read, not only the window)
-    try:
-        if conv is not None:
-            from sqlalchemy import func
-            past = [r[0] for r in db.session.query(func.substr(Message.content, 1, 400))
-                    .filter(Message.conversation_id == conv.id, Message.role == 'user')
-                    .order_by(Message.id.desc()).limit(300).all()][::-1]
-        else:
-            past = [m['content'][:400] for m in history if m['role'] == 'user']
-        lang = khr.requested_language(past, user_message[:400])
-    except Exception:
-        lang = None
-        app.logger.exception('Language detection failed')
+    # Which language should the reply use? The default is Dari. The choice the user made earlier is stored on the
+    # conversation (conv.chat_lang); a tiny model call reads the newest message to see whether it changes
+    # (any wording, any language) and, for plain chat in a foreign language, whether to ask which language they want.
     from flask import g
+    state = conv.chat_lang if conv is not None else None
+    lang, ask_lang, new_state = state, None, None
+    if user_id is not None:
+        check = khr.needs_lang_check(state, user_message)
+        if check and state in (None, 'Dari'):       # a plain greeting is answered for free, without a language check
+            check = khr.classify(user_message, history, has_image=bool(image_b64), has_doc=has_doc)['level'] != 'canned'
+        if check:
+            try:
+                last_a = next((m['content'] for m in reversed(history) if m['role'] == 'assistant'), '')
+                _nolang.on = True
+                try:
+                    out, _sw, _ts, mdl = _metered_completion(
+                        'chat', khr.LANG_DECIDE_PROMPT,
+                        [{'role': 'user', 'content': khr.lang_decide_input(state, last_a, user_message)}],
+                        user_id, plan, temperature=0, max_output=120, level='simple', intent_label='lang')
+                finally:
+                    _nolang.on = False
+                if out and mdl not in ('limited', 'error'):
+                    chosen, ask, writes = khr.parse_lang_decision(out)
+                    if chosen:
+                        new_state = lang = chosen
+                    elif ask and state is None and writes and writes.lower() != 'dari':
+                        ask_lang = writes
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('Language decision failed')
+    else:
+        try:        # guests have no saved conversation: the old keyword reading of what they typed
+            past = [m['content'][:400] for m in history if m['role'] == 'user']
+            guest = khr.requested_language(past, user_message[:400])
+            lang = guest[0] if guest else None
+        except Exception:
+            lang = None
+    if conv is not None:          # the model call above may have closed the database session: take the chat again
+        conv = db.session.get(Conversation, conv.id)
     g.chat_lang = lang
+    g.chat_lang_ask = ask_lang
+    g.chat_lang_new = new_state
 
     # Decide HOW to answer before spending anything (see router.py).
     intent = khr.classify(user_message, history, has_image=bool(image_b64), has_doc=has_doc)
+    if intent['level'] == 'canned' and lang not in (None, 'Dari'):
+        intent['level'] = 'simple'          # no canned Dari greeting while the chat is in another language
     canned, system_prompt, poem_ctx = None, None, None
     if intent['level'] == 'canned':
         canned = khr.canned_reply(user_message) or ''        # free: greetings never reach a paid model
@@ -2002,7 +2037,75 @@ def _chat_prepare(allow_tools=False):
                 system_prompt += '\n\n' + khr.TOOLS_OFF_BLOCK
     return {'user_message': user_message, 'history': history, 'conv': conv, 'user_id': user_id, 'plan': plan,
             'image_b64': image_b64, 'image_type': image_type, 'intent': intent, 'canned': canned,
-            'system_prompt': system_prompt, 'poem_ctx': poem_ctx, 'tools': tools, 'tool_env': tool_env}
+            'system_prompt': system_prompt, 'poem_ctx': poem_ctx, 'tools': tools, 'tool_env': tool_env,
+            'lang_new': getattr(g, 'chat_lang_new', None)}
+
+
+# ── CONVERSATION SUMMARY (the AI's running memory of a chat) ──────────────────────────────────
+SUMMARY_EVERY = int(os.getenv('SUMMARY_EVERY_MESSAGES', '8'))      # new messages before the summary is refreshed
+_SUMMARIZING = set()
+_SUMMARY_LOCK = threading.Lock()
+
+
+def _update_summary(conv_id, user_id, plan):
+    """Fold the not-yet-summarised messages of a conversation into its summary. Runs after the answer was
+    delivered; any failure just means the old summary stays. Billed like any other small chat call."""
+    try:
+        conv = db.session.get(Conversation, conv_id)
+        if not conv or conv.user_id != user_id:
+            return
+        rows = (Message.query.filter(Message.conversation_id == conv_id, Message.id > (conv.summary_upto or 0))
+                .order_by(Message.id.asc()).limit(40).all())
+        if len(rows) < SUMMARY_EVERY:
+            return
+        msgs = [{'role': m.role, 'content': m.content} for m in rows if m.role in ('user', 'assistant')]
+        _nolang.on = True
+        try:
+            reply, _sw, _ts, model = _metered_completion(
+                'chat', khr.SUMMARY_PROMPT, [{'role': 'user', 'content': khr.summary_input(conv.summary, msgs)}],
+                user_id, plan, temperature=.2, max_output=520, level='simple', intent_label='summary')
+        finally:
+            _nolang.on = False
+        if reply and model not in ('limited', 'error'):
+            conv.summary = reply.strip()[:2000]
+            conv.summary_upto = rows[-1].id
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Conversation summary failed')
+    finally:
+        with _SUMMARY_LOCK:
+            _SUMMARIZING.discard(conv_id)
+        try:
+            db.session.remove()
+        except Exception:
+            pass
+
+
+def _schedule_summary(conv, user_id, plan):
+    """Cheap check after each saved turn; the model call itself happens in the background."""
+    try:
+        if not conv or not user_id or os.getenv('SUMMARY_DISABLED') == '1':
+            return
+        upto = conv.summary_upto or 0
+        n = Message.query.filter(Message.conversation_id == conv.id, Message.id > upto).count()
+        if n < SUMMARY_EVERY:
+            return
+        with _SUMMARY_LOCK:
+            if conv.id in _SUMMARIZING:
+                return
+            _SUMMARIZING.add(conv.id)
+        args = (conv.id, user_id, plan)
+        if os.getenv('SUMMARY_INLINE') == '1':          # tests
+            _update_summary(*args)
+            return
+        def run():
+            with app.app_context():
+                _update_summary(*args)
+        threading.Thread(target=run, daemon=True).start()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Could not schedule the conversation summary')
 
 
 def _chat_finish(ctx, reply, switched=False, reset_ts=None, with_sources=True, model_used=''):
@@ -2025,6 +2128,8 @@ def _chat_finish(ctx, reply, switched=False, reset_ts=None, with_sources=True, m
             response_data["reset_ts"] = reset_ts
 
     if current_user.is_authenticated:
+        if conv is not None and conv not in db.session:
+            conv = db.session.get(Conversation, conv.id)        # the model call may have closed the session
         if not conv:
             title = user_message[:60] if user_message else "گفتگوی جدید"
             conv  = Conversation(user_id=current_user.id, title=title)
@@ -2038,6 +2143,8 @@ def _chat_finish(ctx, reply, switched=False, reset_ts=None, with_sources=True, m
             conversation_id=conv.id, role='assistant', content=reply
         ))
         conv.updated_at = datetime.utcnow()
+        if ctx.get('lang_new'):
+            conv.chat_lang = ctx['lang_new']
         db.session.commit()
         ctx['conv'] = conv
         response_data["conversation_id"] = conv.id
@@ -2048,6 +2155,7 @@ def _chat_finish(ctx, reply, switched=False, reset_ts=None, with_sources=True, m
             except Exception:
                 db.session.rollback()
                 app.logger.exception('Could not attach files to the conversation')
+        _schedule_summary(conv, user_id, ctx.get('plan') or 'free')
     return response_data
 
 

@@ -49,6 +49,9 @@ class Conversation(db.Model):
     title      = db.Column(db.String(200), nullable=False, default='گفتگوی جدید')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+    summary      = db.Column(db.Text)                               # rolling summary the AI keeps of this chat
+    chat_lang    = db.Column(db.String(24))                         # language the user chose for replies (None = not chosen)
+    summary_upto = db.Column(db.Integer, default=0)                 # id of the last message the summary covers
     messages   = db.relationship('Message', backref='conversation', lazy=True, cascade='all, delete-orphan')
 
     def to_dict(self):

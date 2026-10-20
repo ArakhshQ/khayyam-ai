@@ -258,12 +258,37 @@ def _clip(text, n):
     return t if len(t) <= n else t[:n].rstrip() + ' …'
 
 
-def conversation_memory(first_user, older_users):
+SUMMARY_PROMPT = (
+    'تو حافظهٔ یک گفتگو را می‌نویسی تا دستیار بعداً بداند گفتگو دربارهٔ چیست. از «خلاصهٔ قبلی» و «پیام‌های تازه» یک '
+    'خلاصهٔ تازه و کامل به دری بنویس، حداکثر ۱۸۰ کلمه، فقط با همین بخش‌ها (بخش خالی را ننویس):\n'
+    'موضوع و هدف گفتگو: …\n'
+    'خواسته‌ها و دستورهای ثابت کاربر (زبان، لحن، قالب، نام، سلیقه): …\n'
+    'مسائل مهم، تصمیم‌ها و نتیجه‌ها: …\n'
+    'کارهای نیمه‌کاره یا چیزی که کاربر منتظرش است: …\n'
+    'تصویر و فایل‌های ساخته‌شده: …\n'
+    'فقط چیزی را بنویس که واقعاً در گفتگو آمده؛ چیزی نساز. دستورهای ثابت کاربر را هرگز حذف نکن مگر خودش لغوشان '
+    'کرده باشد. خلاصهٔ قبلی را با اطلاعات تازه یکی کن، نه این‌که فقط به آن اضافه کنی. فقط خودِ خلاصه را بنویس.'
+)
+
+
+def summary_input(old_summary, messages):
+    """User-turn text for the summarizer: previous summary + new messages (each shortened)."""
+    lines = []
+    for m in messages:
+        who = 'کاربر' if m['role'] == 'user' else 'خیام'
+        lines.append('%s: %s' % (who, _clip(m['content'], 700 if m['role'] == 'user' else 450)))
+    return 'خلاصهٔ قبلی:\n%s\n\nپیام‌های تازه:\n%s' % (old_summary or '(هنوز ندارد)', '\n'.join(lines))
+
+
+def conversation_memory(first_user, older_users, summary=None):
     """Long-conversation memory without any extra model call: the very first request of the chat, plus
     a short list of what the user asked in between (older than the recent window)."""
     parts = []
     if first_user:
         parts.append('آغاز این گفتگو (درخواست اول کاربر): «%s»' % _clip(first_user, 700))
+    if summary:
+        parts.append('خلاصهٔ گفتگو تا اینجا (که دستیار خودش نوشته):\n' + summary.strip()[:1800])
+        older_users = []                       # the summary already covers the older messages
     items = [_clip(t, 110) for t in (older_users or []) if str(t or '').strip()]
     if len(items) > 24:
         items = items[:4] + items[-20:]
@@ -318,10 +343,76 @@ TOOLS_BLOCK = (
 _PICTURE_RULE = ('اگر کاربر تصویری فرستاد بدون توضیح، یا نوشت «(تصویر فرستاده شد)»، و پیش‌تر کاری خواسته بود که به تصویر '
                  'نیاز داشت، همان کار را انجام بده؛ وگرنه تصویر را توضیح بده. به یاد داشته باش گفتگو دربارهٔ چیست.')
 
-LANG_REMINDER = ('یادآوری: گفتگوی عادی را همیشه به دری افغانی بنویس، حتی اگر کاربر انگلیسی یا زبان دیگری نوشته است. '
-                 'اما اگر کاربر کاری خواسته که نتیجه‌اش خودِ یک متن به زبان دیگر است (ترجمه، نامه، ایمیل، مقاله، رزومه، '
-                 'متن روی تصویر یا فایل، کد و مثال)، آن متن را کامل و درست به همان زبان بنویس و فقط جمله‌های دور و بر آن را '
-                 'به دری بگو. ' + _PICTURE_RULE)
+LANG_REMINDER = ('یادآوری زبان: زبان گفتگوی عادی همیشه دری افغانی است، حتی اگر کاربر انگلیسی یا زبان دیگری نوشته باشد. '
+                 'زبان پاسخ‌های پیشین همین گفتگو را تقلید نکن؛ فقط همین یادآوری را دنبال کن. '
+                 'اگر کاربر کاری خواسته که نتیجه‌اش خودِ یک متن به زبان دیگر است (ترجمه، نامه، ایمیل، مقاله، رزومه، '
+                 'متن روی تصویر یا فایل، کد و مثال)، فقط همان متن را کامل به آن زبان بنویس و همهٔ جمله‌های دور و برش '
+                 '(مقدمه، توضیح، پیشنهاد «می‌خواهی کوتاه‌ترش کنم؟») را به دری بگو. مثال: کاربر به انگلیسی نوشت «ایمیل بنویس» '
+                 '← یک جملهٔ دری، بعد ایمیل انگلیسی، بعد یک جملهٔ دری. ' + _PICTURE_RULE)
+
+LANG_ASK = ('کاربر بدون این‌که زبان پاسخ را بگوید به %s نوشته است. همین بار به دری جواب بده (کوتاه) و در پایان در یک جملهٔ '
+            'کوتاه از او بپرس که پاسخ‌ها را به دری بخواهد یا به %s؛ همان جمله را یک بار هم به %s بنویس. ')
+
+LANG_DECIDE_PROMPT = (
+    'You decide which language an assistant must use for ordinary chat replies. The default is Dari (Afghan Persian). '
+    'You get: the current setting, the assistant\'s last message, and the user\'s newest message. '
+    'Answer with ONE line of JSON only: {"set": <string or null>, "ask": <true or false>, "writes": <string>}.\n'
+    '"set": the language the user now explicitly wants for chat replies, else null. Set it when the user asks to talk/chat/reply '
+    'in a language (any wording, any language or script, e.g. "lets speak turkish", "speak english", "dariye donusalim", '
+    '"برگرد به دری", "gap bezan be dari"), or answers a question the assistant just asked about which language to use. '
+    'Asking to go back to Dari, Persian or Farsi means "Dari". Also set "Dari" when the current setting is not Dari and '
+    'the user writes ordinary chat in Dari/Persian (including Persian typed in Latin letters, like "khob hasti, chetor asti"). '
+    'A task whose result is a text in some language (translate to English, write a letter/email in English, a poem in Pashto, '
+    'explain a word in Turkish) is NOT a change: set null.\n'
+    '"ask": true only when the current setting is "not chosen yet" AND the newest message is ordinary chat or a question '
+    '(not a task producing text for them) written in a language other than Dari/Persian and with no language instruction. '
+    'Never true if the assistant\'s last message already asked which language.\n'
+    '"writes": the language the newest message is written in (English name).\n'
+    'Examples: setting=not chosen, "i wanna write an email to my english teacher" -> {"set":null,"ask":false,"writes":"English"}; '
+    'setting=not chosen, "what is gravity?" -> {"set":null,"ask":true,"writes":"English"}; '
+    'setting=Turkish, "simdi dariye donusalim" -> {"set":"Dari","ask":false,"writes":"Turkish"}; '
+    'setting=Turkish, "bale khob shd hali?" -> {"set":"Dari","ask":false,"writes":"Dari"}; '
+    'setting=not chosen, "lets speak turkish" -> {"set":"Turkish","ask":false,"writes":"English"}.')
+
+
+def needs_lang_check(state, text):
+    """Is a language decision needed for this message? Not for the usual case: default setting + Persian script."""
+    t = str(text or '')
+    letters = [c for c in t if c.isalpha()]
+    if not letters:
+        return False
+    arabic = sum(1 for c in letters if '\u0600' <= c <= '\u06ff') / len(letters)
+    if state not in (None, 'Dari'):
+        return True
+    if arabic < .5:
+        return True
+    return bool(re.search(_LN, t, re.I))
+
+
+def lang_decide_input(state, last_assistant, user_message):
+    setting = state if state else 'not chosen yet (default Dari)'
+    return 'Current setting: %s\nAssistant\'s last message: %s\nUser\'s newest message: %s' % (
+        setting, _clip(last_assistant, 260) or '(none)', _clip(user_message, 400))
+
+
+def parse_lang_decision(text):
+    """-> (set_language or None, ask, writes). Tolerant: anything unreadable means "no change"."""
+    import json as _json
+    m = re.search(r'\{.*\}', str(text or ''), re.S)
+    if not m:
+        return None, False, ''
+    try:
+        d = _json.loads(m.group(0))
+    except ValueError:
+        return None, False, ''
+    def name(x):
+        x = re.sub(r'[^A-Za-z \-]', '', str(x or '')).strip()[:24]
+        return x.title() if x else None
+    st = name(d.get('set'))
+    if st and st.lower() in ('dari', 'persian', 'farsi', 'null', 'none'):
+        st = 'Dari' if st.lower() != 'null' and st.lower() != 'none' else None
+    return st, bool(d.get('ask')), name(d.get('writes')) or ''
+
 
 # Languages a user can ask for: key -> (English name, Dari name). Dari/Persian map to None = back to normal.
 _LANGS = {
@@ -379,14 +470,17 @@ def requested_language(past_user_texts, current=''):
     return state
 
 
-def lang_reminder(lang=None):
-    if not lang:
-        return LANG_REMINDER
-    en, fa = lang
-    return ('Reminder: the user explicitly asked you to chat in %s (%s). Keep writing every reply in %s, not Dari, '
-            'until they ask to go back to Dari or to another language; greetings, small talk and short answers too. '
-            'Keep a warm, natural tone. Tasks whose result is a text in some other language (a translation into Dari, a '
-            'Pashto letter...) are still written in that language. ' % (en, fa, en)) + _PICTURE_RULE
+def lang_reminder(lang=None, ask=None):
+    """lang: None / 'Dari' (normal) or a language name string chosen by the user, or the old (English, Dari-name) tuple
+    used for guests. ask: the language the user wrote in without saying what they want (see LANG_ASK)."""
+    if isinstance(lang, tuple):
+        lang = lang[0]
+    if not lang or lang == 'Dari':
+        return LANG_REMINDER + (LANG_ASK % (ask, ask, ask) if ask else '')
+    return ('Language reminder: the user explicitly asked to chat in %s. Write every ordinary reply in %s, not Dari: greetings, '
+            'small talk and short answers too, whatever language the earlier replies in this chat used. Keep the tone warm and '
+            'natural. A task whose result is a text in some other language (for example a translation into Dari) is still '
+            'written in that language. The newest user message is what you answer now. ' % (lang, lang)) + _PICTURE_RULE
 
 
 TOOLS_OFF_BLOCK = (
