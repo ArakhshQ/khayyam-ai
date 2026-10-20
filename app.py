@@ -28,6 +28,7 @@ from flask_wtf.csrf import CSRFProtect, CSRFError
 from flask_limiter import Limiter
 from werkzeug.middleware.proxy_fix import ProxyFix
 import router as khr
+import poetry_search
 from metering import (VOICE_PLANS, ensure_storage as ensure_api_meter, reserve as reserve_api,
     finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
     tutor_plan as active_tutor_plan, tutor_tier as active_tutor_tier,
@@ -1695,10 +1696,18 @@ def chat():
         model_used = 'canned'            # free: greetings never reach a paid model
     else:
         user_memories = get_user_memories(user_id) if user_id else None
+        system_prompt = build_system_prompt(user_memories, user_message, intent['kind'], intent['level'])
+        poem_ctx = None
+        if not has_doc and not image_b64:
+            try:   # verified poems from the local collection (poetry_search.py); never blocks the chat
+                poem_ctx = poetry_search.build_context(user_message, history, intent['kind'])
+            except Exception:
+                app.logger.exception('Poetry lookup failed')
+            if poem_ctx:
+                system_prompt += '\n\n' + poem_ctx['prompt']
         try:
             reply, switched, reset_ts, model_used = smart_chat(
-                system_prompt=build_system_prompt(user_memories, user_message,
-                                                  intent['kind'], intent['level']),
+                system_prompt=system_prompt,
                 history=khr.trim_history(history),
                 user_message=user_message,
                 user_id=user_id,
@@ -1721,6 +1730,8 @@ def chat():
         return jsonify(error=reply), 503
     if not reply:
         reply = "متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید."
+    elif model_used != 'canned':
+        reply = poetry_search.add_sources(reply, poem_ctx)   # source line only for poems really quoted
 
     if user_id:
         extract_and_save_memory(user_id, user_message)
