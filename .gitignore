@@ -1,4 +1,5 @@
 *.db
+!poetry.db
 *.pyc
 *.pyo
 .DS_Store

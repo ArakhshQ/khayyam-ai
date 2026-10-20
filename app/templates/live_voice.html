@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="/static/main.js?v=20261020"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>گفتگوی زنده — خیام</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/fonts.css?v=20261020">
+  <link rel="stylesheet" href="/static/style.css?v=20261020">
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:var(--bg,#1d1606);color:var(--text,#eee9de);font-family:Vazirmatn,Tahoma,sans-serif}
+    .page{max-width:680px;min-height:100dvh;margin:auto;padding:28px 18px;display:flex;flex-direction:column;align-items:center;gap:16px}
+    h1{color:var(--gold,#d8b25a);font-size:24px;margin:10px 0 0}
+    .hint{color:var(--text-dim,#aaa);font-size:13px;text-align:center;line-height:1.9}
+    .orb{width:116px;height:116px;flex-shrink:0;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle,#d8b25a44,#d8b25a08);border:1px solid #d8b25a88;font-size:42px}
+    .orb.active{animation:pulse 1.7s infinite alternate}
+    @keyframes pulse{to{transform:scale(1.07)}}
+    .transcript{width:100%;flex:1;min-height:190px;max-height:45vh;overflow-y:auto;padding:16px;background:var(--surface,#191715);border:1px solid var(--border,#3b342c);border-radius:18px}
+    .turn{max-width:86%;margin:10px 0;padding:11px 14px;border-radius:14px;line-height:1.85;font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere;text-align:right}
+    .turn.user{background:#4c3b20;margin-right:0;margin-left:auto}
+    .turn.assistant{background:var(--surface2,#29251f);margin-left:0;margin-right:auto}
+    .turn small{display:block;color:var(--gold,#d8b25a);font-size:11px;margin-bottom:3px}
+    #status{min-height:25px;text-align:center;color:var(--text-dim,#aaa);font-size:13px}
+    .actions{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+    button,.back{padding:12px 20px;border-radius:10px;font:inherit;text-decoration:none;cursor:pointer}
+    button{border:0;background:var(--gold,#d8b25a);color:#111;font-weight:700}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    .back{border:1px solid #504638;color:var(--text,#eee);background:transparent}
+  </style>
+</head>
+<body>
+<main class="page">
+  <h1 id="heading">گفتگوی زنده با خیام</h1>
+  <p class="hint" id="hint">طبیعی صحبت کنید. گفتگو پس از پایان در تاریخچه ذخیره می‌شود.</p>
+  <div id="orb" class="orb" aria-hidden="true">✦</div>
+  <div id="status" role="status" aria-live="polite">برای شروع، دکمه زیر را فشار دهید.</div>
+  <section id="transcript" class="transcript" aria-label="متن گفتگو">
+    <p class="hint" id="empty">متن صحبت‌های شما و خیام در اینجا نمایش داده می‌شود.</p>
+  </section>
+  <div class="actions">
+    <button id="start" type="button">شروع گفتگو</button>
+    <button id="stop" type="button" disabled>پایان و ذخیره</button>
+    <a id="back" class="back" href="/chat">بازگشت</a>
+  </div>
+  <p class="hint">متن گفتار ممکن است دقیق نباشد. هنگام صحبت، صدا برای پردازش به OpenAI ارسال می‌شود.</p>
+</main>
+<script>
+  const params = new URLSearchParams(location.search);
+  const mode = params.get('mode') === 'tutor' ? 'tutor' : 'chat';
+  const context = mode === 'chat'
+    ? { mode, conversation_id: params.get('conversation_id') || null }
+    : { mode, subject: params.get('subject'), topic_key: params.get('topic_key'), level: params.get('level') || '1' };
+  const startBtn = document.getElementById('start');
+  const stopBtn = document.getElementById('stop');
+  const orb = document.getElementById('orb');
+  const transcriptEl = document.getElementById('transcript');
+  const statusEl = document.getElementById('status');
+  const back = document.getElementById('back');
+  const returnUrl = mode === 'tutor' ? '/tutor' : '/chat';
+  back.href = returnUrl;
+  if (mode === 'tutor') {
+    document.getElementById('heading').textContent = 'گفتگوی زنده با استاد خیام';
+    document.getElementById('hint').textContent = 'درباره درس انتخاب‌شده صحبت کنید. گفتگوی شما در تاریخچه درس ذخیره می‌شود.';
+  }
+
+  let pc = null, mic = null, channel = null, remoteAudio = null;
+  let receipt = null, turns = [], active = false, saving = false, attempt = 0;
+  let deadlineTimer = null, deadlineMs = 0, warningSeconds = 120, warned = false;
+  const userItems = new Map();
+  const assistantItems = new Map();
+  function setStatus(value) { statusEl.textContent = value; }
+  function createTurn(role, key) {
+    document.getElementById('empty')?.remove();
+    const item = { role, content: '', key };
+    turns.push(item);
+    const bubble = document.createElement('div');
+    bubble.className = 'turn ' + role;
+    const label = document.createElement('small');
+    label.textContent = role === 'user' ? 'شما' : 'خیام';
+    const content = document.createElement('span');
+    content.textContent = '…';
+    bubble.append(label, content);
+    transcriptEl.appendChild(bubble);
+    item.node = content;
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    return item;
+  }
+  function setTurn(item, value) {
+    if (!item || !value || !value.trim()) return;
+    item.content = value.trim();
+    item.node.textContent = item.content;
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }
+  function cleanup() {
+    if (deadlineTimer) clearInterval(deadlineTimer);
+    deadlineTimer = null;
+    attempt++;
+    active = false;
+    try { channel?.close(); } catch {}
+    try { pc?.close(); } catch {}
+    try { mic?.getTracks().forEach(track => track.stop()); } catch {}
+    try { remoteAudio?.pause(); if (remoteAudio) remoteAudio.srcObject = null; remoteAudio?.remove(); } catch {}
+    channel = pc = mic = remoteAudio = null;
+    orb.classList.remove('active');
+  }
+  function handleRealtime(data) {
+    if (data.type === 'input_audio_buffer.speech_started') {
+      setStatus('خیام گوش می‌دهد...');
+      if (data.item_id && !userItems.has(data.item_id))
+        userItems.set(data.item_id, createTurn('user', data.item_id));
+    }
+    if (data.type === 'conversation.item.input_audio_transcription.completed') {
+      const key = data.item_id || ('user-' + turns.length);
+      let item = userItems.get(key);
+      if (!item) { item = createTurn('user', key); userItems.set(key, item); }
+      setTurn(item, data.transcript || '');
+    }
+    if (data.type === 'response.created') {
+      setStatus('خیام در حال پاسخ دادن است...');
+      if (data.response?.id && !assistantItems.has(data.response.id))
+        assistantItems.set(data.response.id, createTurn('assistant', data.response.id));
+    }
+    if (data.type === 'response.output_audio_transcript.delta' || data.type === 'response.audio_transcript.delta') {
+      const key = data.response_id;
+      if (key) {
+        let item = assistantItems.get(key);
+        if (!item) { item = createTurn('assistant', key); assistantItems.set(key, item); }
+        setTurn(item, (item.content || '') + (data.delta || ''));
+      }
+    }
+    if (data.type === 'response.output_audio_transcript.done' || data.type === 'response.audio_transcript.done') {
+      const key = data.response_id || ('assistant-' + turns.length);
+      let item = assistantItems.get(key);
+      if (!item) { item = createTurn('assistant', key); assistantItems.set(key, item); }
+      setTurn(item, data.transcript || '');
+    }
+    if (data.type === 'response.done') {
+      const id = data.response?.id;
+      let item = id && assistantItems.get(id);
+      const output = data.response?.output || [];
+      const text = output.flatMap(o => o.content || []).map(c => c.transcript || c.text || '').filter(Boolean).join(' ');
+      if (text) {
+        if (!item) { item = createTurn('assistant', id); if (id) assistantItems.set(id, item); }
+        setTurn(item, text);
+      }
+      setStatus('می‌توانید صحبت کنید.');
+    }
+    if (data.type === 'error') {
+      console.error('Realtime error', data.error);
+      setStatus('خطایی در گفتگوی صوتی رخ داد.');
+    }
+  }
+  startBtn.addEventListener('click', async () => {
+    const run = ++attempt;
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    setStatus('در حال اتصال...');
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
+      if (run !== attempt) return;
+      const response = await fetch('/api/voice/session', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(context)
+      });
+      const session = await response.json();
+      if (!response.ok || !session.value || !session.receipt) throw new Error(session.error || 'Session failed');
+      if (run !== attempt) return;
+      receipt = session.receipt;
+      deadlineMs = Number(session.allowance_deadline || 0) * 1000;
+      warningSeconds = Number(session.warning_seconds || 120);
+      warned = false;
+      deadlineTimer = setInterval(() => {
+        if (!deadlineMs || !receipt) return;
+        const remaining = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
+        if (!warned && remaining <= warningSeconds && remaining > 0) {
+          warned = true;
+          setStatus(`از سهمیه گفتگوی صوتی ${Math.ceil(remaining / 60)} دقیقه باقی مانده است.`);
+        }
+        if (!remaining) { setStatus('سهمیه صوتی تمام شد.'); finish(); }
+      }, 1000);
+      pc = new RTCPeerConnection();
+      remoteAudio = document.createElement('audio');
+      remoteAudio.autoplay = true;
+      document.body.appendChild(remoteAudio);
+      pc.ontrack = event => { remoteAudio.srcObject = event.streams[0]; remoteAudio.play().catch(console.warn); };
+      pc.onconnectionstatechange = () => {
+        if (run !== attempt || !pc) return;
+        if (pc.connectionState === 'failed') setStatus('ارتباط قطع شد. برای ذخیره، پایان گفتگو را بزنید.');
+      };
+      mic.getTracks().forEach(track => pc.addTrack(track, mic));
+      channel = pc.createDataChannel('oai-events');
+      channel.onopen = () => {
+        if (run !== attempt) return;
+        active = true;
+        orb.classList.add('active');
+        setStatus('متصل شدید. صحبت کنید!');
+      };
+      channel.onmessage = event => {
+        if (run !== attempt) return;
+        try { handleRealtime(JSON.parse(event.data)); } catch (e) { console.warn('Realtime event', e); }
+      };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const sdpResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+        method:'POST', headers:{'Authorization':'Bearer '+session.value,'Content-Type':'application/sdp'}, body:offer.sdp
+      });
+      if (!sdpResponse.ok) throw new Error('WebRTC connection failed: '+sdpResponse.status);
+      const answer = await sdpResponse.text();
+      if (run !== attempt) return;
+      await pc.setRemoteDescription({type:'answer',sdp:answer});
+      if (run !== attempt) return;
+      setStatus('متصل شدید. صحبت کنید!');
+    } catch (error) {
+      if (run !== attempt) return;
+      console.error(error);
+      cleanup();
+      startBtn.disabled = false;
+      stopBtn.disabled = !receipt;
+      setStatus('اتصال برقرار نشد. دوباره تلاش کنید.');
+    }
+  });
+  async function finish() {
+    if (saving) return;
+    saving = true;
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
+    setStatus('در حال پایان گفتگو و ذخیره متن...');
+    // Allow pending transcription events to arrive before closing the data channel.
+    if (active && channel?.readyState === 'open') await new Promise(resolve => setTimeout(resolve, 1100));
+    cleanup();
+    if (receipt) {
+      try { await fetch('/api/voice/finish', {method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({receipt}),keepalive:true}); }
+      catch (err) { console.warn('Voice usage finalization:', err); }
+    }
+    const clean = turns.filter(t => t.content && t.content.trim()).map((t,i) => ({
+      role:t.role,content:t.content,
+      turn_id:(t.role+':'+String(t.key || i)).replace(/[^A-Za-z0-9:_-]/g,'_').slice(0,150)
+    }));
+    if (!receipt) { location.href = returnUrl; return; }
+    try {
+      const res = await fetch('/api/voice/save', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({receipt,turns:clean})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Save failed');
+      const url = new URL(returnUrl, location.origin);
+      if (mode === 'chat' && data.conversation_id) url.searchParams.set('conv', String(data.conversation_id));
+      location.href = url.toString();
+    } catch (error) {
+      console.error('Transcript save failed', error);
+      setStatus('ذخیره گفتگو ناموفق بود. دوباره روی «تلاش برای ذخیره» بزنید.');
+      stopBtn.textContent = 'تلاش برای ذخیره';
+      stopBtn.disabled = false;
+      saving = false;
+    }
+  }
+  stopBtn.addEventListener('click', finish);
+  back.addEventListener('click', event => {
+    if (receipt && (active || turns.some(t => t.content))) {
+      event.preventDefault();
+      finish();
+    }
+  });
+  window.addEventListener('pagehide', () => {
+    if (receipt) {
+      try { navigator.sendBeacon('/api/voice/finish',
+        new Blob([JSON.stringify({receipt})],{type:'application/json'})); }
+      catch (_) {}
+    }
+    cleanup();
+  });
+</script>
+</body>
+</html>

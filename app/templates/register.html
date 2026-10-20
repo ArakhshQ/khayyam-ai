@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="theme-color" content="#04130f">
+  <script src="/static/main.js?v=20261020"></script>
+  <title>ساخت حساب — خیام</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
+  <link rel="stylesheet" href="/static/auth.css?v=20261020">
+</head>
+<body class="auth-body">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mark" viewBox="0 0 40 40"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 34V19C8 10.5 13 6 20 6s12 4.5 12 13v15"/><path d="M14 34V21c0-4 2.5-6.5 6-6.5s6 2.5 6 6.5v13"/><path d="M6 34h28"/></g></symbol></svg>
+  <div class="auth-bg" aria-hidden="true"></div>
+
+  <nav class="auth-nav">
+    <a href="/" class="logo">
+      <svg class="logo-mark" aria-hidden="true"><use href="#mark"/></svg>
+      <span class="logo-text">خیام</span>
+    </a>
+    <a href="/login" class="auth-nav-link">ورود</a>
+  </nav>
+
+  <main class="auth-main">
+    <section class="auth-card">
+      <div class="auth-heading">
+        <div class="auth-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.5 20c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5"/></svg>
+        </div>
+        <h1>ساخت حساب</h1>
+        <p>حساب رایگان بسازید و گفتگوهای خود را نگه دارید.</p>
+      </div>
+
+      <div id="error-box" class="auth-notice error" role="alert"></div>
+      <div id="success-box" class="auth-notice success" role="status"></div>
+
+      <form id="register-form" novalidate>
+        <div class="auth-field">
+          <label class="auth-label" for="username">نام کاربری</label>
+          <input class="auth-input" type="text" id="username" autocomplete="username" dir="ltr" placeholder="ahmad123" maxlength="40">
+        </div>
+        <div class="auth-field">
+          <label class="auth-label" for="email">ایمیل</label>
+          <input class="auth-input" type="email" id="email" autocomplete="email" required placeholder="example@gmail.com" dir="ltr">
+        </div>
+        <div class="auth-field">
+          <label class="auth-label" for="password">رمز عبور</label>
+          <input class="auth-input" type="password" id="password" autocomplete="new-password" placeholder="دست‌کم ۸ حرف">
+          <span class="auth-hint">دست‌کم ۸ حرف؛ ترکیب حرف و عدد امن‌تر است.</span>
+        </div>
+        <div class="auth-field">
+          <label class="auth-label" for="password2">تکرار رمز عبور</label>
+          <input class="auth-input" type="password" id="password2" autocomplete="new-password" placeholder="رمز عبور را دوباره بنویسید">
+        </div>
+        <button class="auth-button" id="submit-btn" type="submit">ساخت حساب</button>
+      </form>
+
+      <div class="auth-footer">قبلاً حساب ساخته‌اید؟ <a href="/login">وارد شوید</a></div>
+    </section>
+  </main>
+
+  <script>
+    const errBox = document.getElementById('error-box');
+    const okBox = document.getElementById('success-box');
+    const btn = document.getElementById('submit-btn');
+
+    function showError(msg) {
+      errBox.textContent = msg; errBox.classList.add('visible');
+      okBox.classList.remove('visible');
+    }
+    function showSuccess(msg) {
+      okBox.textContent = msg; okBox.classList.add('visible');
+      errBox.classList.remove('visible');
+    }
+
+    document.getElementById('register-form').addEventListener('submit', event => {
+      event.preventDefault();
+      register();
+    });
+
+    async function register() {
+      const username  = document.getElementById('username').value.trim();
+      const password  = document.getElementById('password').value;
+      const password2 = document.getElementById('password2').value;
+      const email     = document.getElementById('email').value.trim().toLowerCase();
+      const phone     = null;
+
+      if (!username)           return showError('نام کاربری را وارد کنید.');
+      if (username.length < 3) return showError('نام کاربری باید دست‌کم ۳ حرف باشد.');
+      if (!email || !document.getElementById('email').checkValidity()) return showError('یک ایمیل معتبر وارد کنید.');
+      if (password.length < 8) return showError('رمز عبور باید دست‌کم ۸ حرف باشد.');
+      if (password !== password2) return showError('رمز عبور و تکرار آن یکسان نیستند.');
+
+      btn.disabled = true;
+      btn.textContent = 'در حال ساخت حساب...';
+
+      try {
+        const res  = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password, email, phone })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          showSuccess(data.verification_email_sent
+            ? 'حساب شما ساخته شد. برای تأیید، ایمیل خود را بررسی کنید.'
+            : 'حساب ساخته شد، اما ایمیل ارسال نشد. در صفحهٔ بعد دوباره درخواست دهید.');
+          setTimeout(() => window.location.href = '/check-email', 1500);
+        } else {
+          showError(data.error || 'ساخت حساب ناموفق بود.');
+          btn.disabled = false;
+          btn.textContent = 'ساخت حساب';
+        }
+      } catch (err) {
+        showError('ارتباط با سرور برقرار نشد. دوباره تلاش کنید.');
+        btn.disabled = false;
+        btn.textContent = 'ساخت حساب';
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script src="/static/main.js?v=20261020"></script>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>استاد خیام — صنف درس</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/fonts.css?v=20261020">
+  <link rel="stylesheet" href="/static/style.css?v=20261020">
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+  <style>
+    body { height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+
+    header {
+      z-index:20; display:flex; align-items:center; justify-content:space-between;
+      padding:0 16px; height:56px;
+      background:var(--surface); border-bottom:1px solid var(--border); flex-shrink:0;
+    }
+    .nav-btn {
+      padding:5px 12px; border-radius:7px; border:1px solid var(--border);
+      background:transparent; color:var(--text-dim);
+      font-family:'Vazirmatn',sans-serif; font-size:13px;
+      cursor:pointer; text-decoration:none; transition:all 0.2s;
+    }
+    .nav-btn:hover { background:var(--surface2); color:var(--text); }
+
+    .xp-bar-wrap { display:flex; align-items:center; gap:8px; }
+    .xp-label { font-size:12px; color:var(--gold); font-weight:700; white-space:nowrap; }
+    .xp-track {
+      width:100px; height:8px; background:var(--surface2);
+      border-radius:4px; overflow:hidden; border:1px solid var(--border);
+    }
+    .xp-fill {
+      height:100%; background:linear-gradient(90deg, var(--gold-dim), var(--gold));
+      border-radius:4px; transition:width 0.8s cubic-bezier(0.34,1.56,0.64,1);
+    }
+
+    .main { flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+
+    .screen { flex:1; overflow-y:auto; display:none; flex-direction:column; }
+    .screen.active { display:flex; }
+
+    /* ── LOADING ── */
+    .loading-overlay {
+      position:absolute; inset:0; z-index:50;
+      background:var(--bg); display:flex; align-items:center; justify-content:center;
+      flex-direction:column; gap:16px;
+    }
+    .loading-spinner {
+      width:40px; height:40px; border:3px solid var(--border);
+      border-top-color:var(--gold); border-radius:50%;
+      animation:spin 0.8s linear infinite;
+    }
+    .loading-text { font-size:14px; color:var(--text-dim); }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* ── SUBJECT SCREEN ── */
+    .subject-screen {
+      align-items:center; justify-content:center; padding:32px 16px;
+    }
+    .screen-top { text-align:center; margin-bottom:36px; }
+    .screen-top h1 { font-size:26px; font-weight:900; color:var(--gold); margin-bottom:8px; }
+    .screen-top p { font-size:14px; color:var(--text-dim); line-height:1.8; }
+
+    .subject-grid {
+      display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+      gap:14px; max-width:700px; width:100%;
+    }
+    .subject-card {
+      background:var(--surface); border:1px solid var(--border);
+      border-radius:16px; padding:24px 16px; text-align:center;
+      cursor:pointer; transition:all 0.25s;
+    }
+    .subject-card:hover { border-color:var(--gold-dim); transform:translateY(-3px); box-shadow:0 8px 24px rgba(0,0,0,0.3); }
+    .subject-card.has-progress { border-color:var(--gold-dim); }
+    .subject-emoji { font-size:36px; margin-bottom:12px; display:block; }
+    .subject-name { font-size:16px; font-weight:700; color:var(--text); margin-bottom:4px; }
+    .subject-progress-bar { height:4px; background:var(--surface2); border-radius:2px; margin-top:10px; overflow:hidden; }
+    .subject-progress-fill { height:100%; background:var(--gold); border-radius:2px; transition:width 0.5s; }
+    .subject-xp { font-size:11px; color:var(--text-dim); margin-top:6px; }
+
+    /* ── TOPIC SCREEN ── */
+    .topic-header {
+      padding:12px 16px; background:var(--surface);
+      border-bottom:1px solid var(--border); flex-shrink:0;
+      display:flex; align-items:center; gap:10px;
+    }
+    .back-btn {
+      width:32px; height:32px; border-radius:8px;
+      border:1px solid var(--border); background:transparent;
+      color:var(--text-dim); cursor:pointer;
+      display:flex; align-items:center; justify-content:center;
+      font-size:16px; transition:all 0.2s; flex-shrink:0;
+    }
+    .back-btn:hover { background:var(--surface2); color:var(--text); }
+    .topic-subject-name { font-size:16px; font-weight:700; color:var(--gold); flex:1; }
+
+    .start-options {
+      display:flex; gap:10px; padding:12px 16px;
+      border-bottom:1px solid var(--border); flex-shrink:0;
+    }
+    .option-btn {
+      flex:1; padding:8px; border-radius:8px;
+      border:1px solid var(--border); background:var(--surface);
+      color:var(--text-dim); font-family:'Vazirmatn',sans-serif;
+      font-size:13px; cursor:pointer; transition:all 0.2s; text-align:center;
+    }
+    .option-btn:hover { border-color:var(--gold-dim); color:var(--gold); }
+    .option-btn.active { border-color:var(--gold); background:rgba(201,168,76,0.1); color:var(--gold); }
+
+    .levels-container { flex:1; overflow-y:auto; padding:20px; }
+    .level-section { margin-bottom:28px; }
+    .level-title {
+      font-size:13px; font-weight:700; color:var(--text-dim);
+      letter-spacing:0.06em; text-transform:uppercase;
+      margin-bottom:12px; display:flex; align-items:center; gap:8px;
+    }
+    .level-badge {
+      padding:2px 8px; border-radius:99px; font-size:10px;
+      background:rgba(201,168,76,0.1); color:var(--gold); border:1px solid var(--gold-dim);
+    }
+    .topics-list { display:flex; flex-direction:column; gap:8px; }
+    .topic-item {
+      display:flex; align-items:center; gap:12px; padding:12px 16px;
+      border-radius:12px; border:1px solid var(--border); background:var(--surface);
+      cursor:pointer; transition:all 0.2s;
+    }
+    .topic-item:hover { border-color:var(--gold-dim); background:var(--surface2); }
+    .topic-item.completed { border-color:rgba(122,191,106,0.4); }
+    .topic-item.current { border-color:var(--gold); background:rgba(201,168,76,0.06); }
+    .topic-status {
+      width:28px; height:28px; border-radius:50%; flex-shrink:0;
+      display:flex; align-items:center; justify-content:center; font-size:13px;
+      background:var(--surface2); border:1px solid var(--border);
+    }
+    .topic-status.done { background:rgba(122,191,106,0.15); border-color:#3a5c2e; color:#7abf6a; }
+    .topic-status.active { background:rgba(201,168,76,0.15); border-color:var(--gold-dim); color:var(--gold); }
+    .topic-info { flex:1; }
+    .topic-item-title { font-size:14px; font-weight:500; color:var(--text); margin-bottom:2px; }
+    .topic-item-desc { font-size:12px; color:var(--text-dim); }
+    .quiz-row {
+      display:flex; align-items:center; gap:12px; padding:12px 16px;
+      border-radius:12px; border:1px solid var(--gold-dim);
+      background:rgba(201,168,76,0.06); cursor:pointer; transition:all 0.2s; margin-top:8px;
+    }
+    .quiz-row:hover { background:rgba(201,168,76,0.12); }
+    .quiz-row.locked { opacity:0.4; cursor:not-allowed; }
+    .quiz-row.done { border-color:rgba(122,191,106,0.4); background:rgba(58,92,46,0.08); }
+
+    /* ── CHAT SCREEN ── */
+    .chat-nav {
+      padding:10px 16px; background:var(--surface);
+      border-bottom:1px solid var(--border);
+      display:flex; align-items:center; gap:8px; flex-shrink:0; flex-wrap:wrap;
+    }
+    .topic-tag {
+      padding:3px 12px; border-radius:99px; font-size:12px; font-weight:500;
+      background:rgba(201,168,76,0.15); color:var(--gold); border:1px solid var(--gold-dim);
+    }
+    .complete-btn {
+      margin-right:auto; padding:4px 14px; border-radius:99px;
+      border:1px solid #3a5c2e; background:rgba(58,92,46,0.2);
+      color:#7abf6a; font-family:'Vazirmatn',sans-serif;
+      font-size:12px; cursor:pointer; transition:all 0.2s; white-space:nowrap;
+    }
+    .complete-btn:hover { background:rgba(58,92,46,0.4); }
+
+    .chat-wrapper { flex:1; overflow-y:auto; padding:20px 16px; }
+    .chat-wrapper::-webkit-scrollbar { width:4px; }
+    .chat-wrapper::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+    .messages { max-width:700px; margin:0 auto; display:flex; flex-direction:column; gap:18px; }
+
+    .message { display:flex; gap:10px; animation:fadeUp 0.3s ease both; }
+    .message.user { flex-direction:row-reverse; }
+    .avatar {
+      width:34px; height:34px; border-radius:50%; flex-shrink:0;
+      display:flex; align-items:center; justify-content:center;
+      font-size:11px; font-weight:700; margin-top:2px;
+    }
+    .avatar.ai { background:var(--surface2); border:1px solid var(--gold-dim); color:var(--gold); }
+    .avatar.user { background:var(--user-bg); border:1px solid var(--user-border); font-size:15px; }
+    .bubble {
+      max-width:78%; padding:12px 16px; border-radius:14px; font-size:15px; line-height:1.85;
+    }
+    .message.ai .bubble { background:var(--surface); border:1px solid var(--border); border-top-right-radius:4px; }
+    .message.user .bubble { background:var(--user-bg); border:1px solid var(--user-border); border-top-left-radius:4px; }
+
+    .bubble p { margin-bottom:10px; }
+    .bubble p:last-child { margin-bottom:0; }
+    .bubble ul,.bubble ol { padding-right:20px; margin-bottom:10px; }
+    .bubble li { margin-bottom:6px; line-height:1.7; }
+    .bubble h1,.bubble h2,.bubble h3 { font-size:15px; font-weight:700; color:var(--gold); margin:14px 0 6px; }
+    .bubble h1:first-child,.bubble h2:first-child,.bubble h3:first-child { margin-top:0; }
+    .bubble strong { color:var(--text); font-weight:700; }
+    .bubble code {
+      background:var(--surface2); border:1px solid var(--border);
+      border-radius:4px; padding:1px 6px; font-size:13px; direction:ltr; display:inline-block;
+    }
+    .bubble pre {
+      background:#0d1117; border:1px solid var(--border);
+      border-radius:8px; padding:12px; overflow-x:auto;
+      margin:10px 0; direction:ltr; text-align:left;
+    }
+    .bubble pre code { background:none; border:none; padding:0; color:#e6edf3; display:block; }
+
+    .typing-dots { display:flex; gap:5px; align-items:center; padding:4px 0; }
+    .typing-dots span {
+      width:7px; height:7px; background:var(--gold-dim);
+      border-radius:50%; animation:bounce 1.2s infinite;
+    }
+    .typing-dots span:nth-child(2) { animation-delay:0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay:0.4s; }
+
+    .system-note {
+      text-align:center; font-size:12px; color:var(--text-dim);
+      padding:6px; border-top:1px solid var(--border);
+      border-bottom:1px solid var(--border); margin:4px 0;
+    }
+
+    .inline-quiz {
+      background:var(--surface); border:1px solid var(--gold-dim);
+      border-radius:14px; padding:18px; margin:8px 0;
+      max-width:700px; margin-left:auto; margin-right:auto;
+    }
+    .inline-quiz-title { font-size:13px; font-weight:700; color:var(--gold); margin-bottom:12px; }
+    .inline-quiz-q { font-size:15px; color:var(--text); margin-bottom:14px; line-height:1.6; }
+    .inline-quiz-opts { display:flex; flex-direction:column; gap:8px; }
+    .inline-opt {
+      padding:10px 14px; border-radius:10px; border:1px solid var(--border);
+      background:var(--surface2); cursor:pointer; transition:all 0.2s;
+      font-family:'Vazirmatn',sans-serif; font-size:14px; color:var(--text); text-align:right;
+    }
+    .inline-opt:hover:not(.answered) { border-color:var(--gold-dim); color:var(--gold); }
+    .inline-opt.correct { border-color:#3a5c2e; background:rgba(58,92,46,0.2); color:#7abf6a; }
+    .inline-opt.wrong { border-color:#5c2e2e; background:rgba(92,46,46,0.2); color:#e06060; }
+    .inline-explanation {
+      margin-top:12px; padding:10px; border-radius:8px;
+      background:rgba(201,168,76,0.08); border:1px solid var(--gold-dim);
+      font-size:13px; color:var(--text-dim); line-height:1.7; display:none;
+    }
+    .inline-explanation.show { display:block; }
+
+    .input-area {
+      padding:12px 16px 16px;
+      background:var(--surface); border-top:1px solid var(--border); flex-shrink:0;
+    }
+    .input-box {
+      max-width:700px; margin:0 auto; display:flex; align-items:flex-end; gap:10px;
+      background:var(--surface2); border:1px solid var(--border);
+      border-radius:14px; padding:10px 12px; transition:border-color 0.2s;
+    }
+    .input-box:focus-within { border-color:var(--gold-dim); }
+    #user-input {
+      flex:1; background:transparent; border:none; outline:none;
+      color:var(--text); font-family:'Vazirmatn',sans-serif;
+      font-size:15px; resize:none; max-height:140px; line-height:1.6; direction:rtl;
+    }
+    #user-input::placeholder { color:var(--text-dim); }
+    #send-btn {
+      width:34px; height:34px; border-radius:8px; border:none;
+      background:var(--gold); color:#0f0e0c; font-size:16px;
+      cursor:pointer; display:flex; align-items:center; justify-content:center;
+      flex-shrink:0; transition:all 0.2s;
+    }
+    #send-btn:hover { background:#e0bb60; transform:scale(1.05); }
+    #send-btn:disabled { background:var(--border); color:var(--text-dim); cursor:not-allowed; transform:none; }
+    .voice-action-btn {
+      width:34px; height:34px; border-radius:8px; border:1px solid var(--border);
+      background:transparent; color:var(--text); font-size:16px; cursor:pointer;
+      display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all .15s;
+    }
+    .voice-action-btn:hover { background:var(--surface); border-color:var(--gold-dim); }
+    .voice-action-btn.recording { background:rgba(220,60,60,.14); border-color:#d9534f; color:#e66; animation:voicePulse 1.2s infinite; }
+    .voice-action-btn:disabled { opacity:.55; cursor:wait; }
+    .voice-status { max-width:700px; margin:7px auto 0; min-height:0; font-size:12px; color:var(--text-dim); text-align:center; }
+    .voice-status:empty { display:none; }
+    .voice-status.error { color:#e57373; }
+    @keyframes voicePulse { 50% { box-shadow:0 0 0 4px rgba(220,60,60,.12); } }
+    .input-hint { text-align:center; font-size:11px; color:var(--text-dim); margin-top:6px; }
+
+    /* ── QUIZ SCREEN ── */
+    .quiz-screen-wrap { align-items:center; justify-content:center; padding:24px 16px; }
+    .quiz-card {
+      width:100%; max-width:600px;
+      background:var(--surface); border:1px solid var(--border);
+      border-radius:18px; padding:28px; animation:fadeUp 0.4s ease both;
+    }
+    .quiz-progress { margin-bottom:20px; }
+    .quiz-progress-row { display:flex; justify-content:space-between; font-size:12px; color:var(--text-dim); margin-bottom:6px; }
+    .quiz-track { height:6px; background:var(--surface2); border-radius:3px; overflow:hidden; }
+    .quiz-fill { height:100%; background:var(--gold); border-radius:3px; transition:width 0.4s; }
+    .quiz-q { font-size:17px; font-weight:700; color:var(--text); margin-bottom:20px; line-height:1.6; }
+    .quiz-opts { display:flex; flex-direction:column; gap:10px; }
+    .quiz-opt {
+      padding:13px 16px; border-radius:12px; border:1px solid var(--border);
+      background:var(--surface2); cursor:pointer; transition:all 0.2s;
+      font-family:'Vazirmatn',sans-serif; font-size:14px; color:var(--text); text-align:right;
+    }
+    .quiz-opt:hover:not(.answered) { border-color:var(--gold-dim); color:var(--gold); }
+    .quiz-opt.correct { border-color:#3a5c2e; background:rgba(58,92,46,0.2); color:#7abf6a; }
+    .quiz-opt.wrong { border-color:#5c2e2e; background:rgba(92,46,46,0.2); color:#e06060; }
+    .quiz-explanation {
+      margin-top:14px; padding:12px; border-radius:10px;
+      background:rgba(201,168,76,0.08); border:1px solid var(--gold-dim);
+      font-size:13px; color:var(--text-dim); line-height:1.7; display:none;
+    }
+    .quiz-explanation.show { display:block; }
+    .quiz-next {
+      margin-top:18px; width:100%; padding:12px; border-radius:10px;
+      border:none; background:var(--gold); color:#0f0e0c;
+      font-family:'Vazirmatn',sans-serif; font-size:15px; font-weight:700;
+      cursor:pointer; transition:all 0.2s; display:none;
+    }
+    .quiz-next.show { display:block; }
+    .quiz-next:hover { background:#e0bb60; }
+
+    .quiz-result { text-align:center; padding:32px 16px; }
+    .score-big { font-size:64px; font-weight:900; color:var(--gold); line-height:1; margin-bottom:8px; }
+    .score-label { font-size:16px; color:var(--text-dim); margin-bottom:20px; }
+    .xp-pill {
+      font-size:14px; color:#7abf6a;
+      background:rgba(58,92,46,0.2); border:1px solid #3a5c2e;
+      border-radius:99px; padding:6px 18px; display:inline-block; margin-bottom:20px;
+    }
+    .result-actions { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+    .btn-gold { padding:10px 24px; border-radius:10px; background:var(--gold); color:#0f0e0c; border:none; font-family:'Vazirmatn',sans-serif; font-size:14px; font-weight:700; cursor:pointer; }
+    .btn-gold:hover { background:#e0bb60; }
+    .btn-dim { padding:10px 24px; border-radius:10px; background:transparent; color:var(--text-dim); border:1px solid var(--border); font-family:'Vazirmatn',sans-serif; font-size:14px; cursor:pointer; }
+    .btn-dim:hover { border-color:var(--gold-dim); color:var(--gold); }
+
+    /* XP popup */
+    .xp-popup {
+      position:fixed; top:68px; left:50%; transform:translateX(-50%) translateY(-20px);
+      background:var(--surface); border:1px solid var(--gold);
+      border-radius:99px; padding:8px 20px;
+      font-size:14px; font-weight:700; color:var(--gold);
+      opacity:0; transition:all 0.5s; z-index:200; pointer-events:none;
+    }
+    .xp-popup.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+    .limit-notice {
+      text-align:center; font-size:12px; color:var(--gold);
+      background:rgba(201,168,76,0.08); border:1px solid var(--gold-dim);
+      border-radius:8px; padding:8px 14px; margin:4px auto; max-width:500px;
+    }
+
+    @keyframes bounce {
+      0%,60%,100% { transform:translateY(0); opacity:0.4; }
+      30% { transform:translateY(-6px); opacity:1; }
+    }
+    @keyframes fadeUp {
+      from { opacity:0; transform:translateY(12px); }
+      to { opacity:1; transform:translateY(0); }
+    }
+
+    @media (max-width:600px) {
+      .subject-grid { grid-template-columns:1fr 1fr; }
+      .bubble { max-width:90%; font-size:14px; }
+      .xp-track { width:70px; }
+    }
+  
+    .speak-reply-btn {
+      display:inline-flex; align-items:center; gap:6px; margin-top:9px;
+      padding:5px 10px; border-radius:8px; border:1px solid var(--gold-dim);
+      background:rgba(201,168,76,0.07); color:var(--gold);
+      font-family:'Vazirmatn',sans-serif; font-size:12px; cursor:pointer;
+      transition:background .2s, border-color .2s;
+    }
+    .speak-reply-btn:hover { background:rgba(201,168,76,0.15); border-color:var(--gold); }
+    .speak-reply-btn:disabled { opacity:.65; cursor:wait; }
+    .speak-reply-btn .speak-icon { font-size:14px; }
+    .voice-disclosure { text-align:center; font-size:10px; color:var(--text-dim); margin-top:4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="/" class="logo">
+    <svg class="logo-mark" viewBox="0 0 40 40" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 34V19C8 10.5 13 6 20 6s12 4.5 12 13v15"/><path d="M14 34V21c0-4 2.5-6.5 6-6.5s6 2.5 6 6.5v13"/><path d="M6 34h28"/></g></svg>
+    <span class="logo-text">خیام</span>
+  </a>
+  <div class="xp-bar-wrap" id="xp-bar-wrap" style="display:none">
+    <span class="xp-label" id="xp-label">⚡ 0 XP</span>
+    <div class="xp-track"><div class="xp-fill" id="xp-fill" style="width:0%"></div></div>
+  </div>
+  <div style="display:flex;gap:6px;">
+  <a href="/chat"    class="nav-btn">چت</a>
+  <a href="/tutor"   class="nav-btn active">بیاموز</a>
+  <a href="/pricing" class="nav-btn">قیمت‌ها</a>
+  <div id="auth-nav"><a href="/login" class="nav-btn">ورود</a></div>
+</div>
+</header>
+
+<div class="xp-popup" id="xp-popup"></div>
+
+<!-- LOADING OVERLAY -->
+<div class="loading-overlay" id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text" id="loading-text">در حال بارگذاری...</div>
+</div>
+
+<div class="main">
+
+  <!-- SCREEN 1: SUBJECTS -->
+  <div class="screen subject-screen" id="screen-subject">
+    <div class="screen-top">
+      <div style="font-size:48px;margin-bottom:14px;">📚</div>
+      <h1>استاد خیام</h1>
+      <p>مضمون خود را انتخاب کنید</p>
+    </div>
+    <div class="subject-grid" id="subject-grid"></div>
+  </div>
+
+  <!-- SCREEN 2: TOPICS -->
+  <div class="screen" id="screen-topic" style="flex-direction:column;">
+    <div class="topic-header">
+      <button class="back-btn" onclick="showScreen('subject')" title="تغییر مضمون">←</button>
+      <span class="topic-subject-name" id="topic-subject-name"></span>
+    </div>
+    <div class="start-options">
+      <button class="option-btn active" id="btn-browse" onclick="setBrowseMode()">📋 انتخاب موضوع</button>
+      <button class="option-btn" id="btn-placement" onclick="startPlacementTest()">🎯 تست سطح‌بندی</button>
+    </div>
+    <div class="levels-container" id="levels-container"></div>
+  </div>
+
+  <!-- SCREEN 3: CHAT -->
+  <div class="screen" id="screen-chat" style="flex-direction:column;">
+    <div class="chat-nav">
+      <button class="back-btn" onclick="showScreen('topic')" title="بازگشت به موضوعات">←</button>
+      <button class="back-btn" onclick="showScreen('subject')" title="تغییر مضمون" style="font-size:12px;width:auto;padding:0 8px;">🏠</button>
+      <span class="topic-tag" id="chat-topic-tag"></span>
+      <button class="complete-btn" onclick="completeTopic()">✓ موضوع کامل شد</button>
+    </div>
+    <div class="chat-wrapper" id="chat-wrapper">
+      <div class="messages" id="messages"></div>
+    </div>
+    <div class="input-area">
+      <div class="input-box">
+        <textarea id="user-input" rows="1" placeholder="سوال خود را بنویسید..."></textarea>
+        <button type="button" id="voice-record-btn" class="voice-action-btn" onclick="openLiveVoiceTutor()" title="گفتگوی صوتی درس" aria-label="گفتگوی صوتی درس">🎙</button>
+        <button id="send-btn" onclick="sendMessage()">↑</button>
+      </div>
+      <p class="input-hint">Enter برای ارسال · Shift+Enter برای سطر جدید</p>
+      <p id="voice-status" class="voice-status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;"></p>
+    </div>
+  </div>
+
+  <!-- SCREEN 4: QUIZ -->
+  <div class="screen quiz-screen-wrap" id="screen-quiz">
+    <div style="padding:12px;text-align:center"><button class="btn-dim" onclick="openLiveVoiceTutor()">🎙 شروع / پایان صدای استاد</button></div>
+    <div class="quiz-card" id="quiz-card"></div>
+  </div>
+
+</div>
+
+<nav class="bottom-nav">
+  <div class="bottom-nav-inner">
+    <a href="/" class="bottom-tab"><span class="tab-icon"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7v8.500a.5.5 0 0 1-.5.500H15v-5.500H9V20H4.500a.5.5 0 0 1-.5-.5V11Z"/></g></svg></span><span class="tab-label">خانه</span></a>
+    <a href="/chat" class="bottom-tab"><span class="tab-icon"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.600 7.100L4 20l1-4.200A8 8 0 1 1 20 12Z"/></g></svg></span><span class="tab-label">چت</span></a>
+    <a href="/tutor" class="bottom-tab active"><span class="tab-icon"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m2.500 9 9.500-4.500L21.500 9 12 13.500 2.500 9Z"/><path d="M6.500 11.200v4.300c0 1.200 2.500 2.600 5.500 2.600s5.500-1.400 5.500-2.600v-4.300"/></g></svg></span><span class="tab-label">بیاموز</span></a>
+    <a href="/profile" class="bottom-tab"><span class="tab-icon"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.500" r="3.600"/><path d="M4.500 20c.9-3.600 3.900-5.500 7.500-5.500s6.600 1.900 7.500 5.500"/></g></svg></span><span class="tab-label">پروفایل</span></a>
+  </div>
+</nav>
+
+<script>
+  marked.setOptions({breaks:true, gfm:true});
+
+  // ── STATE ──
+  let curriculum        = {};
+  let userProgress      = {};
+  let currentUser       = null;
+  let currentSubject    = null;
+  let currentTopic      = null;
+  let currentLevel      = 1;
+  let chatHistory       = [];
+  let isLoading         = false;
+  let switchNoticeShown = false;
+  let totalXP           = 0;
+  let messageCount      = 0; // track messages in current topic for auto-quiz
+  let inlineQuizActive  = false;
+
+  let quizQuestions = [];
+  let quizCurrent   = 0;
+  let quizScore     = 0;
+  let quizAnswered  = false;
+  let quizToken = null;
+  let quizAnswers = [];
+  let practiceToken = null;
+  let practiceQuestion = null;
+  let voicePracticeCount = 0;
+  let placementAnswers = [];
+
+  // ── LOADING ──
+  function showLoading(text='در حال بارگذاری...') {
+    document.getElementById('loading-text').textContent = text;
+    document.getElementById('loading-overlay').style.display = 'flex';
+  }
+  function hideLoading() {
+    document.getElementById('loading-overlay').style.display = 'none';
+  }
+
+  // ── INIT ──
+  async function init() {
+    showLoading('در حال بارگذاری مضامین...');
+    try {
+      const [meRes, currRes] = await Promise.all([
+        fetch('/api/me'),
+        fetch('/api/tutor/curriculum')
+      ]);
+      const meData   = await meRes.json();
+      const currData = await currRes.json();
+      curriculum     = currData;
+
+      if (meData.logged_in) {
+        currentUser = meData;
+        document.getElementById('auth-nav').innerHTML =
+          `<a href="/profile" class="nav-btn">${escapeHtml(meData.username)}</a>`;
+        document.getElementById('xp-bar-wrap').style.display = 'flex';
+        await loadAllProgress();
+      }
+
+      renderSubjects();
+      showScreen('subject');
+    } catch(e) {
+      console.error(e);
+    } finally {
+      hideLoading();
+    }
+  }
+
+  async function loadAllProgress() {
+    for (const subj of Object.keys(curriculum)) {
+      try {
+        const res  = await fetch(`/api/tutor/progress/${subj}`);
+        const data = await res.json();
+        userProgress[subj] = data;
+        if (data.total_xp !== undefined) totalXP = data.total_xp;
+      } catch(e) {}
+    }
+    updateXPBar(totalXP, false);
+  }
+
+  // ── XP ──
+  function updateXPBar(xp, animate=true) {
+    totalXP = xp;
+    document.getElementById('xp-label').textContent = `⚡ ${xp} XP`;
+    const pct = Math.min(100, (xp % 1000) / 10);
+    document.getElementById('xp-fill').style.width = pct + '%';
+  }
+  function showXPPopup(amount) {
+    const p = document.getElementById('xp-popup');
+    p.textContent = `+${amount} XP ⚡`;
+    p.classList.add('show');
+    setTimeout(() => p.classList.remove('show'), 2200);
+  }
+
+  // ── SCREENS ──
+  function showScreen(name) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(`screen-${name}`).classList.add('active');
+    if (name === 'subject') renderSubjects();
+  }
+
+  // ── RENDER SUBJECTS ──
+  function renderSubjects() {
+    const grid = document.getElementById('subject-grid');
+    grid.innerHTML = '';
+    for (const [key, subj] of Object.entries(curriculum)) {
+      const prog      = userProgress[key];
+      const subjXP    = prog?.progress?.subject_xp || 0;
+      const lastTopic = prog?.progress?.last_topic_title || '';
+      const completed = prog?.progress?.completed_topics?.length || 0;
+      const total     = Object.values(subj.levels).reduce((a,l) => a + l.topics.length, 0);
+      const pct       = total > 0 ? Math.round((completed/total)*100) : 0;
+
+      const card = document.createElement('div');
+      card.className = `subject-card ${pct > 0 ? 'has-progress' : ''}`;
+      card.innerHTML = `
+        <span class="subject-emoji">${subj.emoji}</span>
+        <div class="subject-name">${subj.name}</div>
+        ${lastTopic ? `<div style="font-size:11px;color:var(--text-dim);margin-top:4px;">ادامه: ${lastTopic}</div>` : ''}
+        <div class="subject-progress-bar">
+          <div class="subject-progress-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="subject-xp">${subjXP} XP · ${pct}% کامل</div>
+      `;
+      card.onclick = () => selectSubject(key);
+      grid.appendChild(card);
+    }
+  }
+
+  // ── SELECT SUBJECT ──
+  async function selectSubject(key) {
+    currentSubject = key;
+    const subj = curriculum[key];
+    document.getElementById('topic-subject-name').textContent = subj.emoji + ' ' + subj.name;
+    document.getElementById('btn-browse').classList.add('active');
+    document.getElementById('btn-placement').classList.remove('active');
+
+    showLoading('در حال بارگذاری موضوعات...');
+    if (currentUser) {
+      try {
+        const res  = await fetch(`/api/tutor/progress/${key}`);
+        const data = await res.json();
+        userProgress[key] = data;
+        if (data.total_xp) { totalXP = data.total_xp; updateXPBar(totalXP, false); }
+      } catch(e) {}
+    }
+    hideLoading();
+    renderTopics();
+    showScreen('topic');
+  }
+
+  function renderTopics() {
+    const container   = document.getElementById('levels-container');
+    const subj        = curriculum[currentSubject];
+    const prog        = userProgress[currentSubject];
+    const completed   = prog?.progress?.completed_topics || [];
+    const compQuizzes = prog?.progress?.completed_quizzes || [];
+    const lastTopic   = prog?.progress?.last_topic_title || '';
+    container.innerHTML = '';
+
+    for (const [lvlNum, lvlData] of Object.entries(subj.levels)) {
+      const lvl        = parseInt(lvlNum);
+      const lvlTopics  = lvlData.topics;
+      const lvlDone    = lvlTopics.every(t => completed.includes(t.key));
+      const quizKey    = `${currentSubject}_level${lvl}`;
+      const quizDone   = compQuizzes.includes(quizKey);
+
+      const section = document.createElement('div');
+      section.className = 'level-section';
+      section.innerHTML = `
+        <div class="level-title">
+          سطح ${lvl} — ${lvlData.title}
+          ${lvlDone ? '<span class="level-badge">✓ کامل</span>' : ''}
+        </div>`;
+
+      const list = document.createElement('div');
+      list.className = 'topics-list';
+
+      lvlTopics.forEach(topic => {
+        const isDone    = completed.includes(topic.key);
+        const isCurrent = topic.title === lastTopic && !isDone;
+        const item      = document.createElement('div');
+        item.className  = `topic-item ${isDone?'completed':''} ${isCurrent?'current':''}`;
+        item.innerHTML  = `
+          <div class="topic-status ${isDone?'done':isCurrent?'active':''}">
+            ${isDone ? '✓' : isCurrent ? '▶' : '○'}
+          </div>
+          <div class="topic-info">
+            <div class="topic-item-title">${topic.title}</div>
+            <div class="topic-item-desc">${topic.desc}</div>
+          </div>
+          ${isDone ? '<span style="font-size:11px;color:#7abf6a;">✓</span>' : ''}
+        `;
+        item.onclick = () => startTopic(topic, lvl);
+        list.appendChild(item);
+      });
+
+      section.appendChild(list);
+
+      const allDone  = lvlTopics.every(t => completed.includes(t.key));
+      const quizRow  = document.createElement('div');
+      quizRow.className = `quiz-row ${!allDone?'locked':''} ${quizDone?'done':''}`;
+      quizRow.innerHTML = `
+        <div class="topic-status ${quizDone?'done':''}">
+          ${quizDone ? '⭐' : '📝'}
+        </div>
+        <div class="topic-info">
+          <div class="topic-item-title">کوییز سطح ${lvl}</div>
+          <div class="topic-item-desc">
+            ${quizDone ? 'قبلاً گذرانده‌ای — می‌توانی دوباره امتحان بدهی' :
+              allDone ? '✅ آماده — همه موضوعات کامل شد' : `${completed.filter(c=>lvlTopics.map(t=>t.key).includes(c)).length}/${lvlTopics.length} موضوع کامل شده`}
+          </div>
+        </div>
+        ${quizDone ? '<span style="font-size:11px;color:var(--gold);">+50 XP</span>' : ''}
+      `;
+      if (allDone) quizRow.onclick = () => startQuiz(lvl);
+      section.appendChild(quizRow);
+      container.appendChild(section);
+    }
+  }
+
+  // ── START TOPIC ──
+  async function startTopic(topic, level) {
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
+    currentTopic      = topic;
+    currentLevel      = level;
+    switchNoticeShown = false;
+    messageCount      = 0;
+    inlineQuizActive  = false;
+
+    document.getElementById('chat-topic-tag').textContent = topic.title;
+    document.getElementById('messages').innerHTML = '';
+    showScreen('chat');
+    showLoading('در حال آماده‌سازی درس...');
+
+    chatHistory = [];
+
+    if (currentUser) {
+      try {
+        const res  = await fetch(`/api/tutor/lesson-history/${encodeURIComponent(currentSubject)}/${encodeURIComponent(topic.key)}`);
+        if (!res.ok) throw new Error('Could not load lesson history');
+        const data = await res.json();
+        chatHistory = data.history || [];
+        hideLoading();
+
+        if (chatHistory.length > 0) {
+          chatHistory.forEach(m => appendBubble(m.role==='user'?'user':'ai', m.content));
+          addSystemNote('ادامه درس از آخرین نقطه...');
+        } else {
+          await sendToAPI(`درس "${topic.title}" را شروع کن. با یک سوال کوتاه از دانش من شروع کن تا ببینی چقدر می‌دانم.`, true);
+        }
+      } catch(e) {
+        hideLoading();
+        await sendToAPI(`درس "${topic.title}" را شروع کن.`, true);
+      }
+    } else {
+      hideLoading();
+      await sendToAPI(`درس "${topic.title}" را شروع کن. با یک معرفی جذاب شروع کن.`, true);
+    }
+
+    if (currentUser) {
+      try {
+        await fetch('/api/tutor/start-topic', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({subject:currentSubject, topic_key:topic.key, level})
+        });
+      } catch(e) {}
+    }
+  }
+
+  // ── SEND MESSAGE ──
+  async function sendMessage() {
+    const input = document.getElementById('user-input');
+    const text  = input.value.trim();
+    if (!text || isLoading || inlineQuizActive) return;
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
+
+    isLoading = true;
+    document.getElementById('send-btn').disabled = true;
+    input.value = '';
+    input.style.height = 'auto';
+
+    appendBubble('user', text);
+    chatHistory.push({role:'user', content:text});
+    messageCount++;
+
+    await sendToAPI(text, false);
+
+    isLoading = false;
+    document.getElementById('send-btn').disabled = false;
+    input.focus();
+
+    // auto quiz: after every 4 messages ask a quick check question
+    if (messageCount > 0 && messageCount % 4 === 0 && !inlineQuizActive) {
+      setTimeout(() => triggerInlineQuiz(), 800);
+    }
+  }
+
+  async function sendToAPI(message, isOpener) {
+    showTyping();
+    try {
+      const res  = await fetch('/api/tutor/chat', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          subject:   currentSubject,
+          topic_key: currentTopic?.key,
+          level:     currentLevel,
+          message:   message
+        })
+      });
+      const data = await res.json();
+      removeTyping();
+
+      // hard limit hit
+      if (data.limited) {
+        const resetDate = data.reset_ts ? new Date(data.reset_ts * 1000) : null;
+        let timeStr = '';
+        if (resetDate) {
+          const time     = resetDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          const dayStr = resetDate.toDateString() === tomorrow.toDateString() ? 'فردا ساعت ' : 'امروز ساعت ';
+          timeStr = ` بازنشینی ${dayStr}${time}.`;
+        }
+
+        const notice = document.createElement('div');
+        notice.style.cssText = `
+          background:var(--surface); border:1px solid var(--gold);
+          border-radius:14px; padding:20px; margin:8px auto;
+          max-width:500px; text-align:center; direction:rtl;`;
+        notice.innerHTML = `
+          <div style="font-size:28px;margin-bottom:10px;">⏰</div>
+          <div style="font-size:15px;font-weight:700;color:var(--gold);margin-bottom:8px;">
+            سقف روزانه تمام شد
+          </div>
+          <div style="font-size:13px;color:var(--text-dim);line-height:1.8;margin-bottom:16px;">
+            ۵۰۰۰ توکن روزانه رایگان استفاده شد.${timeStr}
+            <br/>برای ادامه بدون محدودیت، پلان تدریس را فعال کن.
+          </div>
+          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+            <a href="/pricing" style="
+              padding:8px 20px; border-radius:99px; background:var(--gold);
+              color:#0f0e0c; font-family:'Vazirmatn',sans-serif;
+              font-size:13px; font-weight:700; text-decoration:none;">
+              مشاهده پلان‌ها ↗
+            </a>
+            <button onclick="showScreen('subject')" style="
+              padding:8px 20px; border-radius:99px;
+              border:1px solid var(--border); background:transparent;
+              color:var(--text-dim); font-family:'Vazirmatn',sans-serif;
+              font-size:13px; cursor:pointer;">
+              فردا برمی‌گردم
+            </button>
+          </div>`;
+        document.getElementById('messages').appendChild(notice);
+        scrollToBottom();
+
+        // disable input
+        document.getElementById('user-input').disabled = true;
+        document.getElementById('send-btn').disabled   = true;
+        document.getElementById('user-input').placeholder = 'محدودیت روزانه تمام شد';
+        return;
+      }
+
+      if (!data.reply) {
+        appendBubble('ai', 'متأسفم، مشکلی پیش آمد. دوباره امتحان کنید.');
+        return;
+      }
+
+      appendBubble('ai', data.reply);
+      if (!isOpener) chatHistory.push({role:'assistant', content:data.reply});
+
+    } catch(err) {
+      removeTyping();
+      appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+    }
+  }
+
+  // ── INLINE QUIZ (auto after every 4 messages) ──
+  async function triggerInlineQuiz() {
+    if (inlineQuizActive || !currentTopic) return;
+    inlineQuizActive = true;
+
+    // generate a single quick question about the current topic
+    try {
+      const res  = await fetch('/api/tutor/generate-quiz', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({subject:currentSubject, level:currentLevel, topic_key:currentTopic.key, practice:true})
+      });
+      const data = await res.json();
+      if (!data.questions || data.questions.length === 0) {
+        inlineQuizActive = false;
+        return;
+      }
+
+      practiceToken = data.quiz_token;
+      const q = data.questions[0];
+      practiceQuestion = q;
+      showInlineQuiz(q);
+    } catch(e) {
+      inlineQuizActive = false;
+    }
+  }
+
+  function safeHTML(value) {
+    return String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  function showInlineQuiz(q) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'inline-quiz';
+    wrapper.id = 'practice-card-' + Date.now();
+    wrapper.innerHTML = `<div class="inline-quiz-title">🎯 تمرین کوتاه · بدون XP</div>
+      <div class="inline-quiz-q">${safeHTML(q.q)}</div>
+      <div class="inline-quiz-opts">${q.options.map((opt,i)=>`<button class="inline-opt" onclick="answerInline(${i})">${safeHTML(opt)}</button>`).join('')}</div>
+      <div class="inline-explanation"></div>
+      <button class="btn-dim" onclick="skipPractice()" style="margin-top:10px">رد کردن تمرین</button>`;
+    document.getElementById('messages').appendChild(wrapper);
+    scrollToBottom();
+    window.KhayyamInlineVoice?.say?.('یک تمرین کوتاه روی صفحه ظاهر شده است. ' + q.q + ' گزینه‌ها: ' + q.options.map((x,i)=>['الف','ب','ج','د'][i]+' '+x).join('، ') + '. جواب را بگو یا روی گزینه بزن.');
+  }
+  function skipPractice() {
+    inlineQuizActive = false;
+    practiceToken = null;
+    document.querySelector('.inline-quiz:last-of-type .inline-quiz-opts')?.querySelectorAll('button').forEach(b=>b.disabled=true);
+  }
+  async function answerInline(selected) {
+    if (!inlineQuizActive || !practiceToken) return;
+    const token = practiceToken;
+    practiceToken = null;
+    const wrapper = [...document.querySelectorAll('.inline-quiz')].at(-1);
+    const opts = wrapper?.querySelectorAll('.inline-opt') || [];
+    opts.forEach(b=>b.disabled=true);
+    try {
+      const res = await fetch('/api/tutor/check-practice',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({quiz_token:token,answer:selected})});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Practice failed');
+      opts.forEach((b,i)=>{b.classList.add('answered'); if(i===data.correct_index)b.classList.add('correct');else if(i===selected)b.classList.add('wrong');});
+      const feedback = (data.correct?'آفرین! ':'این بار درست نبود. ') + data.explanation;
+      wrapper.querySelector('.inline-explanation').textContent = '💡 ' + feedback;
+      wrapper.querySelector('.inline-explanation').classList.add('show');
+      window.KhayyamInlineVoice?.say?.(feedback);
+      if (!data.correct && !window.KhayyamInlineVoice?.isActive()) await sendToAPI('در تمرین این درس اشتباه کردم: '+practiceQuestion.q+' لطفاً با یک مثال دیگر توضیح بده.',false);
+    } catch(err) { wrapper.querySelector('.inline-explanation').textContent = 'ذخیره تمرین ناموفق بود.'; wrapper.querySelector('.inline-explanation').classList.add('show'); }
+    inlineQuizActive=false;
+  }
+
+  // ── COMPLETE TOPIC ──
+  async function completeTopic() {
+    if (!currentUser || !currentTopic) return;
+    try {
+      const res  = await fetch('/api/tutor/complete-topic', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({subject:currentSubject, topic_key:currentTopic.key, level:currentLevel})
+      });
+      const data = await res.json();
+
+      if (data.xp_earned > 0) { updateXPBar(data.total_xp); showXPPopup(data.xp_earned); }
+      addSystemNote(`✓ موضوع "${currentTopic.title}" کامل شد! +${data.xp_earned} XP`);
+
+      const progRes  = await fetch(`/api/tutor/progress/${currentSubject}`);
+      const progData = await progRes.json();
+      userProgress[currentSubject] = progData;
+
+      // check if all level topics done
+      const lvlTopics  = curriculum[currentSubject].levels[currentLevel].topics;
+      const completed  = progData.progress?.completed_topics || [];
+      const allDone    = lvlTopics.every(t => completed.includes(t.key));
+      const quizKey    = `${currentSubject}_level${currentLevel}`;
+      const quizDone   = (progData.progress?.completed_quizzes || []).includes(quizKey);
+
+      if (allDone && !quizDone) {
+        setTimeout(() => {
+          addSystemNote(`🎉 همه موضوعات سطح ${currentLevel} کامل شد!`);
+          showQuizPrompt();
+        }, 600);
+      }
+    } catch(e) { console.error(e); }
+  }
+
+  function showQuizPrompt() {
+    const messagesEl = document.getElementById('messages');
+    const div        = document.createElement('div');
+    div.style.cssText = 'text-align:center;padding:16px;display:flex;flex-direction:column;align-items:center;gap:10px;';
+    div.innerHTML = `
+      <div style="font-size:14px;color:var(--text);">آماده‌ای که کوییز سطح ${currentLevel} را بدهی؟</div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn-gold" onclick="startQuiz(${currentLevel})" style="padding:8px 20px;border-radius:99px;font-size:13px;">بله، شروع کن! 🎯</button>
+        <button class="btn-dim" onclick="showScreen('topic')" style="padding:8px 20px;border-radius:99px;font-size:13px;">بعداً</button>
+      </div>`;
+    messagesEl.appendChild(div);
+    scrollToBottom();
+  }
+
+  // ── QUIZ ──
+  async function startQuiz(level) {
+    currentLevel = level;
+    showScreen('quiz');
+    document.getElementById('quiz-card').innerHTML = `
+      <div style="text-align:center;padding:40px;color:var(--text-dim);">
+        <div class="loading-spinner" style="margin:0 auto 16px;"></div>
+        در حال ساخت کوییز...
+      </div>`;
+
+    try {
+      const res  = await fetch('/api/tutor/generate-quiz', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({subject:currentSubject, level})
+      });
+      const data = await res.json();
+      if (!data.questions) { showScreen('topic'); return; }
+      quizToken = data.quiz_token;
+      quizAnswers = [];
+      quizQuestions = data.questions;
+      quizCurrent   = 0;
+      quizScore     = 0;
+      quizAnswered  = false;
+      renderQuizQ();
+    } catch(e) { showScreen('topic'); }
+  }
+
+  function renderQuizQ() {
+    if (quizCurrent >= quizQuestions.length) { renderQuizResult(); return; }
+    const q   = quizQuestions[quizCurrent];
+    const pct = Math.round((quizCurrent/quizQuestions.length)*100);
+
+    document.getElementById('quiz-card').innerHTML = `
+      <div class="quiz-progress">
+        <div class="quiz-progress-row">
+          <span>سوال ${quizCurrent+1} از ${quizQuestions.length}</span>
+          <span>${pct}%</span>
+        </div>
+        <div class="quiz-track"><div class="quiz-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="quiz-q">${safeHTML(q.q)}</div>
+      <div class="quiz-opts">
+        ${q.options.map((opt,i)=>`<button class="quiz-opt" onclick="answerQ(${i})">${safeHTML(opt)}</button>`).join('')}
+      </div>
+      <div class="quiz-explanation" id="qexp">پاسخ ثبت شد.</div>
+      <button class="quiz-next" id="qnext" onclick="nextQ()">
+        ${quizCurrent+1 < quizQuestions.length ? 'سوال بعدی →' : 'نتیجه را ببین →'}
+      </button>
+    `;
+    window.KhayyamInlineVoice?.say?.('سوال '+(quizCurrent+1)+': '+q.q+'. '+q.options.map((x,i)=>['الف','ب','ج','د'][i]+' '+x).join('، '));
+  }
+
+  function answerQ(idx) {
+    if (quizAnswered || !Number.isInteger(idx) || idx<0 || idx>3) return;
+    quizAnswered=true;
+    quizAnswers[quizCurrent]=idx;
+    document.querySelectorAll('#quiz-card .quiz-opt').forEach((o,i)=>{o.classList.add('answered');if(i===idx)o.classList.add('correct');});
+    document.getElementById('qexp').classList.add('show');
+    document.getElementById('qnext').classList.add('show');
+  }
+  function nextQ() {
+    if (!quizAnswered) return;
+    quizAnswered=false;
+    quizCurrent++;
+    renderQuizQ();
+  }
+  async function renderQuizResult() {
+    if (!quizToken || quizAnswers.length !== quizQuestions.length) return;
+    document.getElementById('quiz-card').textContent='در حال بررسی جواب‌ها...';
+    try {
+      const res=await fetch('/api/tutor/submit-quiz',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({quiz_token:quizToken,answers:quizAnswers})});
+      const data=await res.json();
+      if(!res.ok) throw new Error(data.error||'Submission failed');
+      quizToken=null;
+      const xp=data.xp_earned||0;
+      updateXPBar(data.total_xp);
+      if(xp) showXPPopup(xp);
+      const progRes=await fetch(`/api/tutor/progress/${currentSubject}`);
+      if(progRes.ok)userProgress[currentSubject]=await progRes.json();
+      document.getElementById('quiz-card').innerHTML=`<div class="quiz-result">
+        <div class="score-big">${data.score}%</div>
+        <div class="score-label">${data.passed?'🎉 آفرین! قبول شدی!':'😊 دوباره تمرین کن!'}</div>
+        ${xp?`<div class="xp-pill">+${xp} XP ⚡</div>`:'<p>XP این سطح قبلاً دریافت شده یا هنوز قبول نشده‌ای.</p>'}
+        <div class="result-actions"><button class="btn-gold" onclick="showScreen('topic')">بازگشت به موضوعات</button>
+        <button class="btn-dim" onclick="startQuiz(${currentLevel})">کوییز جدید</button></div></div>`;
+      window.KhayyamInlineVoice?.say?.('کوییز تمام شد. نمره شما '+data.score+' فیصد است. '+(xp?'شما '+xp+' امتیاز گرفتید.':'این بار امتیاز تازه‌ای دریافت نکردید.'));
+    } catch(err) {
+      document.getElementById('quiz-card').innerHTML='<p>نتیجه ذخیره نشد. دوباره تلاش کنید.</p><button class="btn-gold" onclick="renderQuizResult()">تلاش دوباره</button>';
+    }
+  }
+
+  // ── PLACEMENT TEST ──
+  async function startPlacementTest() {
+    document.getElementById('btn-placement').classList.add('active');
+    document.getElementById('btn-browse').classList.remove('active');
+    const container = document.getElementById('levels-container');
+    container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-dim);"><div class="loading-spinner" style="margin:0 auto 16px;"></div>در حال ساخت تست...</div>`;
+
+    try {
+      const res  = await fetch('/api/tutor/placement-test', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({subject:currentSubject})
+      });
+      const data = await res.json();
+      quizQuestions    = data.questions;
+      quizCurrent      = 0;
+      quizScore        = 0;
+      quizAnswered     = false;
+      placementAnswers = [];
+      showScreen('quiz');
+      renderPlacementQ();
+    } catch(e) { renderTopics(); }
+  }
+
+  function renderPlacementQ() {
+    if (quizCurrent >= quizQuestions.length) { renderPlacementResult(); return; }
+    const q   = quizQuestions[quizCurrent];
+    const pct = Math.round((quizCurrent/quizQuestions.length)*100);
+
+    document.getElementById('quiz-card').innerHTML = `
+      <div style="text-align:center;margin-bottom:14px;font-size:13px;color:var(--gold);">🎯 تست سطح‌بندی</div>
+      <div class="quiz-progress">
+        <div class="quiz-progress-row"><span>سوال ${quizCurrent+1} از ${quizQuestions.length}</span><span>سطح ${q.level}</span></div>
+        <div class="quiz-track"><div class="quiz-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="quiz-q">${q.q}</div>
+      <div class="quiz-opts">
+        ${q.options.map((opt,i)=>`<button class="quiz-opt" onclick="answerPlacement(${i})">${opt}</button>`).join('')}
+      </div>
+      <div class="quiz-explanation" id="qexp">💡 ${q.explanation}</div>
+      <button class="quiz-next" id="qnext" onclick="nextPlacement()">
+        ${quizCurrent+1 < quizQuestions.length ? 'سوال بعدی →' : 'نتیجه را ببین →'}
+      </button>`;
+  }
+
+  function answerPlacement(idx) {
+    if (quizAnswered) return;
+    quizAnswered = true;
+    const q = quizQuestions[quizCurrent];
+    const opts = document.querySelectorAll('.quiz-opt');
+    opts.forEach(o => o.classList.add('answered'));
+    const isCorrect = idx === q.correct;
+    opts[idx].classList.add(isCorrect ? 'correct' : 'wrong');
+    if (!isCorrect) opts[q.correct].classList.add('correct');
+    placementAnswers.push({correct:isCorrect, level:q.level});
+    document.getElementById('qexp').classList.add('show');
+    document.getElementById('qnext').classList.add('show');
+  }
+
+  function nextPlacement() {
+    quizAnswered = false;
+    quizCurrent++;
+    renderPlacementQ();
+  }
+
+  async function renderPlacementResult() {
+    try {
+      const res  = await fetch('/api/tutor/placement-result', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({subject:currentSubject, answers:placementAnswers})
+      });
+      const data = await res.json();
+      const rec  = data.recommended_level;
+      const lvlName = curriculum[currentSubject].levels[rec]?.title || '';
+
+      document.getElementById('quiz-card').innerHTML = `
+        <div class="quiz-result">
+          <div style="font-size:48px;margin-bottom:12px;">🎯</div>
+          <div class="score-big" style="font-size:40px;">سطح ${rec}</div>
+          <div class="score-label">${lvlName}</div>
+          <div style="font-size:14px;color:var(--text-dim);margin-bottom:24px;line-height:1.8;">
+            بر اساس پاسخ‌های تو، پیشنهاد می‌کنیم از سطح ${rec} شروع کنی.
+          </div>
+          <div class="result-actions">
+            <button class="btn-gold" onclick="jumpToLevel(${rec})">از سطح ${rec} شروع کن →</button>
+            <button class="btn-dim" onclick="showScreen('topic')">خودم انتخاب می‌کنم</button>
+          </div>
+        </div>`;
+    } catch(e) { showScreen('topic'); }
+  }
+
+  function jumpToLevel(level) {
+    showScreen('topic');
+    setTimeout(() => {
+      const sections = document.querySelectorAll('.level-section');
+      if (sections[level-1]) sections[level-1].scrollIntoView({behavior:'smooth'});
+    }, 200);
+  }
+
+  function setBrowseMode() {
+    document.getElementById('btn-browse').classList.add('active');
+    document.getElementById('btn-placement').classList.remove('active');
+    renderTopics();
+  }
+
+  // ── HELPERS ──
+  function scrollToBottom() {
+    const w = document.getElementById('chat-wrapper');
+    if (w) w.scrollTop = w.scrollHeight;
+  }
+
+  function appendBubble(role, text) {
+    const messagesEl = document.getElementById('messages');
+    const welcome = document.getElementById('welcome');
+    if (welcome) welcome.style.display = 'none';
+
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+    const avatar = document.createElement('div');
+    avatar.className = `avatar ${role}`;
+    avatar.textContent = role === 'ai' ? 'استاد' : '👤';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    const content = document.createElement('div');
+    content.className = 'bubble-content';
+    if (role === 'ai') {
+      content.innerHTML = renderMarkdown(text);
+      bubble.appendChild(content);
+      const speakBtn = document.createElement('button');
+      speakBtn.type = 'button';
+      speakBtn.className = 'speak-reply-btn';
+      speakBtn.innerHTML = '<span class="speak-icon">🔊</span><span>شنیدن پاسخ</span>';
+      speakBtn.title = 'خواندن پاسخ با صدای تولیدشده توسط هوش مصنوعی';
+      speakBtn.addEventListener('click', () => speakReply(content.innerText, speakBtn));
+      bubble.appendChild(speakBtn);
+    } else {
+      content.textContent = text;
+      bubble.appendChild(content);
+    }
+
+    div.appendChild(avatar);
+    div.appendChild(bubble);
+    messagesEl.appendChild(div);
+    scrollToBottom();
+  }
+
+  // Only generates audio after the user clicks a reply's speaker button.
+  let khayyamAudio = null;
+  let khayyamAudioUrl = null;
+  let khayyamActiveButton = null;
+
+  function resetSpeakButton(button) {
+    if (!button) return;
+    button.disabled = false;
+    button.innerHTML = '<span class="speak-icon">🔊</span><span>شنیدن پاسخ</span>';
+  }
+
+  async function speakReply(text, button) {
+    const cleanText = (text || '').replace(/\s+/g, ' ').trim();
+    if (!cleanText) return;
+
+    if (khayyamAudio && khayyamActiveButton === button) {
+      khayyamAudio.pause();
+      khayyamAudio.currentTime = 0;
+      khayyamAudio = null;
+      if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+      khayyamAudioUrl = null;
+      resetSpeakButton(button);
+      khayyamActiveButton = null;
+      return;
+    }
+
+    if (khayyamAudio) {
+      khayyamAudio.pause();
+      if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+      resetSpeakButton(khayyamActiveButton);
+    }
+
+    button.disabled = true;
+    button.innerHTML = '<span class="speak-icon">⏳</span><span>در حال ساخت صدا...</span>';
+    khayyamActiveButton = button;
+
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: cleanText})
+      });
+      if (!response.ok) {
+        let message = 'ساخت صدا ناموفق بود.';
+        try { const err = await response.json(); if (err.error) message = err.error; } catch (_) {}
+        throw new Error(message);
+      }
+      const audioBlob = await response.blob();
+      khayyamAudioUrl = URL.createObjectURL(audioBlob);
+      khayyamAudio = new Audio(khayyamAudioUrl);
+      khayyamAudio.onended = () => {
+        resetSpeakButton(button);
+        if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+        khayyamAudio = null; khayyamAudioUrl = null; khayyamActiveButton = null;
+      };
+      khayyamAudio.onerror = () => {
+        resetSpeakButton(button);
+        khayyamAudio = null; khayyamActiveButton = null;
+      };
+      await khayyamAudio.play();
+      button.disabled = false;
+      button.innerHTML = '<span class="speak-icon">⏹</span><span>توقف صدا</span>';
+    } catch (error) {
+      console.error('Khayyam TTS error:', error);
+      resetSpeakButton(button);
+      khayyamActiveButton = null;
+      alert(error.message || 'پخش صدا ناموفق بود. لطفاً دوباره تلاش کنید.');
+    }
+  }
+
+  function addSystemNote(text) {
+    const el  = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'system-note';
+    div.textContent = text;
+    el.appendChild(div);
+    scrollToBottom();
+  }
+
+  function showTyping() {
+    const el  = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'message ai';
+    div.id = 'typing-ind';
+    const av  = document.createElement('div');
+    av.className = 'avatar ai';
+    av.textContent = 'استاد';
+    const bub = document.createElement('div');
+    bub.className = 'bubble';
+    bub.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    div.appendChild(av);
+    div.appendChild(bub);
+    el.appendChild(div);
+    scrollToBottom();
+  }
+
+  function removeTyping() {
+    const t = document.getElementById('typing-ind');
+    if (t) t.remove();
+  }
+
+  // ── INPUT ──
+  // Tutor Live Voice stays on the lesson page and uses its selected topic.
+  async function openLiveVoiceTutor() {
+    if (window.KhayyamInlineVoice.isActive()) {
+      await window.KhayyamInlineVoice.toggle({});
+      return;
+    }
+    if (!currentSubject || !currentTopic || !currentTopic.key) {
+      const el = document.getElementById('voice-status');
+      if (el) el.textContent = 'اول یک درس را انتخاب کنید.';
+      return;
+    }
+    await window.KhayyamInlineVoice.toggle({mode:'tutor', subject:currentSubject,
+      topic_key:currentTopic.key, level:String(currentLevel)});
+  }
+  function voiceOptionIndex(text) {
+    const t=String(text).trim().toLowerCase();
+    if(!/گزینه|انتخاب|^\s*[abcd1-4]\s*$|^\s*(الف|ب|ج|د|اول|دوم|سوم|چهارم)\s*$/.test(t)) return -1;
+    const tokens=t.split(/[\s،,.!?؟:؛]+/).filter(Boolean);
+    const variants=[['الف','اول','یک','1','a'],['ب','دوم','دو','2','b'],['ج','سوم','سه','3','c'],['د','چهارم','چهار','4','d']];
+    for(let i=0;i<4;i++) if(tokens.some(x=>variants[i].includes(x))) return i;
+    return -1;
+  }
+  window.khayyamVoiceRender = (role, text) => {
+    if(role==='user' && window.KhayyamInlineVoice?.isActive()) {
+      const option=voiceOptionIndex(text);
+      if(option>=0 && document.getElementById('screen-quiz').classList.contains('active') && quizToken && !quizAnswered) answerQ(option);
+      else if(option>=0 && inlineQuizActive && practiceToken) answerInline(option);
+      if(role==='user' && document.getElementById('screen-chat').classList.contains('active') && !inlineQuizActive) {
+        voicePracticeCount++;
+        if(voicePracticeCount % 4===0) triggerInlineQuiz();
+      }
+    }
+    appendBubble(role === 'assistant' ? 'ai' : 'user', text);
+    // Keep the in-memory lesson aligned with what was spoken and saved.
+    chatHistory.push({role, content:text});
+    if (chatHistory.length > 60) chatHistory = chatHistory.slice(-60);
+  };
+
+  const inputEl = document.getElementById('user-input');
+  inputEl.addEventListener('input', () => {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
+  });
+  inputEl.addEventListener('keydown', e => {
+    if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  init();
+</script>
+<script src="/static/voice_inline.js?v=20261020"></script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" class="no-js">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="theme-color" content="#04130f">
+  <title>خیام — همراه هوشمند شما</title>
+  <meta name="description" content="خیام یک دستیار هوشمند به زبان دری است: گفتگو، صدای زنده و استاد شخصی برای یادگیری هر موضوع.">
+  <link rel="preload" href="/static/fonts/vazirmatn-var.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/amiri-arabic-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/img/hero-wide.webp" as="image" media="(min-width: 761px)">
+  <link rel="preload" href="/static/img/hero-tall.webp" as="image" media="(max-width: 760px)">
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
+  <link rel="stylesheet" href="/static/home.css?v=20261020">
+  <script src="/static/main.js?v=20261020"></script>
+</head>
+<body class="home">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 40 40">
+    <g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 34V19C8 10.5 13 6 20 6s12 4.5 12 13v15"/><path d="M14 34V21c0-4 2.5-6.5 6-6.5s6 2.5 6 6.5v13"/><path d="M6 34h28"/></g>
+  </symbol>
+</svg>
+
+<header class="nav">
+  <a class="logo" href="/" aria-label="خیام">
+    <svg class="logo-mark" aria-hidden="true"><use href="#mark"/></svg>
+    <span class="logo-text">خیام</span>
+  </a>
+  <nav class="nav-links" aria-label="صفحه‌ها">
+    <a class="nav-link" href="/" aria-current="page">خانه</a>
+    <a class="nav-link" href="/chat">گفتگو</a>
+    <a class="nav-link" href="/tutor">استاد</a>
+    <a class="nav-link" href="/pricing">قیمت‌ها</a>
+  </nav>
+  <div class="nav-actions">
+    <div id="auth-nav-guest" class="nav-auth">
+      <a class="btn btn-ghost btn-sm" href="/login">ورود</a>
+      <a class="btn btn-gold btn-sm" href="/register">شروع کنید</a>
+    </div>
+    <div id="auth-nav-user" class="nav-auth" hidden>
+      <a class="btn btn-gold btn-sm" href="/chat"><span id="nav-username-text"></span></a>
+    </div>
+    <button class="nav-toggle" type="button" aria-label="منو" aria-expanded="false">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+  <!-- ─── hero ─── -->
+  <section class="hero" id="top">
+    <div class="hero-stage" aria-hidden="true">
+      <div class="hero-drift"><div class="stage-layer" id="stage-layer"></div></div>
+      <canvas id="stars"></canvas>
+      <div class="hero-scrim"></div>
+    </div>
+
+    <canvas id="fx" aria-hidden="true"></canvas>
+
+    <div class="hero-copy">
+      <h1 class="hero-title"><span class="line"><span>بیاموزید،</span></span><span class="line"><span>بی‌مرز</span></span></h1>
+      <p class="hero-sub">همراه هوشمند شما برای درک عمیق‌تر، به زبان دری و فراتر از آن.</p>
+      <div class="hero-cta">
+        <a class="btn btn-gold" href="/chat">شروع گفتگو</a>
+        <a class="btn btn-ghost" href="#chat">آشنایی با خیام</a>
+      </div>
+    </div>
+
+    <div class="hero-features">
+      <a class="hf" href="/chat">
+        <span class="hf-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12Z"/><path d="M9 11h6M9 14.5h3.5"/></svg></span>
+        <b>گفتگوی هوشمند</b><small>پرسش و پاسخ فوری</small>
+      </a>
+      <a class="hf" href="/tutor">
+        <span class="hf-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 9 9.5-4.5L21.5 9 12 13.5 2.5 9Z"/><path d="M6.5 11.2v4.3c0 1.2 2.5 2.6 5.5 2.6s5.5-1.4 5.5-2.6v-4.3M21.5 9v5"/></svg></span>
+        <b>استاد شخصی</b><small>مسیر یادگیری شما</small>
+      </a>
+      <a class="hf" href="#class">
+        <span class="hf-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4M7.5 12l3-3 2 2 3.5-3.5"/></svg></span>
+        <b>تختهٔ سبز</b><small>دیدن و فهمیدن</small>
+      </a>
+      <a class="hf" href="/tutor">
+        <span class="hf-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>
+        <b>پیشرفت شما</b><small>آزمون و پیگیری</small>
+      </a>
+    </div>
+  </section>
+
+  <!-- ─── chat ─── -->
+  <section class="section sec-chat" id="chat">
+    <div class="container split">
+      <div>
+        <h2 class="s-title" data-reveal="wipe">از هر چیز بپرسید، به زبان خودتان</h2>
+        <p class="s-lead" data-reveal="rise" style="--d:120ms">شعر، ریاضی، تاریخ، آماده‌گی کانکور یا نوشتن یک نامهٔ رسمی. خیام ساده و روان پاسخ می‌دهد و هر جا لازم باشد قدم‌به‌قدم توضیح می‌دهد.</p>
+        <div class="prompt-chips" data-reveal="rise" style="--d:240ms">
+          <a class="chip" href="/chat?q=یک%20رباعی%20خیام%20را%20برایم%20معنی%20کن">رباعیات خیام</a>
+          <a class="chip" href="/chat?q=این%20مسئلهٔ%20ریاضی%20را%20قدم‌به‌قدم%20حل%20کن">مسئلهٔ ریاضی</a>
+          <a class="chip" href="/chat?q=تاریخ%20افغانستان%20را%20از%20کجا%20شروع%20کنم؟">تاریخ افغانستان</a>
+          <a class="chip" href="/chat?q=برای%20کانکور%20چطور%20آماده%20شوم؟">آماده‌گی کانکور</a>
+        </div>
+      </div>
+      <div data-reveal="scale">
+        <div class="paper-card" id="demo"
+             data-me="سلام خیام! می‌خواهم دربارهٔ تاریخ افغانستان بیاموزم. از کجا شروع کنم؟"
+             data-ai="سلام! بهتر است از دورهٔ باستان آغاز کنیم: باختر، آریانا و راه ابریشم. بعد به دورهٔ اسلامی، غزنویان و غوریان می‌رسیم و در پایان به افغانستان نو. کدام دوره برایتان جالب‌تر است؟">
+          <div class="paper-bar"><svg class="logo-mark"><use href="#mark"/></svg> گفتگوی تازه</div>
+          <div class="bubble me" style="visibility:hidden"><span class="t"></span></div>
+          <div class="typing-row" style="display:none"><span class="typing"><i></i><i></i><i></i></span></div>
+          <div class="bubble ai" style="visibility:hidden"><span class="t"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── green board ─── -->
+  <section class="section sec-class" id="class">
+    <div class="container split">
+      <div class="board-wrap" data-reveal="scale">
+        <div class="board" role="img" aria-label="تختهٔ سبز با یک منحنی و فرمول">
+          <p class="chalk">مشتق، شیب تابع در یک نقطه است.</p>
+          <svg class="board-plot" viewBox="0 0 300 200" aria-hidden="true">
+            <path class="draw" style="--len:330" d="M10 190H290M20 196V8" stroke="rgba(245,240,225,.55)" stroke-width="1.6"/>
+            <path class="draw" style="--len:420;--d:.5s" d="M40 22C80 150 110 168 150 168S220 130 262 30" stroke="#f1d58a" stroke-width="2.4"/>
+            <path class="draw" style="--len:190;--d:1.5s" d="M62 190L250 96" stroke="rgba(245,240,225,.8)" stroke-width="1.6" stroke-dasharray="4 5"/>
+            <circle cx="150" cy="168" r="4.5" fill="#f1d58a"/>
+          </svg>
+          <div class="board-formulas chalk"><span class="ltr">f(x) = x²</span><br><span class="ltr">f′(x) = 2x</span></div>
+        </div>
+      </div>
+      <div>
+        <h2 class="s-title" data-reveal="wipe">صنف درس شما، هر موضوعی که بخواهید</h2>
+        <p class="s-lead" data-reveal="rise" style="--d:120ms">بگویید چه می‌خواهید یاد بگیرید. خیام درس‌ها را مرحله‌به‌مرحله می‌چیند و یکی‌یکی روی تخته آموزش می‌دهد. گفتگوی هر درس جداگانه ذخیره می‌شود.</p>
+        <p class="board-note" data-reveal="rise" style="--d:220ms">نوشتن، کشیدن و رسم نمودار روی تخته <span class="tag-soon">به‌زودی</span></p>
+        <div style="margin-top:28px;--d:300ms" data-reveal="rise"><a class="btn btn-gold" href="/tutor">وارد صنف شوید</a></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── voice ─── -->
+  <section class="section sec-voice" id="voice">
+    <div class="container split">
+      <div>
+        <h2 class="s-title" data-reveal="wipe">با صدای خود گپ بزنید</h2>
+        <p class="s-lead" data-reveal="rise" style="--d:120ms">بپرسید، گوش کنید و دوباره بپرسید، بدون تایپ کردن. متن گفتگو همزمان با صدا نوشته می‌شود تا هر چیز را بخوانید و مرور کنید.</p>
+        <div style="margin-top:28px;--d:240ms" data-reveal="rise"><a class="btn btn-ghost" href="/chat">امتحان در گفتگو</a></div>
+      </div>
+      <div data-reveal="scale">
+        <div class="voice-orb" aria-hidden="true"><div class="eq">
+          <i style="--i:0"></i><i style="--i:1"></i><i style="--i:2"></i><i style="--i:3"></i><i style="--i:4"></i><i style="--i:5"></i><i style="--i:6"></i><i style="--i:7"></i><i style="--i:8"></i><i style="--i:9"></i><i style="--i:10"></i>
+        </div></div>
+        <p class="live-caption"><span id="live-text" data-lines="سلام، می‌خواهم تلفظ یک واژه را تمرین کنم|بیایید درس امروز را با یک مثال شروع کنیم|عالی بود! حالا همین جمله را یک بار دیگر بگویید"></span><span class="caret"></span></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── closing ─── -->
+  <section class="section sec-end">
+    <div class="bg" aria-hidden="true"><img src="/static/img/hero-wide.webp" alt="" loading="lazy" decoding="async"></div>
+    <div class="container">
+      <h2 class="s-title" data-reveal="wipe">امروز اولین پرسش خود را بپرسید</h2>
+      <div class="hero-cta" data-reveal="rise" style="--d:160ms">
+        <a class="btn btn-gold" href="/register">ساخت حساب رایگان</a>
+        <a class="btn btn-ghost" href="/pricing">دیدن قیمت‌ها</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <a class="logo" href="/"><svg class="logo-mark"><use href="#mark"/></svg><span class="logo-text">خیام</span></a>
+    <nav class="foot-links" aria-label="پیوندها">
+      <a href="/chat">گفتگو</a><a href="/tutor">استاد</a><a href="/pricing">قیمت‌ها</a><a href="/login">ورود</a><a href="/register">ثبت‌نام</a>
+    </nav>
+    <p class="foot-copy">© ۲۰۲۶ خیام. برای ما، در سراسر جهان.</p>
+  </div>
+</footer>
+
+<script src="/static/ui.js?v=20261020"></script>
+<script src="/static/home.js?v=20261020"></script>
+</body>
+</html>

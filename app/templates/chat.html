@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="theme-color" content="#0a2b23">
+  <script src="/static/main.js?v=20261020"></script>
+  <title>گفتگو — خیام</title>
+  <link rel="preload" href="/static/fonts/vazirmatn-var.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
+  <link rel="stylesheet" href="/static/chat.css?v=20261020">
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+</head>
+<body class="app on-light">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 40 40"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 34V19C8 10.5 13 6 20 6s12 4.5 12 13v15"/><path d="M14 34V21c0-4 2.5-6.5 6-6.5s6 2.5 6 6.5v13"/><path d="M6 34h28"/></g></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12Z"/><path d="M9 11h6M9 14.5h3.5"/></g></symbol>
+  <symbol id="i-cap" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 9 9.5-4.5L21.5 9 12 13.5 2.5 9Z"/><path d="M6.5 11.2v4.3c0 1.2 2.5 2.6 5.5 2.6s5.5-1.4 5.5-2.6v-4.3M21.5 9v5"/></g></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></g></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.5 20c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5"/></g></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.2V4.5h7.7l9 9a1.8 1.8 0 0 1 0 2.5l-5.2 5.2a1.8 1.8 0 0 1-2.5 0l-9-9Z"/><circle cx="8" cy="9" r="1.2"/></g></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.5h6V7M6 7l1 13h10l1-13"/></g></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15V6.2C5 5.5 5.5 5 6.2 5H15"/></g></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6.5 9H3.5v6h3L11 19V5Z"/><path d="M15 9a4.2 4.2 0 0 1 0 6M17.8 6.5a8 8 0 0 1 0 11"/></g></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-4.5 3.5 3L16 12l4 4"/></g></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5h7L18.5 8.5v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1Z"/><path d="M13.5 3.5v5h5M8.5 13h7M8.5 16.5h5"/></g></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1.3-2h6.4l1.3 2h2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5v-9Z"/><circle cx="12" cy="13" r="3.4"/></g></symbol>
+  <symbol id="i-spin" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 1 1-8.5 8.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur=".9s" repeatCount="indefinite"/></path></symbol>
+</svg>
+
+<div class="app-shell">
+
+  <aside class="sidebar" id="sidebar" aria-label="تاریخچه و پیمایش">
+    <div class="side-top">
+      <a href="/" class="logo" aria-label="خیام"><svg class="logo-mark" aria-hidden="true"><use href="#mark"/></svg><span class="logo-text">خیام</span></a>
+      <button class="icon-btn side-close" type="button" onclick="toggleSidebar()" aria-label="بستن منو"><svg><use href="#i-close"/></svg></button>
+    </div>
+
+    <button class="new-chat" type="button" onclick="newChat()"><svg><use href="#i-plus"/></svg>گفتگوی تازه</button>
+
+    <nav class="side-nav" aria-label="بخش‌ها">
+      <a class="side-link active" href="/chat" aria-current="page"><svg><use href="#i-chat"/></svg>گفتگو</a>
+      <a class="side-link" href="/tutor"><svg><use href="#i-cap"/></svg>استاد</a>
+      <a class="side-link" href="/profile"><svg><use href="#i-user"/></svg>پروفایل</a>
+      <a class="side-link" href="/pricing"><svg><use href="#i-tag"/></svg>قیمت‌ها</a>
+    </nav>
+
+    <div class="side-label">گفتگوهای اخیر</div>
+    <div class="sidebar-list" id="sidebar-list">
+      <div class="sidebar-empty" id="sidebar-empty">هنوز گفتگویی ندارید.<br>پرسش اول را بنویسید.</div>
+    </div>
+
+    <div class="side-user">
+      <div id="auth-buttons">
+        <a href="/login" class="side-btn">ورود</a>
+        <a href="/register" class="side-btn gold">ثبت‌نام</a>
+      </div>
+      <div id="user-menu" style="display:none">
+        <div class="side-user-name"><span class="av" id="nav-avatar"></span><span id="nav-username">پروفایل</span></div>
+        <a href="/profile" class="side-btn">پروفایل</a>
+        <a href="/logout" class="side-btn">خروج</a>
+      </div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" onclick="toggleSidebar()"></div>
+
+  <main class="chat-main">
+    <div class="chat-top">
+      <button class="icon-btn" type="button" onclick="toggleSidebar()" aria-label="تاریخچه گفتگوها"><svg><use href="#i-menu"/></svg></button>
+      <span class="chat-title">گفتگو</span>
+      <span class="spacer"></span>
+    </div>
+
+    <div class="chat-wrapper" id="chat-wrapper">
+      <div class="messages" id="messages"></div>
+    </div>
+
+    <div class="input-area">
+      <div class="composer">
+        <div class="file-preview" id="file-preview">
+          <img class="img-preview" id="img-preview" alt="" style="display:none">
+          <span class="file-preview-name" id="file-preview-name"></span>
+          <button class="file-preview-remove" type="button" onclick="clearFile()" aria-label="حذف پیوست"><svg><use href="#i-close"/></svg></button>
+        </div>
+
+        <div class="upload-menu" id="upload-menu" role="menu">
+          <button class="upload-item" type="button" role="menuitem" onclick="triggerFileInput('image-input')"><svg><use href="#i-image"/></svg>انتخاب تصویر</button>
+          <button class="upload-item" type="button" role="menuitem" onclick="triggerFileInput('doc-input')"><svg><use href="#i-doc"/></svg>انتخاب سند (PDF یا Word)</button>
+          <button class="upload-item" type="button" role="menuitem" onclick="triggerCamera()"><svg><use href="#i-camera"/></svg>عکس با دوربین</button>
+        </div>
+        <input type="file" id="image-input" accept="image/*" hidden onchange="handleFileSelect(this, 'image')">
+        <input type="file" id="doc-input" accept=".pdf,.doc,.docx,.txt" hidden onchange="handleFileSelect(this, 'document')">
+        <input type="file" id="camera-input" accept="image/*" capture="environment" hidden onchange="handleFileSelect(this, 'image')">
+
+        <div class="input-box">
+          <button class="tool-btn" id="upload-trigger" type="button" title="پیوست" aria-label="پیوست" onclick="showUploadMenu()"><svg><use href="#i-plus"/></svg></button>
+          <textarea id="user-input" rows="1" placeholder="از خیام بپرسید…" aria-label="پیام شما"></textarea>
+          <button type="button" id="voice-record-btn" class="tool-btn voice-action-btn" onclick="openLiveVoiceChat()" title="گفتگوی صوتی زنده" aria-label="گفتگوی صوتی زنده"><svg><use href="#i-mic"/></svg></button>
+          <button id="send-btn" type="button" onclick="sendMessage()" aria-label="ارسال"><svg><use href="#i-send"/></svg></button>
+        </div>
+        <p class="input-hint">Enter برای ارسال، Shift+Enter برای سطر تازه</p>
+        <p id="voice-status" class="voice-status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;"></p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<template id="welcome-tpl">
+  <div class="welcome" id="welcome">
+    <svg class="w-mark" aria-hidden="true"><use href="#mark"/></svg>
+    <h1>سلام، من خیام هستم</h1>
+    <p>هر پرسشی دارید بپرسید.</p>
+    <div class="suggestion-grid">
+      <button class="suggestion" type="button" onclick="useSuggestion(this)">تاریخچهٔ کابل را برایم بگو</button>
+      <button class="suggestion" type="button" onclick="useSuggestion(this)">یک رباعی خیام را برایم معنی کن</button>
+      <button class="suggestion" type="button" onclick="useSuggestion(this)">غذاهای مشهور افغانستان کدام‌اند؟</button>
+      <button class="suggestion" type="button" onclick="useSuggestion(this)">ولایات افغانستان را نام ببر</button>
+    </div>
+  </div>
+</template>
+
+<script>
+  marked.setOptions({ breaks: true, gfm: true });
+
+  const ICON = id => `<svg aria-hidden="true"><use href="#${id}"/></svg>`;
+
+  // ── STATE ──
+  let currentUser       = null;
+  let currentConvId     = null;
+  let history           = [];
+  let isLoading         = false;
+  let sidebarOpen       = window.innerWidth > 860;
+  let switchNoticeShown = false;
+  let selectedFile      = null;
+  let selectedFileType  = null;
+
+  const isMobile = () => window.innerWidth <= 860;
+
+  function toast(text) {
+    const el = document.getElementById('toast');
+    el.textContent = text; el.classList.add('show');
+    clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 3200);
+  }
+
+  function showWelcome() {
+    const messagesEl = document.getElementById('messages');
+    messagesEl.innerHTML = '';
+    messagesEl.appendChild(document.getElementById('welcome-tpl').content.cloneNode(true));
+  }
+
+  function applySidebar() {
+    document.getElementById('sidebar').classList.toggle('collapsed', !sidebarOpen);
+    document.getElementById('scrim').classList.toggle('show', sidebarOpen && isMobile());
+  }
+
+  // ── INIT ──
+  async function init() {
+    showWelcome();
+    applySidebar();
+
+    const res  = await fetch('/api/me');
+    const data = await res.json();
+
+    if (data.logged_in) {
+      currentUser = data;
+      document.getElementById('auth-buttons').style.display = 'none';
+      const menu = document.getElementById('user-menu');
+      menu.style.display = 'flex';
+      document.getElementById('nav-username').textContent = data.username;
+      document.getElementById('nav-avatar').textContent = (data.username || '').trim().charAt(0).toUpperCase();
+
+      if (data.is_admin) {
+        const adminLink       = document.createElement('a');
+        adminLink.href        = '/admin';
+        adminLink.className   = 'side-btn gold';
+        adminLink.textContent = 'مدیریت';
+        menu.appendChild(adminLink);
+      }
+
+      await loadSidebar();
+      await loadUsageState();
+    } else {
+      document.getElementById('sidebar-empty').innerHTML =
+        'برای نگه داشتن گفتگوها <a href="/login">وارد شوید</a>.';
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const convId = params.get('conv');
+    if (convId && currentUser) {
+      await loadConversation(parseInt(convId));
+    } else if (params.get('q')) {
+      const box = document.getElementById('user-input');
+      box.value = params.get('q').slice(0, 500);
+      box.dispatchEvent(new Event('input'));
+      box.focus();
+    }
+  }
+
+  // ── USAGE STATE FROM DB ──
+  async function loadUsageState() {
+    if (!currentUser) return;
+    try {
+      const res  = await fetch('/api/usage');
+      const data = await res.json();
+      if (!data.summary || data.summary.length === 0) return;
+
+      const now   = Date.now() / 1000;
+      const tier1 = data.summary[0];
+      const tier1Reset = tier1?.reset_ts || 0;
+      const tier1Exhausted = tier1 && tier1.remaining <= 0 && now < tier1Reset;
+      // If the first model's allowance is already used up, the "switched model"
+      // notice would be noise on the first message.
+      if (tier1Exhausted) switchNoticeShown = true;
+    } catch (e) {
+      console.log('usage state load failed', e);
+    }
+  }
+
+  // ── SIDEBAR ──
+  function toggleSidebar() {
+    sidebarOpen = !sidebarOpen;
+    applySidebar();
+  }
+
+  async function loadSidebar() {
+    if (!currentUser) return;
+    const list = document.getElementById('sidebar-list');
+    try {
+      const res   = await fetch('/api/conversations');
+      const convs = await res.json();
+
+      if (convs.length === 0) {
+        list.innerHTML = '<div class="sidebar-empty">هنوز گفتگویی ندارید.<br>پرسش اول را بنویسید.</div>';
+        return;
+      }
+
+      list.innerHTML = '';
+      convs.forEach(conv => {
+        const item     = document.createElement('div');
+        item.className = 'conv-item' + (conv.id === currentConvId ? ' active' : '');
+        item.innerHTML = `
+          <span class="conv-title">${escapeHtml(conv.title)}</span>
+          <span class="conv-date">${formatDate(conv.updated_at)}</span>
+          <button class="conv-delete" type="button" onclick="deleteConv(event, ${conv.id})" title="حذف" aria-label="حذف گفتگو">${ICON('i-trash')}</button>
+        `;
+        item.addEventListener('click', () => loadConversation(conv.id));
+        list.appendChild(item);
+      });
+    } catch (err) {
+      list.innerHTML = '<div class="sidebar-empty">بارگذاری نشد. صفحه را تازه کنید.</div>';
+    }
+  }
+
+  async function loadConversation(id) {
+    if (!currentUser || isLoading) return;
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
+    try {
+      const res  = await fetch(`/api/conversations/${id}`);
+      const conv = await res.json();
+
+      currentConvId = Number(id);
+      window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
+      history = conv.messages.map(m => ({ role: m.role, content: m.content }));
+
+      const messagesEl = document.getElementById('messages');
+      messagesEl.innerHTML = '';
+      conv.messages.forEach(m => {
+        appendBubble(m.role === 'user' ? 'user' : 'ai', m.content);
+      });
+
+      await loadSidebar();
+      scrollToBottom();
+
+      if (isMobile()) { sidebarOpen = false; applySidebar(); }
+    } catch (err) {
+      console.error('Failed to load conversation', err);
+      toast('این گفتگو باز نشد. دوباره تلاش کنید.');
+    }
+  }
+
+  async function deleteConv(e, id) {
+    e.stopPropagation();
+    if (isLoading) return;
+    if (!confirm('این گفتگو حذف شود؟')) return;
+    await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+    if (currentConvId === id) newChat();
+    else await loadSidebar();
+  }
+
+  async function newChat() {
+    if (isLoading) return; // An unfinished reply must not land in another chat.
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
+    currentConvId = null;
+    window.history.replaceState(null, '', '/chat');
+    history       = [];
+    showWelcome();
+    loadSidebar();
+    if (isMobile()) { sidebarOpen = false; applySidebar(); }
+    document.getElementById('user-input').focus();
+  }
+
+  // ── HELPERS ──
+  function formatDate(iso) {
+    const utcString = iso.endsWith('Z') ? iso : iso + 'Z';
+    const d    = new Date(utcString);
+    const now  = new Date();
+    const diff = now - d;
+    if (diff < 60000)    return 'همین الان';
+    if (diff < 3600000)  return Math.floor(diff / 60000) + ' دقیقه پیش';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + ' ساعت پیش';
+    return d.toLocaleDateString('fa-AF');
+  }
+
+  function scrollToBottom() {
+    const w = document.getElementById('chat-wrapper');
+    w.scrollTop = w.scrollHeight;
+  }
+
+  function appendBubble(role, text) {
+    const messagesEl = document.getElementById('messages');
+    const welcome = document.getElementById('welcome');
+    if (welcome) welcome.remove();
+
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+    const avatar = document.createElement('div');
+    avatar.className = `avatar ${role}`;
+    avatar.innerHTML = role === 'ai' ? ICON('mark') : ICON('i-user');
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    const content = document.createElement('div');
+    content.className = 'bubble-content';
+    if (role === 'ai') {
+      content.innerHTML = renderMarkdown(text);
+      bubble.appendChild(content);
+
+      const actions = document.createElement('div');
+      actions.className = 'msg-actions';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button'; copyBtn.className = 'act';
+      copyBtn.innerHTML = ICON('i-copy') + '<span>رونوشت</span>';
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(content.innerText);
+          copyBtn.innerHTML = ICON('i-check') + '<span>رونوشت شد</span>'; copyBtn.classList.add('on');
+          setTimeout(() => { copyBtn.innerHTML = ICON('i-copy') + '<span>رونوشت</span>'; copyBtn.classList.remove('on'); }, 1800);
+        } catch (_) { toast('رونوشت انجام نشد.'); }
+      });
+      actions.appendChild(copyBtn);
+
+      const speakBtn = document.createElement('button');
+      speakBtn.type = 'button';
+      speakBtn.className = 'act speak-reply-btn';
+      speakBtn.innerHTML = ICON('i-speaker') + '<span>شنیدن پاسخ</span>';
+      speakBtn.title = 'خواندن پاسخ با صدای تولیدشده توسط هوش مصنوعی';
+      speakBtn.addEventListener('click', () => speakReply(content.innerText, speakBtn));
+      actions.appendChild(speakBtn);
+      bubble.appendChild(actions);
+    } else {
+      content.textContent = text;
+      bubble.appendChild(content);
+    }
+
+    div.appendChild(avatar);
+    div.appendChild(bubble);
+    messagesEl.appendChild(div);
+    scrollToBottom();
+  }
+
+  // Only generates audio after the user clicks a reply's speaker button.
+  let khayyamAudio = null;
+  let khayyamAudioUrl = null;
+  let khayyamActiveButton = null;
+
+  function resetSpeakButton(button) {
+    if (!button) return;
+    button.disabled = false;
+    button.classList.remove('on');
+    button.innerHTML = ICON('i-speaker') + '<span>شنیدن پاسخ</span>';
+  }
+
+  async function speakReply(text, button) {
+    const cleanText = (text || '').replace(/\s+/g, ' ').trim();
+    if (!cleanText) return;
+
+    if (khayyamAudio && khayyamActiveButton === button) {
+      khayyamAudio.pause();
+      khayyamAudio.currentTime = 0;
+      khayyamAudio = null;
+      if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+      khayyamAudioUrl = null;
+      resetSpeakButton(button);
+      khayyamActiveButton = null;
+      return;
+    }
+
+    if (khayyamAudio) {
+      khayyamAudio.pause();
+      if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+      resetSpeakButton(khayyamActiveButton);
+    }
+
+    button.disabled = true;
+    button.innerHTML = ICON('i-spin') + '<span>در حال ساخت صدا…</span>';
+    khayyamActiveButton = button;
+
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: cleanText})
+      });
+      if (!response.ok) {
+        let message = 'ساخت صدا ناموفق بود.';
+        try { const err = await response.json(); if (err.error) message = err.error; } catch (_) {}
+        throw new Error(message);
+      }
+      const audioBlob = await response.blob();
+      khayyamAudioUrl = URL.createObjectURL(audioBlob);
+      khayyamAudio = new Audio(khayyamAudioUrl);
+      khayyamAudio.onended = () => {
+        resetSpeakButton(button);
+        if (khayyamAudioUrl) URL.revokeObjectURL(khayyamAudioUrl);
+        khayyamAudio = null; khayyamAudioUrl = null; khayyamActiveButton = null;
+      };
+      khayyamAudio.onerror = () => {
+        resetSpeakButton(button);
+        khayyamAudio = null; khayyamActiveButton = null;
+      };
+      await khayyamAudio.play();
+      button.disabled = false;
+      button.classList.add('on');
+      button.innerHTML = ICON('i-stop') + '<span>توقف صدا</span>';
+    } catch (error) {
+      console.error('Khayyam TTS error:', error);
+      resetSpeakButton(button);
+      khayyamActiveButton = null;
+      toast(error.message || 'پخش صدا ناموفق بود. دوباره تلاش کنید.');
+    }
+  }
+
+  function showTyping() {
+    const messagesEl = document.getElementById('messages');
+    const welcome    = document.getElementById('welcome');
+    if (welcome) welcome.remove();
+
+    const div      = document.createElement('div');
+    div.className  = 'message ai';
+    div.id         = 'typing-indicator';
+
+    const avatar       = document.createElement('div');
+    avatar.className   = 'avatar ai';
+    avatar.innerHTML   = ICON('mark');
+
+    const bubble     = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.innerHTML = '<div class="typing-dots" aria-label="در حال نوشتن"><span></span><span></span><span></span></div>';
+
+    div.appendChild(avatar);
+    div.appendChild(bubble);
+    messagesEl.appendChild(div);
+    scrollToBottom();
+  }
+
+  function removeTyping() {
+    const t = document.getElementById('typing-indicator');
+    if (t) t.remove();
+  }
+
+  function useSuggestion(btn) {
+    document.getElementById('user-input').value = btn.textContent.trim();
+    sendMessage();
+  }
+
+  // ── FILE HANDLING ──
+  function handleFileSelect(input, type) {
+    const file = input.files[0];
+    if (!file) return;
+
+    selectedFile     = file;
+    selectedFileType = type;
+
+    const preview = document.getElementById('file-preview');
+    const nameEl  = document.getElementById('file-preview-name');
+    const imgEl   = document.getElementById('img-preview');
+
+    nameEl.textContent = file.name;
+    preview.classList.add('visible');
+
+    if (type === 'image') {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        imgEl.src = e.target.result;
+        imgEl.style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    } else {
+      imgEl.style.display = 'none';
+    }
+  }
+
+  function clearFile() {
+    selectedFile     = null;
+    selectedFileType = null;
+    ['image-input', 'doc-input', 'camera-input'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    document.getElementById('file-preview').classList.remove('visible');
+    document.getElementById('img-preview').src   = '';
+    document.getElementById('img-preview').style.display = 'none';
+  }
+
+  // ── UPLOAD MENU ──
+  function showUploadMenu() {
+    document.getElementById('upload-menu').classList.toggle('open');
+  }
+  function triggerFileInput(id) {
+    document.getElementById('upload-menu').classList.remove('open');
+    document.getElementById(id).click();
+  }
+  function triggerCamera() {
+    document.getElementById('upload-menu').classList.remove('open');
+    document.getElementById('camera-input').click();
+  }
+  document.addEventListener('click', (e) => {
+    const menu    = document.getElementById('upload-menu');
+    const trigger = document.getElementById('upload-trigger');
+    if (menu && !menu.contains(e.target) && !trigger.contains(e.target)) menu.classList.remove('open');
+  });
+
+  // ── SEND MESSAGE ──
+  async function sendMessage() {
+    const input = document.getElementById('user-input');
+    const text  = input.value.trim();
+    if ((!text && !selectedFile) || isLoading) return;
+    // Finish and persist the voice session before sending a text turn.
+    if (window.KhayyamInlineVoice?.isActive()) await window.KhayyamInlineVoice.stop();
+
+    isLoading = true;
+    document.getElementById('send-btn').disabled = true;
+    input.value = '';
+    input.style.height = 'auto';
+
+    const displayText = text || (selectedFileType === 'image' ? 'تصویر' : 'فایل');
+    appendBubble('user', displayText);
+    showTyping();
+    // The backend appends the new user message itself. Do not send it again as
+    // part of the history; doing so increases costs and duplicates turns.
+    const priorHistory = history.slice(-10);
+    history.push({ role: 'user', content: text || displayText });
+
+    try {
+      let res;
+
+      if (selectedFile) {
+        const formData = new FormData();
+        formData.append('message', text);
+        formData.append('history', JSON.stringify(priorHistory));
+        if (currentConvId) formData.append('conversation_id', currentConvId);
+        if (selectedFileType === 'image') {
+          formData.append('image', selectedFile);
+        } else {
+          formData.append('document', selectedFile);
+        }
+        res = await fetch('/api/chat', { method: 'POST', body: formData });
+      } else {
+        res = await fetch('/api/chat', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message:         text,
+            history:         priorHistory,
+            conversation_id: currentConvId
+          })
+        });
+      }
+
+      const data = await res.json();
+      removeTyping();
+
+      // Do not add failed/limited turns to client history as though they were
+      // completed. Display the error and let the user retry in the same chat.
+      if (!res.ok || !data.reply) {
+        if (history.length && history[history.length - 1].role === 'user') history.pop();
+        appendBubble('ai', data.error || data.reply || 'متأسفم، پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.');
+        return;
+      }
+
+      // show switch notice exactly once when model changes mid-conversation
+      if (data.switch_notice && !switchNoticeShown) {
+        switchNoticeShown  = true;
+        const notice       = document.createElement('div');
+        notice.className   = 'limit-notice';
+        if (data.reset_ts) {
+          const resetDate  = new Date(data.reset_ts * 1000);
+          const now        = new Date();
+          const timeStr    = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const tomorrow   = new Date(now);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          const isTomorrow = resetDate.toDateString() === tomorrow.toDateString();
+          const dayStr     = isTomorrow ? 'فردا ساعت ' : 'امروز ساعت ';
+          notice.textContent = `خیام در حال تنظیم است. بازنشانی ${dayStr}${timeStr}`;
+        } else {
+          notice.textContent = 'خیام در حال تنظیم است. حالت استاندارد فعال شد.';
+        }
+        document.getElementById('messages').appendChild(notice);
+        scrollToBottom();
+      }
+
+      // Commit the server-assigned conversation ID before any optional UI work.
+      // A UI exception after a successful API response must not create a false
+      // error bubble or lose the ID needed for the next message.
+      if (data.conversation_id) {
+        currentConvId = Number(data.conversation_id);
+        window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
+      }
+      history.push({ role: 'assistant', content: data.reply });
+      try { appendBubble('ai', data.reply); }
+      catch (renderError) {
+        console.error('AI message rendering failed:', renderError);
+        const fallback = document.createElement('div');
+        fallback.className = 'message ai';
+        fallback.textContent = data.reply;
+        document.getElementById('messages').appendChild(fallback);
+      }
+      try { clearFile(); }
+      catch (uiError) { console.warn('Attachment UI reset failed:', uiError); }
+      if (data.conversation_id && currentUser) {
+        try { await loadSidebar(); }
+        catch (sidebarError) { console.warn('Conversation sidebar refresh failed:', sidebarError); }
+      }
+
+    } catch (err) {
+      removeTyping();
+      console.error('sendMessage error:', err);
+      if (history.length && history[history.length - 1].role === 'user') history.pop();
+      appendBubble('ai', 'خطایی رخ داد. لطفاً دوباره امتحان کنید.');
+    } finally {
+      isLoading = false;
+      document.getElementById('send-btn').disabled = false;
+      input.focus();
+    }
+  }
+
+  // Live Voice runs directly inside this conversation, without navigating away.
+  async function openLiveVoiceChat() {
+    if (!currentUser) { window.location.href = '/login'; return; }
+    if (isLoading) return;
+    await window.KhayyamInlineVoice.toggle({mode:'chat', conversation_id:currentConvId || null});
+  }
+  window.khayyamVoiceRender = (role, text) => {
+    appendBubble(role === 'assistant' ? 'ai' : 'user', text);
+    history.push({role, content:text});
+  };
+  window.khayyamVoiceSavedConversation = id => {
+    currentConvId = Number(id);
+    window.history.replaceState(null, '', `/chat?conv=${currentConvId}`);
+    loadSidebar().catch(err => console.warn('Voice sidebar refresh:', err));
+  };
+
+  // ── INPUT BEHAVIOR ──
+  const inputEl = document.getElementById('user-input');
+  inputEl.addEventListener('input', () => {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+  });
+  inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+  window.addEventListener('resize', applySidebar);
+
+  init();
+</script>
+<script src="/static/voice_inline.js?v=20261020"></script>
+</body>
+</html>
