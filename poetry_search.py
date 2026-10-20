@@ -10,6 +10,7 @@ What the chat route uses:
 """
 import os
 import random
+import zlib
 import re
 import sqlite3
 import threading
@@ -81,6 +82,11 @@ _STOP = set('''و در به از که را با این آن یک است بود �
 بخوان بخون بگو بده بیار بنویس درباره دربارهٔ کدام کیست مال شاعر دیوان کتاب نقل بفرما لطفا لطفاً ممنون سلام
 poem poems ghazal rubai verse of the by from a an'''.split())
 
+
+_FOLLOW = set(nrm(w) for w in ('بله', 'بلی', 'آره', 'اره', 'بگو', 'بنویس', 'بخوان', 'بخون', 'ادامه', 'کامل', 'کاملش', 'تمام', 'تمامش',
+                              'همه', 'همش', 'بقیه', 'بقیهاش', 'معنی', 'تفسیر', 'شرح', 'ترجمه', 'توضیح', 'بیشتر', 'لطفا',
+                              'میخوام', 'میخواهم', 'غزل', 'شعر', 'رباعی', 'اش', 'را', 'ش', 'هم', 'آن', 'این', 'بده', 'بیار',
+                              'یکجا', 'یک', 'جا', 'و', 'خب', 'باشه', 'خوب', 'اوکی', 'ok', 'yes', 'please', 'بفرما', 'عیناً', 'عینا')) 
 
 # --------------------------------------------------------------------------- database
 _local = threading.local()
@@ -160,7 +166,7 @@ def _fts_query(tokens):
     return ' OR '.join('"%s"' % t for t in toks[:12])
 
 
-def _search_couplets(c, tokens, poet, book, form, allow_prose=False, limit=6):
+def _search_couplets(c, tokens, poet, book, form, allow_prose=False, limit=6, min_cover=0.0):
     """Rank couplets by how many of the question's words they contain. Returns [(poem_id, [couplet idx, ...], score)]."""
     q = _fts_query(tokens)
     if not q:
@@ -204,13 +210,13 @@ def _search_couplets(c, tokens, poet, book, form, allow_prose=False, limit=6):
     for pid, v in ranked[:limit]:
         if top_cov >= 0.99 and len(need) >= 3 and v[2] < 0.8:
             continue                      # an exact line was found: drop the loose matches around it
-        if top - v[0] > 0.6:
+        if top - v[0] > 0.6 or v[2] < min_cover:
             continue
         keep.append((pid, sorted(set(v[1])), v[0]))
     return keep
 
 
-def _random_poems(c, poet, book, form, n=3):
+def _random_poems(c, poet, book, form, n=3, seed=0):
     where, args = ['1=1'], []
     if poet:
         where.append('p.poet_key = ?')
@@ -228,7 +234,7 @@ def _random_poems(c, poet, book, form, n=3):
         if rows:
             break
     ids = [r['id'] for r in rows]
-    random.shuffle(ids)
+    random.Random(seed).shuffle(ids)
     return ids[:n]
 
 
@@ -263,7 +269,7 @@ def _label(p):
 
 
 # --------------------------------------------------------------------------- public API
-def build_context(message, history=None, kind='chat'):
+def build_context(message, history=None, kind='chat', whole=False, _depth=0):
     """None when the poetry collection is not needed; else {'prompt': str, 'poems': [..]}."""
     if not available():
         return None
@@ -271,6 +277,18 @@ def build_context(message, history=None, kind='chat'):
     nmsg = nrm(msg)
     if not nmsg:
         return None
+    # «بلی بگو» / «کامل بنویس» / «معنی کن»: no poem in the message itself, so use what the conversation was about.
+    if history and _depth == 0 and len(nmsg.split()) <= 8 and all(t in _FOLLOW or t in _STOP for t in nmsg.split()):
+        users = [m for m in history[-8:] if isinstance(m, dict) and m.get('role') == 'user']
+        for m in reversed(users[-4:]):
+            ctx = build_context(str(m.get('content', '')), None, 'chat', whole=True, _depth=1)
+            if ctx and ctx.get('poems'):
+                ctx['prompt'] += ('\nکاربر ادامهٔ گفتگوی پیشین را می‌خواهد؛ شعری را که پیش‌تر دربارهٔ آن حرف زدید، '
+                                  'در صورت خواستن، با همین متن کامل بیاور.')
+                return ctx
+        return None
+    if _has(nmsg, ('کامل', 'تمام', 'کاملش', 'تمامش', 'یکجا', 'همه اش', 'بقیه')):
+        whole = True
     poet, book = _find_poet(nmsg)
     missing = _missing_poet(nmsg)
     form = _find_form(nmsg)
@@ -290,9 +308,8 @@ def build_context(message, history=None, kind='chat'):
     # Writing a NEW poem (even "in the style of") never needs the collection.
     if composing and not (asking and poet and not _has(nmsg, ('به سبک', 'در سبک', 'به شیوه', 'شبیه', 'الهام'))):
         return None
-    if not (kind == 'poetry' or poem_word or book or (poet and (prose_ask_early := _has(nmsg, ('بخوان', 'بخون', 'بگو', 'بده', 'بیار', 'نقل', 'مصراع', 'بیت'))))):
-        return None
-
+    triggered = bool(kind == 'poetry' or poem_word or book or
+                     (poet and _has(nmsg, ('بخوان', 'بخون', 'بگو', 'بده', 'بیار', 'نقل', 'مصراع', 'بیت'))))
     c = _conn()
     if c is None:
         return None
@@ -303,6 +320,12 @@ def build_context(message, history=None, kind='chat'):
     for w, _, _ in BOOKS:
         drop.update(nrm(w).split())
     tokens = _content_tokens(nmsg, drop)
+    # A line of verse pasted with no cue words around it: only trusted when it matches a line almost word for word.
+    strict = False
+    if not triggered:
+        if len(tokens) < 4:
+            return None
+        strict = True
     prose_ask = _has(nmsg, ('حکایت', 'نثر', 'داستان', 'حکمت', 'سفرنامه', 'باب'))
 
     # A follow-up like «معنی‌اش را بگو» has no words of its own: the conversation already holds the poem.
@@ -311,11 +334,14 @@ def build_context(message, history=None, kind='chat'):
 
     found = []                                  # [(poem_id, matched couplet idx list)]
     if len(tokens) >= 2 or (tokens and not poet):
-        for pid, idx, _s in _search_couplets(c, tokens, poet, book, form, allow_prose=bool(book) or prose_ask):
+        for pid, idx, _s in _search_couplets(c, tokens, poet, book, form, allow_prose=bool(book) or prose_ask,
+                                             min_cover=0.85 if strict else 0.0):
             found.append((pid, idx))
+    if strict and not found:
+        return None
     mode = 'search' if found else ''
     if not found and (poet or book):
-        for pid in _random_poems(c, poet, book, form):
+        for pid in _random_poems(c, poet, book, form, seed=zlib.crc32(nmsg.encode('utf-8'))):
             found.append((pid, None))
         mode = 'sample' if found else ''
     if not found and tokens and not poet:
@@ -325,9 +351,12 @@ def build_context(message, history=None, kind='chat'):
     if not found:
         return None
 
-    poems, budget = [], 3600
-    for pid, idx in found[:4]:
-        p = _load_poem(c, pid, idx)
+    poems, budget = [], (9000 if whole else 3600)
+    if whole:
+        found = found[:2]
+    for rank, (pid, idx) in enumerate(found[:4]):
+        # the best match comes complete (ghazals run 6-15 couplets); long works only around the matched lines
+        p = _load_poem(c, pid, idx, max_couplets=(80 if whole else 40 if (rank == 0 and mode == 'search') else 14))
         if not p:
             continue
         size = sum(len(x) for x in p['couplets'])
@@ -342,6 +371,7 @@ def build_context(message, history=None, kind='chat'):
              '- هر بیت یا مصراعی که برای کاربر می‌آوری باید کلمه‌به‌کلمه از همین متن‌ها باشد؛ چیزی را تغییر نده و نساز.',
              '- نام شاعر و کتاب را همان‌طور که این‌جا آمده بیاور؛ اما از وب‌سایت یا منبع دیجیتال نامی نبر.',
              '- اگر هیچ‌کدام به پرسش کاربر نمی‌خورد، بگو که شعر مناسبی در مجموعه نیافتی و از حفظ نقل نکن.',
+             '- اگر کاربر شعر کامل خواست و متن کامل در اختیار توست (بدون عبارت «بخشی از شعر»)، همهٔ بیت‌ها را به همان ترتیب و بدون کم‌وکاست بنویس؛ هرگز نگو که نمی‌توانی آن را نقل کنی.',
              '- اگر نسبت شعری به شاعر قطعی نیست (ذکر شده)، آن را همراه شعر و در یک جملهٔ کوتاه به کاربر بگو.']
     if mode == 'sample':
         lines.append('- کاربر شعر مشخصی نخواسته؛ یکی از این‌ها را (نه همه) انتخاب کن.')
