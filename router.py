@@ -32,8 +32,8 @@ LIMITS = {'simple': 450, 'standard': 900, 'complex': 1600}
 
 CANNED_ENABLED = os.getenv('ROUTER_CANNED', 'true').lower() == 'true'
 
-HISTORY_MESSAGES = int(os.getenv('ROUTER_HISTORY_MESSAGES', '6'))
-HISTORY_ASSISTANT_CHARS = int(os.getenv('ROUTER_HISTORY_ASSISTANT_CHARS', '1200'))
+HISTORY_MESSAGES = int(os.getenv('ROUTER_HISTORY_MESSAGES', '12'))
+HISTORY_ASSISTANT_CHARS = int(os.getenv('ROUTER_HISTORY_ASSISTANT_CHARS', '2200'))
 HISTORY_USER_CHARS = int(os.getenv('ROUTER_HISTORY_USER_CHARS', '2000'))
 
 # ----------------------------------------------------------------------------
@@ -231,20 +231,48 @@ def order_options(config, level):
 # ----------------------------------------------------------------------------
 # History
 # ----------------------------------------------------------------------------
+_MEDIA_MARK = re.compile(r'\[\[media:(image|pdf|docx|xlsx):[0-9a-f]{32}\]\]')
+_MEDIA_WORD = {'image': 'تصویر', 'pdf': 'فایل PDF', 'docx': 'فایل ورد', 'xlsx': 'فایل اکسل'}
+
+
 def trim_history(history, tutor=False):
-    """Keep the most recent messages; shorten long replies (the user rarely needs the
-    model to re-read its own essay). Lessons keep a little more context than chat."""
+    """The recent part of the conversation: the last HISTORY_MESSAGES messages, long replies shortened.
+    File/picture markers become a plain note so the model knows something was shown to the user.
+    (Older parts of the chat are kept by conversation_memory below.)"""
     keep = HISTORY_MESSAGES + 4 if tutor else HISTORY_MESSAGES
     cleaned = []
     for m in (history or [])[-keep:]:
         if not isinstance(m, dict) or m.get('role') not in ('user', 'assistant'):
             continue
-        content = str(m.get('content', ''))
+        content = _MEDIA_MARK.sub(lambda x: '[%s برای کاربر ساخته و نشان داده شد]' % _MEDIA_WORD[x.group(1)],
+                                  str(m.get('content', '')))
         cap = HISTORY_ASSISTANT_CHARS if m['role'] == 'assistant' else HISTORY_USER_CHARS
         if len(content) > cap:
             content = content[:cap].rstrip() + ' …'
         cleaned.append({'role': m['role'], 'content': content})
     return cleaned
+
+
+def _clip(text, n):
+    t = _MEDIA_MARK.sub('', str(text or '')).strip().replace('\n', ' ')
+    return t if len(t) <= n else t[:n].rstrip() + ' …'
+
+
+def conversation_memory(first_user, older_users):
+    """Long-conversation memory without any extra model call: the very first request of the chat, plus
+    a short list of what the user asked in between (older than the recent window)."""
+    parts = []
+    if first_user:
+        parts.append('آغاز این گفتگو (درخواست اول کاربر): «%s»' % _clip(first_user, 700))
+    items = [_clip(t, 110) for t in (older_users or []) if str(t or '').strip()]
+    if len(items) > 24:
+        items = items[:4] + items[-20:]
+    if items:
+        parts.append('پیام‌های قبلی کاربر در همین گفتگو، از قدیمی به جدید (خلاصه):\n' + '\n'.join('- ' + t for t in items))
+    if not parts:
+        return ''
+    return ('حافظهٔ گفتگو: بخش‌های قدیمی‌تر این گفتگو از پنجرهٔ پیام‌های اخیر بیرون رفته‌اند، ولی این یادآوری‌ها را داری. '
+            'هر چیزی که کاربر پیش‌تر گفته یا خواسته را به یاد داشته باش و دوباره نپرس.\n' + '\n'.join(parts))
 
 
 # ----------------------------------------------------------------------------
@@ -288,6 +316,11 @@ TOOLS_BLOCK = (
     'این درخواست توسط سیستم ایمنی پذیرفته نشد و راه دیگری پیشنهاد کن؛ اگر خطای دیگر بود، بگو موقتاً ممکن نشد و '
     'چیزی از سهمیه کم نشد.'
 )
+
+LANG_REMINDER = ('یادآوری: پاسخ این پیام را به دری افغانی بنویس، حتی اگر کاربر انگلیسی یا زبان دیگری نوشته است '
+                 '(فقط کد، مثال‌ها، نام‌های فنی و متنی که باید روی تصویر یا در فایل باشد می‌تواند انگلیسی باشد). '
+                 'اگر کاربر تصویری فرستاد بدون توضیح، یا نوشت «(تصویر فرستاده شد)»، و پیش‌تر کاری خواسته بود که به تصویر '
+                 'نیاز داشت، همان کار را انجام بده؛ وگرنه تصویر را توضیح بده. به یاد داشته باش گفتگو دربارهٔ چیست.')
 
 TOOLS_OFF_BLOCK = (
     'ساختن و ویرایش تصویر و جستجوی وب هنوز در خیام فعال نشده است. اگر کاربر چنین چیزی خواست، صادقانه بگو '
@@ -409,11 +442,12 @@ _SEARCH = re.compile(r'(جستجو|سرچ|search|google|گوگل|اخبار|خب
                      r'نتیجه|score|بازی\s*(دیروز|امروز)|رییس|رئیس|president|وزیر|ceo|release|ریلیز|۲۰۲[5-9]|202[5-9]|۱۴۰[4-9])', re.I)
 
 
-def tool_hints(message, last_assistant='', has_image=False):
+def tool_hints(message, last_assistant='', has_image=False, recent_user=''):
     """Set of {'image','doc','search'} worth offering for this message."""
     m = message or ''
     hints = set()
-    if _IMG.search(m) or (has_image and _IMG_EDIT.search(m)) or ('[[media:' in (last_assistant or '') and
+    pending = bool(has_image and (_IMG.search(recent_user or '') or _IMG_EDIT.search(recent_user or '')))
+    if _IMG.search(m) or pending or (has_image and _IMG_EDIT.search(m)) or ('[[media:' in (last_assistant or '') and
                                                                   (_IMG_EDIT.search(m) or len(m) < 120)):
         hints.add('image')
     if _DOC.search(m):

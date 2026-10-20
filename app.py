@@ -31,6 +31,7 @@ import router as khr
 import poetry_search
 import media as media_store
 import chat_tools
+import dari_text
 from metering import (VOICE_PLANS, ensure_storage as ensure_api_meter, reserve as reserve_api,
     finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
     tutor_plan as active_tutor_plan, tutor_tier as active_tutor_tier,
@@ -474,6 +475,11 @@ def _next_reset_ts(options):
     return min((next_reset_ts(p) for p in periods), default=None)
 
 
+def _lang(messages, feature):
+    """Chat only: a short reminder placed after the whole conversation, where models listen best."""
+    return list(messages) + [{'role': 'system', 'content': khr.LANG_REMINDER}] if feature == 'chat' else messages
+
+
 def _attempt(grant, system_prompt, messages, temperature, image_b64, image_type, effort, json_mode):
     """One provider call against one reservation. ALWAYS settles the reservation.
     Returns the reply text; raises on failure (after refunding or charging correctly)."""
@@ -565,7 +571,7 @@ def _metered_completion(feature, system_prompt, messages, user_id, plan,
             first_choice = options[0]['model']
         grant['sys_share'] = len(system_prompt) / max(1, total_chars)
         try:
-            reply = _attempt(grant, system_prompt, messages, temperature, image_b64, image_type,
+            reply = _attempt(grant, system_prompt, _lang(messages, feature), temperature, image_b64, image_type,
                              effort, json_mode)
             return reply, (grant['model'] != first_choice), None, grant['model']
         except Exception:
@@ -744,8 +750,9 @@ def build_tutor_prompt(subject, grade):
 def _openai_kwargs(model, system_prompt, messages, temperature, image_b64, image_type,
                    max_output, effort, json_mode):
     formatted=[]
-    for m in messages:
-        if m.get('role')=='user' and image_b64 and m is messages[-1]:
+    last_user=max((i for i,m in enumerate(messages) if m.get('role')=='user'),default=None)
+    for i,m in enumerate(messages):
+        if m.get('role')=='user' and image_b64 and i==last_user:
             formatted.append({'role':'user','content':[
               {'type':'text','text':m['content']},
               {'type':'image_url','image_url':{'url':f'data:{image_type};base64,{image_b64}'}}]})
@@ -921,9 +928,9 @@ def _open_metered_stream(feature, system_prompt, messages, user_id, plan, temper
         stream, first, usage = None, None, None
         try:
             if model.startswith('openai/gpt-oss'):
-                stream = _open_groq_stream(system_prompt, messages, temperature, model)
+                stream = _open_groq_stream(system_prompt, _lang(messages, feature), temperature, model)
             else:
-                stream = _open_openai_stream(model, system_prompt, messages, temperature, image_b64,
+                stream = _open_openai_stream(model, system_prompt, _lang(messages, feature), temperature, image_b64,
                                              image_type, grant['max_output'], effort)
             it = iter(stream)
             for chunk in it:
@@ -1836,7 +1843,7 @@ def _chat_prepare(allow_tools=False):
             if image_type not in ('image/jpeg','image/png','image/webp'):
                 return jsonify(error='Unsupported image format'),415
             image_b64    = base64.b64encode(img_bytes).decode('utf-8')
-            user_message = user_message or "این تصویر را توضیح بده و اگر متنی دارد بخوان"
+            user_message = user_message or "(تصویر فرستاده شد)"
 
         if 'document' in request.files:
             doc          = request.files['document']
@@ -1864,6 +1871,7 @@ def _chat_prepare(allow_tools=False):
     user_id = current_user.id if current_user.is_authenticated else None
     plan    = active_chat_plan(current_user if current_user.is_authenticated else None)
 
+    memory_note = ''
     # A follow-up must NEVER silently become a new conversation when its ID is
     # missing or stale. For logged-in students, the database is the authoritative
     # source of chat context; browser-side history can be outdated after reload.
@@ -1879,9 +1887,25 @@ def _chat_prepare(allow_tools=False):
         if conv is None:
             return jsonify(error='Conversation not found; reopen it from your history'), 404
         prior = (Message.query.filter_by(conversation_id=conv.id)
-                 .order_by(Message.id.desc()).limit(10).all())
+                 .order_by(Message.id.desc()).limit(khr.HISTORY_MESSAGES + 2).all())
         history = [{'role':m.role,'content':m.content[:6000]}
                    for m in reversed(prior) if m.role in ('user','assistant')]
+        try:    # what lies before the recent window: the first request + older user messages
+            if prior and len(prior) >= khr.HISTORY_MESSAGES + 2:
+                cutoff = min(m.id for m in prior[:khr.HISTORY_MESSAGES])
+                first = (Message.query.filter_by(conversation_id=conv.id, role='user')
+                         .order_by(Message.id.asc()).first())
+                older = [r[0] for r in db.session.query(Message.content)
+                         .filter(Message.conversation_id == conv.id, Message.role == 'user', Message.id < cutoff)
+                         .order_by(Message.id.asc()).limit(80).all()]
+                if first and first.id < cutoff:
+                    older = older[1:]
+                    memory_note = khr.conversation_memory(first.content, older)
+                else:
+                    memory_note = khr.conversation_memory(None, older)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('Conversation memory failed')
     elif user_id is not None and history:
         # Recovery path: the first response may have reached the browser without
         # its conversation ID being applied. Do not reject the student's next turn.
@@ -1918,17 +1942,34 @@ def _chat_prepare(allow_tools=False):
                 app.logger.exception('Poetry lookup failed')
             if poem_ctx:
                 system_prompt += '\n\n' + poem_ctx['prompt']
+        if memory_note:
+            system_prompt += '\n\n' + memory_note
     tools, tool_env = [], None
+    if user_id and image_b64 and canned is None:
+        # keep the picture for this chat, so a later "write X on it" still finds it
+        tool_env = chat_tools.Env(db, user_id, plan, conv.id if conv else None,
+                                  (image_type, base64.b64decode(image_b64)), app.logger)
+        try:
+            small, small_mime = dari_text.shrink_image(tool_env.attached[1])
+            mid = media_store.save(db, tool_env.owner, 'image', small_mime, 'upload.jpg', small,
+                                   conversation_id=tool_env.conv_id, meta={'role': 'upload', 'prompt': 'picture sent by the user'})
+            tool_env.created.append(mid)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('Could not keep the uploaded picture')
     if allow_tools and canned is None:
         last_asst = next((m['content'] for m in reversed(history) if m['role'] == 'assistant'), '')
-        hints = khr.tool_hints(user_message, last_asst, has_image=bool(image_b64))
+        recent_user = ' '.join(m['content'][:300] for m in history[-6:] if m['role'] == 'user')
+        hints = khr.tool_hints(user_message, last_asst, has_image=bool(image_b64), recent_user=recent_user)
         if hints and user_id is None:
             system_prompt += '\n\n' + khr.TOOLS_GUEST_BLOCK
         elif hints:
-            tools = chat_tools.specs(hints, bool(image_b64))
+            has_pic = bool(conv and media_store.recent(db, 'u:%s' % user_id, conv.id, 1))
+            tools = chat_tools.specs(hints, bool(image_b64), has_pic)
             if tools:
-                attached = (image_type, base64.b64decode(image_b64)) if image_b64 else None
-                tool_env = chat_tools.Env(db, user_id, plan, conv.id if conv else None, attached, app.logger)
+                if tool_env is None:
+                    attached = (image_type, base64.b64decode(image_b64)) if image_b64 else None
+                    tool_env = chat_tools.Env(db, user_id, plan, conv.id if conv else None, attached, app.logger)
                 system_prompt += '\n\n' + khr.TOOLS_BLOCK
                 note = chat_tools.context_note(tool_env)
                 if note:
@@ -1976,6 +2017,13 @@ def _chat_finish(ctx, reply, switched=False, reset_ts=None, with_sources=True, m
         db.session.commit()
         ctx['conv'] = conv
         response_data["conversation_id"] = conv.id
+        env = ctx.get('tool_env')
+        if env is not None and env.created:
+            try:
+                media_store.attach_to_conversation(db, env.created, env.owner, conv.id)
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('Could not attach files to the conversation')
     return response_data
 
 
@@ -2162,7 +2210,7 @@ def _tool_round(ctx, messages, tools, max_output=1500):
         except Exception:
             pass
         try:
-            kwargs = _openai_kwargs(model, system_prompt, messages, .7, image_b64, image_type,
+            kwargs = _openai_kwargs(model, system_prompt, _lang(messages, 'chat'), .7, image_b64, image_type,
                                     grant['max_output'], 'low', False)
             if tools:
                 kwargs['tools'] = tools
@@ -2282,8 +2330,6 @@ def _chat_tool_stream(ctx):
         try:
             data = _chat_finish(ctx, reply, with_sources=False)
             saved = True
-            if ctx['conv'] is not None and env.created:
-                media_store.attach_to_conversation(db, env.created, env.owner, ctx['conv'].id)
         except Exception:
             db.session.rollback()
             app.logger.exception('Could not save the tool answer')

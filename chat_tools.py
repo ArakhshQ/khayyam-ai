@@ -21,7 +21,7 @@ _SLOTS = threading.BoundedSemaphore(int(os.getenv('TOOL_CONCURRENCY', '3')))
 _SLOT_KINDS = ('image', 'search')
 
 
-def specs(hints, has_attached_image):
+def specs(hints, has_attached_image, has_picture_in_chat=False):
     """OpenAI 'tools' list for this turn. Tools that need Google are left out while no Google key is set,
     so the model never promises something that cannot happen."""
     out = []
@@ -57,7 +57,7 @@ def specs(hints, has_attached_image):
                 'source': {'type': 'string', 'description': "'attached' (picture in the user's message), 'last' "
                                                             "(most recent picture of this chat) or a media id"},
                 'text_layers': layers_schema}, 'required': ['instruction', 'source']}}})
-    if 'image' in hints and (g or has_attached_image):
+    if 'image' in hints and (g or has_attached_image or has_picture_in_chat):
         out.append({'type': 'function', 'function': {
             'name': 'add_text_to_image',
             'description': 'Put (or change) text on a picture without redrawing it. Free and instant. Use it to '

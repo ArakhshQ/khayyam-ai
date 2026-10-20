@@ -205,6 +205,18 @@ def _sniff(b):
     return 'png'
 
 
+def shrink_image(image_bytes, max_side=1600):
+    """Re-encode a photo as a modest JPEG (so keeping it for the chat costs ~200-400 KB, not several MB)."""
+    w, h = image_size(image_bytes)
+    k = min(1.0, max_side / max(w, h, 1))
+    doc = pymupdf.open()
+    page = doc.new_page(width=max(1, int(w * k)), height=max(1, int(h * k)))
+    page.insert_image(page.rect, stream=image_bytes)
+    pix = page.get_pixmap(dpi=72)
+    doc.close()
+    return pix.tobytes('jpeg', jpg_quality=88), 'image/jpeg'
+
+
 def overlay_text(image_bytes, layers, fmt='jpeg'):
     """Draw Dari/Arabic-script (or any) text layers on a picture. Returns (bytes, mime).
 
