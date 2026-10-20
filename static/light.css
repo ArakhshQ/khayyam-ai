@@ -25,7 +25,7 @@ body.light { background: #fff; color: var(--ink); font-family: var(--font-ui); m
 }
 .band::before {
   content: ''; position: absolute; inset: 0; z-index: -1; opacity: .5;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='88' height='88' viewBox='0 0 40 40'%3E%3Cg fill='none' stroke='%23d8b25a' stroke-opacity='.16' stroke-width='.6' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='22' height='22'/%3E%3Crect x='9' y='9' width='22' height='22' transform='rotate(45 20 20)'/%3E%3C/g%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='88' height='88' viewBox='0 0 40 40'%3E%3Cg fill='none' stroke='%23d8b25a' stroke-opacity='.16' stroke-width='.7' stroke-linecap='round'%3E%3Cpath d='M8 34V19C8 10.500 13 6 20 6s12 4.500 12 13v15'/%3E%3Cpath d='M14 34V21c0-4 2.500-6.500 6-6.500s6 2.500 6 6.500v13'/%3E%3C/g%3E%3C/svg%3E");
   -webkit-mask-image: linear-gradient(to bottom, #000, transparent 95%); mask-image: linear-gradient(to bottom, #000, transparent 95%);
 }
 

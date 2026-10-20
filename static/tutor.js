@@ -26,7 +26,7 @@
       var t = $('tab-' + n); t.classList.toggle('active', n === name); t.setAttribute('aria-selected', n === name ? 'true' : 'false');
     });
   };
-  window.voiceSoon = function () { toast('گفتگوی صوتی با استاد به‌زودی در کلاس فعال می‌شود.'); };
+  window.voiceSoon = function () { toast('گفتگوی صوتی با استاد به‌زودی در صنف فعال می‌شود.'); };
 
   /* ───────── conversation ───────── */
   function svgIcon(id) {
@@ -75,12 +75,12 @@
     setTimeout(function () {
       var t = $('typing'); if (t) t.remove();
       var link = document.createElement('div'); link.style.marginTop = '10px';
-      var a = document.createElement('a'); a.href = '#'; a.textContent = 'دیدن کلاس نمونه';
+      var a = document.createElement('a'); a.href = '#'; a.textContent = 'دیدن صنف نمونه';
       a.addEventListener('click', function (e) { e.preventDefault(); loadSample(); });
       var sep = document.createTextNode('  ·  ');
       var b = document.createElement('a'); b.href = '/chat'; b.textContent = 'پرسیدن در بخش گفتگو';
       link.appendChild(a); link.appendChild(sep); link.appendChild(b);
-      addMessage('ai', 'پیام شما را دیدم. چیدن درس و آموزش روی تخته هنوز در حال آماده‌سازی است و به‌زودی فعال می‌شود. تا آن زمان می‌توانید یک کلاس نمونه ببینید، یا پرسش‌تان را در بخش گفتگو بپرسید.', link);
+      addMessage('ai', 'پیام شما را دیدم. چیدن درس و آموزش روی تخته هنوز در حال آماده‌سازی است و به‌زودی فعال می‌شود. تا آن زمان می‌توانید یک صنف نمونه ببینید، یا پرسش‌تان را در بخش گفتگو بپرسید.', link);
       busy = false; $('send-btn').disabled = false;
     }, 900);
   };
@@ -90,7 +90,7 @@
     var list = $('lesson-list'); list.textContent = '';
     if (!course) {
       var e = document.createElement('div'); e.className = 'sidebar-empty'; e.id = 'lesson-empty';
-      e.innerHTML = 'هنوز کلاسی شروع نشده است.<br>به استاد بگویید چه چیزی می‌خواهید بیاموزید؛ درس‌ها همین‌جا ردیف می‌شوند.';
+      e.innerHTML = 'هنوز صنفی شروع نشده است.<br>به استاد بگویید چه چیزی می‌خواهید بیاموزید؛ درس‌ها همین‌جا ردیف می‌شوند.';
       list.appendChild(e); $('course-head').hidden = true; return;
     }
     $('course-head').hidden = false;
@@ -199,7 +199,7 @@
   window.newClass = function () {
     course = null; current = 0; renderLessons();
     $('board-content').textContent = ''; $('board-empty').hidden = false; $('board-controls').hidden = true;
-    $('lesson-title').textContent = 'کلاس درس';
+    $('lesson-title').textContent = 'صنف درس';
     showStart(); showPane('chat'); if (!isMobile()) showPane('board');
     if (isMobile()) { sidebarOpen = false; applySidebar(); }
   };

@@ -5,18 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <meta name="theme-color" content="#0a2b23">
-  <script src="/static/main.js?v=2"></script>
-  <title>کلاس درس — خیام</title>
+  <script src="/static/main.js?v=20261020"></script>
+  <title>صنف درس — خیام</title>
   <link rel="preload" href="/static/fonts/vazirmatn-var.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/khayyam.css?v=3">
-  <link rel="stylesheet" href="/static/chat.css?v=3">
-  <link rel="stylesheet" href="/static/tutor.css?v=1">
+  <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
+  <link rel="stylesheet" href="/static/chat.css?v=20261020">
+  <link rel="stylesheet" href="/static/tutor.css?v=20261020">
 </head>
 <body class="app on-light tutor-page">
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="mark" viewBox="0 0 40 40"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="9" y="9" width="22" height="22" rx="1.5"/><rect x="9" y="9" width="22" height="22" rx="1.5" transform="rotate(45 20 20)"/><circle cx="20" cy="20" r="4.4"/></g></symbol>
+  <symbol id="mark" viewBox="0 0 40 40"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 34V19C8 10.5 13 6 20 6s12 4.5 12 13v15"/><path d="M14 34V21c0-4 2.5-6.5 6-6.5s6 2.5 6 6.5v13"/><path d="M6 34h28"/></g></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12Z"/><path d="M9 11h6M9 14.5h3.5"/></g></symbol>
   <symbol id="i-cap" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 9 9.5-4.5L21.5 9 12 13.5 2.5 9Z"/><path d="M6.5 11.2v4.3c0 1.2 2.5 2.6 5.5 2.6s5.5-1.4 5.5-2.6v-4.3M21.5 9v5"/></g></symbol>
@@ -36,15 +36,15 @@
 
 <div class="app-shell">
 
-  <aside class="sidebar" id="sidebar" aria-label="درس‌های کلاس">
+  <aside class="sidebar" id="sidebar" aria-label="درس‌های صنف">
     <div class="side-top">
       <a href="/" class="logo" aria-label="خیام"><svg class="logo-mark" aria-hidden="true"><use href="#mark"/></svg><span class="logo-text">خیام</span></a>
       <button class="icon-btn side-close" type="button" onclick="toggleSidebar()" aria-label="بستن منو"><svg><use href="#i-close"/></svg></button>
     </div>
 
-    <button class="new-chat" type="button" onclick="newClass()"><svg><use href="#i-plus"/></svg>کلاس تازه</button>
+    <button class="new-chat" type="button" onclick="newClass()"><svg><use href="#i-plus"/></svg>صنف تازه</button>
 
-    <div class="side-label">درس‌های این کلاس</div>
+    <div class="side-label">درس‌های این صنف</div>
     <div class="course-head" id="course-head" hidden>
       <div class="course-name" id="course-name"></div>
       <div class="course-progress"><div class="course-progress-fill" id="course-progress-fill"></div></div>
@@ -52,7 +52,7 @@
     </div>
     <div class="sidebar-list lesson-list" id="lesson-list">
       <div class="sidebar-empty" id="lesson-empty">
-        هنوز کلاسی شروع نشده است.<br>
+        هنوز صنفی شروع نشده است.<br>
         به استاد بگویید چه چیزی می‌خواهید بیاموزید؛ درس‌ها همین‌جا ردیف می‌شوند.
       </div>
     </div>
@@ -81,9 +81,9 @@
   <main class="class-main">
     <div class="chat-top class-top">
       <button class="icon-btn" type="button" onclick="toggleSidebar()" aria-label="درس‌ها"><svg><use href="#i-menu"/></svg></button>
-      <span class="chat-title" id="lesson-title">کلاس درس</span>
+      <span class="chat-title" id="lesson-title">صنف درس</span>
       <span class="spacer"></span>
-      <div class="pane-tabs" role="tablist" aria-label="نمای کلاس">
+      <div class="pane-tabs" role="tablist" aria-label="نمای صنف">
         <button type="button" role="tab" class="pane-tab active" id="tab-board" aria-selected="true" onclick="showPane('board')"><svg><use href="#i-board"/></svg>تخته</button>
         <button type="button" role="tab" class="pane-tab" id="tab-chat" aria-selected="false" onclick="showPane('chat')"><svg><use href="#i-chat"/></svg>گفتگو</button>
       </div>
@@ -92,12 +92,12 @@
     <div class="classroom" data-pane="board" id="classroom">
 
       <!-- Green board -->
-      <section class="board-pane" aria-label="تختهٔ کلاس">
+      <section class="board-pane" aria-label="تختهٔ صنف">
         <div class="board-frame">
           <div class="board" id="board" aria-live="polite">
             <div class="board-empty" id="board-empty">
               <svg class="board-mark" aria-hidden="true"><use href="#mark"/></svg>
-              <h2>به کلاس خیام خوش آمدید</h2>
+              <h2>به صنف خیام خوش آمدید</h2>
               <p>هر چیزی که می‌خواهید بیاموزید را بگویید.<br>استاد درس‌ها را می‌چیند و روی همین تخته برایتان می‌نویسد و می‌کشد.</p>
             </div>
             <div class="board-content" id="board-content"></div>
@@ -147,12 +147,12 @@
         <button class="suggestion" type="button" data-say="می‌خواهم برنامه‌نویسی را شروع کنم">برنامه‌نویسی</button>
         <button class="suggestion" type="button" data-say="می‌خواهم برای کنکور آماده شوم">آمادگی کنکور</button>
       </div>
-      <button class="sample-link" type="button" onclick="loadSample()">دیدن یک کلاس نمونه</button>
+      <button class="sample-link" type="button" onclick="loadSample()">دیدن یک صنف نمونه</button>
     </div>
   </div>
 </template>
 
-<script src="/static/ui.js?v=3"></script>
-<script src="/static/tutor.js?v=1"></script>
+<script src="/static/ui.js?v=20261020"></script>
+<script src="/static/tutor.js?v=20261020"></script>
 </body>
 </html>
