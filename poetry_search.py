@@ -11,6 +11,7 @@ What the chat route uses:
 import os
 import random
 import zlib
+from functools import lru_cache
 import re
 import sqlite3
 import threading
@@ -161,9 +162,85 @@ def _content_tokens(nmsg, drop):
 _POEM_COLS = 'p.id, p.poet_key, p.poet, p.book, p.section, p.title, p.url, p.status, p.form, p.n'
 
 
+# Letters people (and keyboards) mix up. Used only for matching, never for the text we quote.
+_FOLD = str.maketrans({'ث': 'س', 'ص': 'س', 'ذ': 'ز', 'ض': 'ز', 'ظ': 'ز', 'ط': 'ت', 'ق': 'غ', 'ح': 'ه', 'ع': 'ا'})
+_ALT = {'س': 'صث', 'ص': 'سث', 'ث': 'سص', 'ز': 'ذضظ', 'ذ': 'زضظ', 'ض': 'زذظ', 'ظ': 'زذض', 'ت': 'ط', 'ط': 'ت',
+        'غ': 'ق', 'ق': 'غ', 'ه': 'ح', 'ح': 'ه', 'ا': 'ع', 'ع': 'ا'}
+
+
+def _fold(t):
+    return t.translate(_FOLD)
+
+
+def _lev(a, b, cap):
+    """Edit distance, giving up above cap (words are short, so this is cheap)."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) > cap:
+            return cap + 1
+        prev = cur
+    return prev[-1]
+
+
+@lru_cache(maxsize=300000)
+def _near(a, b):
+    if a == b:
+        return True
+    fa, fb = _fold(a), _fold(b)
+    if fa == fb:
+        return True
+    n = min(len(fa), len(fb))
+    if n < 3 or abs(len(fa) - len(fb)) > 2:
+        return False
+    cap = 1 if n <= 5 else 2
+    # one edit cannot change both ends of a word, so most unrelated words are dropped without the slow comparison
+    if cap == 1 and fa[0] != fb[0] and fa[-1] != fb[-1]:
+        return False
+    if cap == 2 and len(set(fa) & set(fb)) < n - 2:
+        return False
+    return _lev(fa, fb, cap) <= cap
+
+
+def _cover(need, text):
+    """Share of the question's words found in a couplet, allowing small spelling slips and glued/split words."""
+    ct = nrm(text).split()
+    cset, joined = set(ct), ''.join(ct)
+    fjoined = _fold(joined)
+    hit = 0
+    for t in need:
+        if t in cset or (len(t) >= 4 and (t in joined or _fold(t) in fjoined)) or any(_near(t, x) for x in ct):
+            hit += 1
+    return hit / len(need)
+
+
+def _variants(t):
+    out = []
+    for i, ch in enumerate(t):
+        for alt in _ALT.get(ch, ''):
+            out.append(t[:i] + alt + t[i + 1:])
+            if len(out) >= 6:
+                return out
+    return out
+
+
 def _fts_query(tokens):
-    toks = [t for t in tokens if re.fullmatch(r'[\w]+', t)]
-    return ' OR '.join('"%s"' % t for t in toks[:12])
+    toks = [t for t in tokens if re.fullmatch(r'[\w]+', t)][:10]
+    terms = []
+    for t in toks:
+        terms.append(t)
+        if len(t) >= 3:
+            terms.extend(_variants(t)[:4])
+    seen, uniq = set(), []
+    for t in terms:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return ' OR '.join('"%s"' % t for t in uniq[:44])
 
 
 def _search_couplets(c, tokens, poet, book, form, allow_prose=False, limit=6, min_cover=0.0):
@@ -185,12 +262,12 @@ def _search_couplets(c, tokens, poet, book, form, allow_prose=False, limit=6, mi
         args.append(form)
     if not allow_prose:
         sql += ' AND p.form != "prose"'
-    sql += ' ORDER BY r LIMIT 400'
-    need = set(tokens)
+    sql += ' ORDER BY r LIMIT 300'
+    need_list = list(dict.fromkeys(tokens))
+    need = need_list
     scored = {}
     for row in c.execute(sql, args):
-        have = need & set(nrm(row['text']).split())
-        cover = len(have) / len(need)
+        cover = _cover(need_list, row['text'])
         # a pasted line must match almost entirely; a theme word only has to appear
         if len(need) >= 3 and cover < 0.6:
             continue
@@ -334,8 +411,20 @@ def build_context(message, history=None, kind='chat', whole=False, _depth=0):
 
     found = []                                  # [(poem_id, matched couplet idx list)]
     if len(tokens) >= 2 or (tokens and not poet):
-        for pid, idx, _s in _search_couplets(c, tokens, poet, book, form, allow_prose=bool(book) or prose_ask,
-                                             min_cover=0.85 if strict else 0.0):
+        hist_poet = None
+        if not poet and history and _depth == 0:
+            for m in reversed([m for m in history[-8:] if isinstance(m, dict) and m.get('role') == 'user'][-4:]):
+                hp, _b = _find_poet(nrm(str(m.get('content', ''))[:2000]))
+                if hp:
+                    hist_poet = hp
+                    break
+        kw = dict(allow_prose=bool(book) or prose_ask, min_cover=0.85 if strict else 0.0)
+        hits = _search_couplets(c, tokens, hist_poet, book, form, **kw) if hist_poet else []
+        if hits:
+            poet = hist_poet                    # the user already said whose poem this is
+        else:
+            hits = _search_couplets(c, tokens, poet, book, form, **kw)
+        for pid, idx, _s in hits:
             found.append((pid, idx))
     if strict and not found:
         return None
@@ -372,6 +461,7 @@ def build_context(message, history=None, kind='chat', whole=False, _depth=0):
              '- نام شاعر و کتاب را همان‌طور که این‌جا آمده بیاور؛ اما از وب‌سایت یا منبع دیجیتال نامی نبر.',
              '- اگر هیچ‌کدام به پرسش کاربر نمی‌خورد، بگو که شعر مناسبی در مجموعه نیافتی و از حفظ نقل نکن.',
              '- اگر کاربر شعر کامل خواست و متن کامل در اختیار توست (بدون عبارت «بخشی از شعر»)، همهٔ بیت‌ها را به همان ترتیب و بدون کم‌وکاست بنویس؛ هرگز نگو که نمی‌توانی آن را نقل کنی.',
+             '- اگر کاربر شاعر مشخصی خواسته، فقط شعر همان شاعر را بیاور و از شاعران دیگر یاد نکن. اگر شاعری مشخص نشده و یک مصراع در آثار چند شاعر هست، به کوتاهی بگو.',
              '- اگر نسبت شعری به شاعر قطعی نیست (ذکر شده)، آن را همراه شعر و در یک جملهٔ کوتاه به کاربر بگو.']
     if mode == 'sample':
         lines.append('- کاربر شعر مشخصی نخواسته؛ یکی از این‌ها را (نه همه) انتخاب کن.')
@@ -381,7 +471,7 @@ def build_context(message, history=None, kind='chat', whole=False, _depth=0):
         lines.extend(p['couplets'])
     if poet and POETS[poet]['name'] and book is None and not any(x['poet_key'] == poet for x in poems):
         pass
-    return {'poems': poems, 'prompt': '\n'.join(lines)}
+    return {'poems': poems, 'poet': poet, 'prompt': '\n'.join(lines)}
 
 
 def add_sources(reply, ctx):
@@ -398,6 +488,17 @@ def add_sources(reply, ctx):
                 break
     if not used:
         return reply
+    want = ctx.get('poet')
+    if want:
+        used = [p for p in used if p['poet_key'] == want] or used
+    elif len({p['poet_key'] for p in used}) > 1:
+        named = {k for k, v in POETS.items() if any((' %s ' % nrm(a)) in nr for a in v['aliases'])}
+        if named:
+            used = [p for p in used if p['poet_key'] in named] or used
+        best = {}
+        for p in used:                           # one poem per poet is enough for a source line
+            best.setdefault(p['poet_key'], p)
+        used = list(best.values())
     out = []
     for p in used:
         s = _label(p)
