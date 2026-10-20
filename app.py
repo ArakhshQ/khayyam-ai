@@ -29,6 +29,8 @@ from flask_limiter import Limiter
 from werkzeug.middleware.proxy_fix import ProxyFix
 import router as khr
 import poetry_search
+import media as media_store
+import chat_tools
 from metering import (VOICE_PLANS, ensure_storage as ensure_api_meter, reserve as reserve_api,
     finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
     tutor_plan as active_tutor_plan, tutor_tier as active_tutor_tier,
@@ -227,6 +229,9 @@ with app.app_context():
         conn.execute(sql_text("UPDATE users SET chat_plan='free' WHERE chat_plan IS NULL"))
         conn.execute(sql_text("UPDATE users SET tutor_plan='free' WHERE tutor_plan IS NULL"))
     ensure_api_meter(db)
+    from metering import ensure_tool_storage
+    ensure_tool_storage(db)
+    media_store.ensure_media_storage(db)
 
     def _sync_table_columns(model):
         """Bring a table that already exists (e.g. created by an earlier build) in line with
@@ -1416,7 +1421,13 @@ def internal_plan_sweep():
     if not secret or not hmac.compare_digest(secret.encode(), supplied.encode()):
         return jsonify(error='forbidden'), 403
     expired, warned = sweep_plans()
-    return jsonify(success=True, expired=expired, warned=warned)
+    try:
+        removed = media_store.cleanup_media(db)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Media cleanup failed')
+        removed = None
+    return jsonify(success=True, expired=expired, warned=warned, media_removed=removed)
 
 
 PHONE_RE = re.compile(r'^\+?[0-9][0-9\s\-]{6,19}$')
@@ -1802,7 +1813,7 @@ def text_to_speech():
         app.logger.exception('Text playback failed')
         return jsonify(error='Voice generation failed; retry later'),502
 
-def _chat_prepare():
+def _chat_prepare(allow_tools=False):
     """Parse and validate the request, load the conversation, decide how to answer.
     Returns a dict on success, or a ready (response, status) tuple on a bad request."""
     has_doc = False
@@ -1825,7 +1836,7 @@ def _chat_prepare():
             if image_type not in ('image/jpeg','image/png','image/webp'):
                 return jsonify(error='Unsupported image format'),415
             image_b64    = base64.b64encode(img_bytes).decode('utf-8')
-            user_message = user_message or "این تصویر را به دری توضیح بده"
+            user_message = user_message or "این تصویر را توضیح بده و اگر متنی دارد بخوان"
 
         if 'document' in request.files:
             doc          = request.files['document']
@@ -1907,9 +1918,26 @@ def _chat_prepare():
                 app.logger.exception('Poetry lookup failed')
             if poem_ctx:
                 system_prompt += '\n\n' + poem_ctx['prompt']
+    tools, tool_env = [], None
+    if allow_tools and canned is None:
+        last_asst = next((m['content'] for m in reversed(history) if m['role'] == 'assistant'), '')
+        hints = khr.tool_hints(user_message, last_asst, has_image=bool(image_b64))
+        if hints and user_id is None:
+            system_prompt += '\n\n' + khr.TOOLS_GUEST_BLOCK
+        elif hints:
+            tools = chat_tools.specs(hints, bool(image_b64))
+            if tools:
+                attached = (image_type, base64.b64decode(image_b64)) if image_b64 else None
+                tool_env = chat_tools.Env(db, user_id, plan, conv.id if conv else None, attached, app.logger)
+                system_prompt += '\n\n' + khr.TOOLS_BLOCK
+                note = chat_tools.context_note(tool_env)
+                if note:
+                    system_prompt += '\n\n' + note
+            if not chat_tools.gemini.available() and hints & {'image', 'search'}:
+                system_prompt += '\n\n' + khr.TOOLS_OFF_BLOCK
     return {'user_message': user_message, 'history': history, 'conv': conv, 'user_id': user_id, 'plan': plan,
             'image_b64': image_b64, 'image_type': image_type, 'intent': intent, 'canned': canned,
-            'system_prompt': system_prompt, 'poem_ctx': poem_ctx}
+            'system_prompt': system_prompt, 'poem_ctx': poem_ctx, 'tools': tools, 'tool_env': tool_env}
 
 
 def _chat_finish(ctx, reply, switched=False, reset_ts=None, with_sources=True, model_used=''):
@@ -2004,11 +2032,13 @@ def chat_stream():
     Anything that is not a live stream (greeting, limit reached, errors) is answered with ordinary
     JSON and the same status codes as /api/chat, so the browser handles both with one code path.
     """
-    ctx = _chat_prepare()
+    ctx = _chat_prepare(allow_tools=True)
     if not isinstance(ctx, dict):
         return ctx
     if ctx['canned'] is not None:
         return jsonify(_chat_finish(ctx, ctx['canned'], model_used='canned'))
+    if ctx['tools']:
+        return _chat_tool_stream(ctx)
     intent = ctx['intent']
     messages = khr.trim_history(ctx['history']) + [{'role': 'user', 'content': ctx['user_message']}]
     try:
@@ -2093,6 +2123,213 @@ def persona_chat():
     return jsonify({"reply": reply})
 
 # ── CONVERSATION APIs ──
+# ── CHAT TOOLS (pictures, web search, documents) ──────────────────────────────────────────────
+def _tool_round(ctx, messages, tools, max_output=1500):
+    """One NON-streaming model call that may ask for tools. Same money rules as every other call:
+    reserve -> call -> settle (refund on failure, fall back to the next affordable model).
+    Returns {'status': 'ok', 'content', 'calls': [{id,name,arguments}], 'model', 'switched'}
+         or {'status': 'limited', 'reset_ts'} or {'status': 'error'}."""
+    from metering import reserve
+    user_id, plan, intent = ctx['user_id'], ctx['plan'], ctx['intent']
+    system_prompt = ctx['system_prompt']
+    image_b64, image_type = ctx['image_b64'], ctx['image_type']
+    config = PLAN_CONFIG.get(plan, PLAN_CONFIG['free'])
+    options = [o for o in khr.order_options(config, intent['level']) if not o['model'].startswith('openai/gpt-oss')]
+    tools_json = json.dumps(tools, ensure_ascii=False) if tools else ''
+    overhead = khr.estimate_tokens(system_prompt) + khr.estimate_tokens(tools_json) + 15
+    body = sum(khr.estimate_tokens(str(m.get('content') or '')) + 10 for m in messages) + (2500 if image_b64 else 0)
+    total_chars = len(system_prompt) + len(tools_json) + sum(len(str(m.get('content') or '')) + len(json.dumps(m.get('tool_calls') or [])) for m in messages)
+    if total_chars > 90000:
+        raise ValueError('Message history is too long')
+    estimated = overhead + body
+    first_choice, attempts = None, 0
+    while options and attempts < 3:
+        attempts += 1
+        grant, idx = reserve(db, user_id, 'chat', plan, options, estimated, max_output,
+                             overhead_tokens=overhead, intent='tools')
+        if not grant:
+            if first_choice is None:
+                return {'status': 'limited', 'reset_ts': _next_reset_ts(options)}
+            break
+        first_choice = first_choice or options[0]['model']
+        grant['sys_share'] = (len(system_prompt) + len(tools_json)) / max(1, total_chars)
+        model, t0 = grant['model'], time.monotonic()
+        ms = lambda: int((time.monotonic() - t0) * 1000)
+        try:
+            from flask import g, has_request_context
+            if has_request_context():
+                g.usage_rid = grant['id']
+        except Exception:
+            pass
+        try:
+            kwargs = _openai_kwargs(model, system_prompt, messages, .7, image_b64, image_type,
+                                    grant['max_output'], 'low', False)
+            if tools:
+                kwargs['tools'] = tools
+                kwargs['tool_choice'] = 'auto'
+            try:
+                resp = openai_client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                if type(exc).__name__ == 'BadRequestError' and 'reasoning_effort' in str(exc).lower():
+                    kwargs.pop('reasoning_effort', None)
+                    resp = openai_client.chat.completions.create(**kwargs)
+                else:
+                    raise
+        except Exception as exc:
+            try:
+                finalize_api(db, grant, uncertain=_maybe_billed(exc), failed=not _maybe_billed(exc), latency_ms=ms())
+            except Exception:
+                db.session.rollback()
+            app.logger.exception('Tool round failed (%s); trying the next affordable model', model)
+            options = options[idx + 1:]
+            continue
+        usage = _usage_pair(resp)
+        try:
+            if usage is None:
+                finalize_api(db, grant, uncertain=True, latency_ms=ms())
+            else:
+                finalize_api(db, grant, usage[0], usage[1], latency_ms=ms())
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('Could not settle reservation after tool round')
+        try:
+            msg = resp.choices[0].message
+            calls = [{'id': tc.id, 'name': tc.function.name, 'arguments': tc.function.arguments or '{}'}
+                     for tc in (getattr(msg, 'tool_calls', None) or []) if getattr(tc, 'function', None)]
+            content = (msg.content or '').strip()
+        except Exception:
+            calls, content = [], ''
+        if not calls and not content:
+            app.logger.error('Tool round (%s) returned nothing usable', model)
+            options = options[idx + 1:]
+            continue
+        app.logger.info('ai_tools model=%s calls=%s in=%s out=%s ms=%s', model, [c['name'] for c in calls],
+                        usage[0] if usage else '?', usage[1] if usage else '?', ms())
+        return {'status': 'ok', 'content': content, 'calls': calls[:3], 'model': model,
+                'switched': model != first_choice}
+    return {'status': 'error'}
+
+
+_TOOL_MARKER = '[[media:%s:%s]]'
+
+
+def _chat_tool_stream(ctx):
+    """Chat turn where the model may use tools. The first model call (fast) happens before the browser
+    gets a single byte, so limits and outages still answer as plain JSON; after that, tool progress
+    and the answer are sent as events: meta, tool, media, delta, error, done."""
+    env = ctx['tool_env']
+    tools = ctx['tools']
+    messages = khr.trim_history(ctx['history']) + [{'role': 'user', 'content': ctx['user_message']}]
+    big = any(t['function']['name'] == 'create_document' for t in tools)
+    mo = 3800 if big else 1800
+    try:
+        cur = _tool_round(ctx, messages, tools, mo)
+    except ValueError:
+        return jsonify(error='پیام یا فایل خیلی طولانی است؛ آن را کوتاه‌تر کنید.'), 413
+    except Exception:
+        app.logger.exception('Tool chat could not start')
+        return jsonify(error='سرویس گفتگو موقتاً در دسترس نیست. دوباره تلاش کنید.'), 503
+    if cur['status'] == 'limited':
+        return jsonify({'reply': _MSG_LIMITED, 'limited': True, 'reset_ts': cur.get('reset_ts'),
+                        'switch_notice': False}), 429
+    if cur['status'] != 'ok':
+        return jsonify(error=_MSG_UNAVAILABLE), 503
+
+    def events():
+        saved, text, failed, kinds = False, '', False, {}
+        yield _sse('meta', {'switched': bool(cur['switched'])})
+        try:
+            rnd, step = 0, cur
+            while step['calls'] and rnd < 3:
+                rnd += 1
+                messages.append({'role': 'assistant', 'content': step['content'] or None, 'tool_calls': [
+                    {'id': c['id'], 'type': 'function', 'function': {'name': c['name'], 'arguments': c['arguments']}}
+                    for c in step['calls']]})
+                for c in step['calls']:
+                    yield _sse('tool', {'name': c['name'], 'state': 'start',
+                                        'label': chat_tools.STATUS.get(c['name'], 'در حال انجام')})
+                    before = len(env.media_ids)
+                    result = chat_tools.run(env, c['name'], c['arguments'])
+                    for mid in env.media_ids[before:]:
+                        row = media_store.get(db, mid, with_data=False)
+                        kinds[mid] = row['kind'] if row else 'image'
+                        yield _sse('media', {'id': mid, 'kind': row['kind'] if row else 'image',
+                                             'name': row['name'] if row else ''})
+                    yield _sse('tool', {'name': c['name'], 'state': 'done' if result.get('ok') else 'error'})
+                    messages.append({'role': 'tool', 'tool_call_id': c['id'],
+                                     'content': json.dumps(result, ensure_ascii=False)[:6000]})
+                last = rnd >= 3
+                step = _tool_round(ctx, messages, None if last else tools, mo)
+                if step['status'] != 'ok':
+                    failed = True
+                    break
+            if step.get('status') == 'ok':
+                text = (step['content'] or '').strip()
+        except Exception:
+            app.logger.exception('Tool chat failed mid-way')
+            failed = True
+        if not text:
+            text = ('کار انجام شد.' if env.media_ids else
+                    'متأسفم، در انجام این کار مشکلی پیش آمد. چیزی از سهمیه شما کم نشد؛ دوباره تلاش کنید.')
+        if text:
+            yield _sse('delta', {'t': text})
+        reply = text
+        if env.sources:
+            reply += '\n\n**منبع‌ها:**\n' + '\n'.join('- [%s](%s)' % (re.sub(r'[\[\]]', '', s['title']), s['url'])
+                                                       for s in env.sources[:5])
+        for mid in env.media_ids:
+            reply += '\n\n' + _TOOL_MARKER % (kinds.get(mid, 'image'), mid)
+        try:
+            data = _chat_finish(ctx, reply, with_sources=False)
+            saved = True
+            if ctx['conv'] is not None and env.created:
+                media_store.attach_to_conversation(db, env.created, env.owner, ctx['conv'].id)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('Could not save the tool answer')
+            data = {'reply': reply}
+        if failed:
+            data['partial'] = False
+        yield _sse('done', data)
+
+    resp = Response(stream_with_context(events()), mimetype='text/event-stream')
+    resp.headers['Cache-Control'] = 'no-cache, no-transform'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp
+
+
+@app.route('/media/<mid>')
+@login_required
+def media_file(mid):
+    """A file made for the signed-in user. Only its owner can open it."""
+    row = media_store.get(db, mid) if media_store.valid_id(mid) else None
+    if not row or row['owner_key'] != 'u:%s' % current_user.id:
+        return jsonify(error='not found'), 404
+    inline = row['kind'] in ('image', 'pdf') and request.args.get('dl') != '1'
+    resp = send_file(BytesIO(row['data']), mimetype=row['mime'], as_attachment=not inline,
+                     download_name=row['name'], max_age=0)
+    resp.headers['Cache-Control'] = 'private, max-age=3600'
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    resp.headers['Content-Security-Policy'] = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
+    return resp
+
+
+@app.route('/api/tool-usage')
+@login_required
+def tool_usage_api():
+    from metering import tool_usage
+    return jsonify(tool_usage(db, current_user.id, active_chat_plan(current_user)))
+
+
+@app.route('/api/admin/tool-log')
+@login_required
+@admin_required
+def admin_tool_log():
+    from metering import tool_recent
+    return jsonify(tool_recent(db, 100))
+
+
+
 @app.route("/api/conversations", methods=["GET"])
 @login_required
 def get_conversations():
@@ -2119,6 +2356,11 @@ def delete_conversation(conv_id):
     conv = Conversation.query.filter_by(
         id=conv_id, user_id=current_user.id
     ).first_or_404()
+    try:
+        media_store.delete_for_conversation(db, 'u:%s' % current_user.id, conv.id)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Could not remove the files of a deleted conversation')
     db.session.delete(conv)
     db.session.commit()
     return jsonify({"success": True})

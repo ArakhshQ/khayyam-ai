@@ -10,7 +10,7 @@
   <link rel="preload" href="/static/fonts/vazirmatn-var.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
-  <link rel="stylesheet" href="/static/chat.css?v=20261021">
+  <link rel="stylesheet" href="/static/chat.css?v=20261022">
   <script src="/static/vendor/marked.min.js"></script>
   <script src="/static/vendor/purify.min.js"></script>
 </head>
@@ -328,6 +328,79 @@
     w.scrollTop = w.scrollHeight;
   }
 
+
+  // ── Pictures and files made by the tools ──
+  // The server writes [[media:KIND:ID]] markers at the end of an answer; the browser turns them into
+  // cards. Only ids made of 32 hex letters are ever used in a URL.
+  const MEDIA_RE = /\[\[media:(image|pdf|docx|xlsx):([0-9a-f]{32})\]\]/g;
+  const FILE_LABEL = { pdf: 'سند PDF', docx: 'فایل ورد', xlsx: 'فایل اکسل' };
+  function splitMedia(text) {
+    const items = [];
+    const body = String(text || '').replace(MEDIA_RE, (m, kind, id) => { items.push({ kind, id }); return ''; })
+                                   .replace(/\n{3,}/g, '\n\n').trim();
+    return { body, items };
+  }
+  function mediaStrip(content) {
+    let strip = content.parentElement.querySelector('.media-strip');
+    if (!strip) {
+      strip = document.createElement('div');
+      strip.className = 'media-strip';
+      content.insertAdjacentElement('afterend', strip);
+    }
+    return strip;
+  }
+  function mediaCard(item) {
+    const url = '/media/' + item.id;
+    if (item.kind === 'image') {
+      const fig = document.createElement('figure');
+      fig.className = 'media-card img';
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      const img = document.createElement('img');
+      img.src = url; img.alt = 'تصویر ساخته‌شده توسط خیام'; img.loading = 'lazy';
+      a.appendChild(img);
+      const cap = document.createElement('figcaption');
+      const dl = document.createElement('a');
+      dl.href = url + '?dl=1'; dl.textContent = 'دانلود تصویر'; dl.setAttribute('download', '');
+      cap.appendChild(dl);
+      fig.appendChild(a); fig.appendChild(cap);
+      return fig;
+    }
+    const a = document.createElement('a');
+    a.className = 'media-card file';
+    a.href = url + '?dl=1'; a.setAttribute('download', '');
+    const t = document.createElement('span'); t.className = 'ft'; t.textContent = item.kind.toUpperCase();
+    const n = document.createElement('span'); n.className = 'fn'; n.textContent = FILE_LABEL[item.kind] || 'فایل';
+    const d = document.createElement('span'); d.className = 'fd'; d.textContent = 'دانلود';
+    a.appendChild(t); a.appendChild(n); a.appendChild(d);
+    return a;
+  }
+  function addMedia(content, item) {
+    const strip = mediaStrip(content);
+    const ids = (strip.dataset.ids || '').split(',').filter(Boolean);
+    if (ids.indexOf(item.id) >= 0) return;
+    ids.push(item.id); strip.dataset.ids = ids.join(',');
+    strip.appendChild(mediaCard(item));
+  }
+  function setToolStatus(content, label) {
+    const strip = mediaStrip(content);
+    let chip = strip.querySelector('.tool-status');
+    if (!label) { if (chip) chip.remove(); return; }
+    if (!chip) {
+      chip = document.createElement('div'); chip.className = 'tool-status';
+      const dot = document.createElement('span'); dot.className = 'spin';
+      const tx = document.createElement('span'); chip.appendChild(dot); chip.appendChild(tx);
+      strip.appendChild(chip);
+    }
+    chip.lastChild.textContent = label + '…';
+  }
+  // Final text of an answer (history or end of a stream): markdown + cards, without flicker.
+  function setReply(content, text) {
+    const { body, items } = splitMedia(text);
+    content.innerHTML = renderMarkdown(body);
+    items.forEach(it => addMedia(content, it));
+  }
+
   function appendBubble(role, text) {
     const messagesEl = document.getElementById('messages');
     const welcome = document.getElementById('welcome');
@@ -344,8 +417,8 @@
     const content = document.createElement('div');
     content.className = 'bubble-content';
     if (role === 'ai') {
-      content.innerHTML = renderMarkdown(text);
       bubble.appendChild(content);
+      setReply(content, text);
 
       const actions = document.createElement('div');
       actions.className = 'msg-actions';
@@ -638,6 +711,8 @@
       let d; try { d = JSON.parse(m[2]); } catch (_) { return; }
       if (m[1] === 'delta') { acc += d.t; schedule(); }
       else if (m[1] === 'meta') { switched = !!d.switched; }
+      else if (m[1] === 'tool') { setToolStatus(content, d.state === 'start' ? d.label : ''); }
+      else if (m[1] === 'media') { addMedia(content, { kind: d.kind, id: d.id }); }
       else if (m[1] === 'error') { broke = true; }
       else if (m[1] === 'done') { finalData = d; }
     }
@@ -666,7 +741,8 @@
       appendBubble('ai', 'ارتباط قطع شد و پاسخی نرسید. لطفاً دوباره امتحان کنید.');
       return;
     }
-    content.innerHTML = renderMarkdown(finalText);
+    setToolStatus(content, '');
+    setReply(content, finalText);
     wrapper.scrollTop = wrapper.scrollTop;     // keep the reader where they are
     history.push({ role: 'assistant', content: finalText });
     if (broke || aborted) {

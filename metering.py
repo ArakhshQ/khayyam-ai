@@ -301,3 +301,105 @@ def tier_summary(db, uid, feature, options):
                         'period':period,'remaining':max(0,limit-used),
                         'reset_ts':int(nxt.replace(tzinfo=timezone.utc).timestamp())})
     return summary
+
+
+# =============================================================================================
+# TOOL QUOTAS (pictures, web searches, documents)
+# =============================================================================================
+# Counts per calendar month, plus a USD ceiling for all tools together. PROVISIONAL numbers: they
+# are meant to be tuned from real usage (admin log) and the plan prices. Override without a code
+# change with the TOOL_PLANS_JSON environment variable, e.g. {"basic": {"image": 40}}.
+TOOL_PLANS = {
+    'free':    {'image': 3,   'search': 10,  'doc': 3,   'usd': .25},
+    'basic':   {'image': 30,  'search': 60,  'doc': 40,  'usd': 1.60},
+    'pro':     {'image': 80,  'search': 150, 'doc': 120, 'usd': 4.00},
+    'premium': {'image': 200, 'search': 400, 'doc': 300, 'usd': 9.00},
+}
+# Estimated provider cost of one use, in micro-USD (1 USD = 1,000,000). Documents are made on our
+# own server, so they cost nothing per use.
+TOOL_COST_MICRO = {'image': 40000, 'search': 12000, 'doc': 0, 'overlay': 0}
+
+
+def tool_plan(plan):
+    import json
+    cfg = dict(TOOL_PLANS.get(plan, TOOL_PLANS['free']))
+    try:
+        extra = json.loads(os.getenv('TOOL_PLANS_JSON', '') or '{}')
+        cfg.update(extra.get(plan, {}) if isinstance(extra, dict) else {})
+    except ValueError:
+        pass
+    return cfg
+
+
+def tool_cost_micro(kind):
+    return int(float(os.getenv('TOOL_COST_%s_MICRO' % kind.upper(), TOOL_COST_MICRO.get(kind, 0))))
+
+
+def ensure_tool_storage(db):
+    with db.engine.begin() as conn:
+        conn.execute(text('''CREATE TABLE IF NOT EXISTS api_tool_usage (
+            request_id VARCHAR(36) PRIMARY KEY,
+            owner_key VARCHAR(160) NOT NULL,
+            kind VARCHAR(12) NOT NULL,
+            month_key VARCHAR(7) NOT NULL,
+            status VARCHAR(12) NOT NULL DEFAULT 'reserved',
+            est_micro INTEGER NOT NULL DEFAULT 0,
+            detail VARCHAR(120),
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)'''))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS ix_tool_owner ON api_tool_usage (owner_key, month_key, kind)'))
+
+
+def tool_reserve(db, uid, kind, plan, detail=None):
+    """Returns (request_id, None) when allowed, or (None, reason) with reason 'count' | 'usd'.
+    Documents and text overlays are counted but never blocked by the USD ceiling (they cost nothing)."""
+    owner = owner_key(uid)
+    cfg = tool_plan(plan)
+    cost = tool_cost_micro(kind)
+    month = utc_now().strftime('%Y-%m')
+    lock_owner(db, owner)
+    rows = db.session.execute(text('''SELECT kind, COUNT(*) AS n, COALESCE(SUM(est_micro),0) AS micro
+        FROM api_tool_usage WHERE owner_key=:o AND month_key=:m AND status!='failed' GROUP BY kind'''),
+        {'o': owner, 'm': month}).all()
+    used = {r[0]: int(r[1]) for r in rows}
+    spent = sum(int(r[2]) for r in rows)
+    if kind in cfg and used.get(kind, 0) >= int(cfg[kind]):
+        db.session.commit()
+        return None, 'count'
+    if cost and spent + cost > int(float(cfg.get('usd', 0)) * 1e6):
+        db.session.commit()
+        return None, 'usd'
+    rid = str(uuid.uuid4())
+    db.session.execute(text('''INSERT INTO api_tool_usage (request_id, owner_key, kind, month_key, est_micro, detail)
+        VALUES (:id, :o, :k, :m, :c, :d)'''), {'id': rid, 'o': owner, 'k': kind, 'm': month, 'c': cost,
+                                               'd': (detail or '')[:120] or None})
+    db.session.commit()
+    return rid, None
+
+
+def tool_finalize(db, rid, failed=False):
+    """failed -> refunded (no count, no cost). Otherwise stays charged at the estimate."""
+    if not rid:
+        return
+    db.session.execute(text("UPDATE api_tool_usage SET status=:s, est_micro=CASE WHEN :f THEN 0 ELSE est_micro END "
+                            "WHERE request_id=:i AND status='reserved'"),
+                       {'s': 'failed' if failed else 'done', 'f': bool(failed), 'i': rid})
+    db.session.commit()
+
+
+def tool_usage(db, uid, plan):
+    """{'image': {'used': n, 'limit': n}, ...} for the current month (for the profile page / the model)."""
+    owner = owner_key(uid)
+    month = utc_now().strftime('%Y-%m')
+    rows = db.session.execute(text('''SELECT kind, COUNT(*) FROM api_tool_usage
+        WHERE owner_key=:o AND month_key=:m AND status!='failed' GROUP BY kind'''), {'o': owner, 'm': month}).all()
+    used = {r[0]: int(r[1]) for r in rows}
+    cfg = tool_plan(plan)
+    return {k: {'used': used.get(k, 0), 'limit': int(cfg[k])} for k in ('image', 'search', 'doc')}
+
+
+def tool_recent(db, limit=60):
+    rows = db.session.execute(text('''SELECT created_at, owner_key, kind, status, est_micro, detail
+        FROM api_tool_usage ORDER BY created_at DESC LIMIT :n'''), {'n': int(limit)}).mappings().all()
+    return [{'at': r['created_at'].isoformat() if hasattr(r['created_at'], 'isoformat') else str(r['created_at']),
+             'owner': r['owner_key'], 'kind': r['kind'], 'status': r['status'],
+             'usd': round(int(r['est_micro'] or 0) / 1e6, 5), 'detail': r['detail']} for r in rows]
