@@ -476,8 +476,16 @@ def _next_reset_ts(options):
 
 
 def _lang(messages, feature):
-    """Chat only: a short reminder placed after the whole conversation, where models listen best."""
-    return list(messages) + [{'role': 'system', 'content': khr.LANG_REMINDER}] if feature == 'chat' else messages
+    """Chat only: a short reminder placed after the whole conversation, where models listen best.
+    It carries the language the user asked for (if any), worked out from the whole conversation."""
+    if feature != 'chat':
+        return messages
+    try:
+        from flask import g, has_request_context
+        lang = getattr(g, 'chat_lang', None) if has_request_context() else None
+    except Exception:
+        lang = None
+    return list(messages) + [{'role': 'system', 'content': khr.lang_reminder(lang)}]
 
 
 def _attempt(grant, system_prompt, messages, temperature, image_b64, image_type, effort, json_mode):
@@ -1926,6 +1934,22 @@ def _chat_prepare(allow_tools=False):
                 break
         # If no exact match, retain supplied history and create a new conversation
         # after the provider succeeds. This is safer than blocking all follow-ups.
+
+    # Did the user ask for another language earlier in this conversation? (the whole chat is read, not only the window)
+    try:
+        if conv is not None:
+            from sqlalchemy import func
+            past = [r[0] for r in db.session.query(func.substr(Message.content, 1, 400))
+                    .filter(Message.conversation_id == conv.id, Message.role == 'user')
+                    .order_by(Message.id.desc()).limit(300).all()][::-1]
+        else:
+            past = [m['content'][:400] for m in history if m['role'] == 'user']
+        lang = khr.requested_language(past, user_message[:400])
+    except Exception:
+        lang = None
+        app.logger.exception('Language detection failed')
+    from flask import g
+    g.chat_lang = lang
 
     # Decide HOW to answer before spending anything (see router.py).
     intent = khr.classify(user_message, history, has_image=bool(image_b64), has_doc=has_doc)
