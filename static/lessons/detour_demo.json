@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "digits": "fa",
+  "scenes": [
+    { "say": "بسیار خوب، یک مثال دیگر. این بار سه قسمت از چهار قسمت نان را برمی‌داریم.",
+      "clear": true,
+      "do": [
+        { "op": "text", "t": "مثال شما", "zone": "title", "size": "xl", "color": "yellow", "align": "center" },
+        { "op": "pie", "id": "ex", "parts": 4, "fill": 3, "box": [6, 18, 43, 62], "color": "white", "fillColor": "pink" },
+        { "op": "math", "id": "exf", "m": "\\frac{3}{4}", "zone": "a", "size": "xl", "color": "yellow" },
+        { "op": "text", "t": "سه چهارم", "zone": "a", "size": "l", "color": "white" }
+      ] },
+    { "say": "می‌بینید؟ از چهار قسمت، سه قسمت رنگ شد. پس سه‌چهارم نان را برداشته‌ایم و یک‌چهارم باقی مانده است.",
+      "do": [
+        { "op": "point", "target": "ex" },
+        { "op": "mark", "target": "exf", "style": "circle", "color": "green" }
+      ] }
+  ]
+}
