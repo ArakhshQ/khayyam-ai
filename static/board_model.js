@@ -408,7 +408,7 @@
     function speechSecs(s) { return Math.max(1.8, str(s, 1200).length / SPEECH_CPS); }
     var BUILD = { text: buildText, math: buildMath, line: buildShape, arrow: buildShape, rect: buildShape, circle: buildShape, ellipse: buildShape, poly: buildShape, path: buildShape, icon: buildShape,
                   pie: buildPie, bars: buildBars, numberline: buildNumberline, graph: buildGraph, table: buildTable, dots: buildDots, mark: buildMark, anim: buildAnim };
-    var scenes = Array.isArray(lesson.scenes) ? lesson.scenes.slice(0, 80) : [];
+    var scenes = Array.isArray(lesson.scenes) ? lesson.scenes.slice(0, 800) : [];
     scenes.forEach(function (sc, si) {
       var S = { say: str(sc.say, 1200), acts: [], dur: 0, clear: !!sc.clear || si === 0 && false, index: si, aliveAfter: null };
       if (S.clear) {

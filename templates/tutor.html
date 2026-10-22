@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
   <link rel="stylesheet" href="/static/chat.css?v=20261020">
-  <link rel="stylesheet" href="/static/tutor.css?v=20261021">
+  <link rel="stylesheet" href="/static/tutor.css?v=20261022">
 </head>
 <body class="app on-light tutor-page">
 
@@ -47,16 +47,21 @@
 
     <button class="new-chat" type="button" onclick="newClass()"><svg><use href="#i-plus"/></svg>صنف تازه</button>
 
-    <div class="side-label">درس‌های این صنف</div>
-    <div class="course-head" id="course-head" hidden>
-      <div class="course-name" id="course-name"></div>
-      <div class="course-progress"><div class="course-progress-fill" id="course-progress-fill"></div></div>
-      <div class="course-count" id="course-count"></div>
+    <div id="path-box" hidden>
+      <div class="side-label">مسیر این صنف</div>
+      <div class="course-head" id="course-head">
+        <div class="course-name" id="course-name"></div>
+        <div class="course-progress"><div class="course-progress-fill" id="course-progress-fill"></div></div>
+        <div class="course-count" id="course-count"></div>
+      </div>
+      <div class="sidebar-list lesson-list" id="lesson-list"></div>
     </div>
-    <div class="sidebar-list lesson-list" id="lesson-list">
-      <div class="sidebar-empty" id="lesson-empty">
+
+    <div class="side-label">صنف‌های من</div>
+    <div class="sidebar-list class-list" id="class-list">
+      <div class="sidebar-empty" id="class-empty">
         هنوز صنفی شروع نشده است.<br>
-        به استاد بگویید چه چیزی می‌خواهید بیاموزید؛ درس‌ها همین‌جا ردیف می‌شوند.
+        به استاد بگویید چه چیزی می‌خواهید بیاموزید؛ صنف‌هایتان همین‌جا ذخیره می‌شوند و هر روز از همان‌جا ادامه می‌دهید.
       </div>
     </div>
 
@@ -112,6 +117,7 @@
             <div class="scrub" id="scrub" role="group" aria-label="بخش‌های درس"></div>
             <button type="button" class="ctl speed" id="btn-speed" onclick="boardSpeed()" aria-label="سرعت">۱×</button>
             <button type="button" class="ctl hand" id="btn-hand" onclick="raiseHand()"><svg><use href="#i-hand"/></svg><span>دست بالا</span></button>
+            <button type="button" class="ctl stop" id="btn-stop" onclick="stopClass()"><span>امروز کافی است</span></button>
           </div>
         </div>
         <div class="sr-only" id="transcript" aria-label="متن درس"></div>
@@ -153,16 +159,17 @@
         <button class="suggestion" type="button" data-say="می‌خواهم برنامه‌نویسی را شروع کنم">برنامه‌نویسی</button>
         <button class="suggestion" type="button" data-say="می‌خواهم برای کنکور آماده شوم">آمادگی کنکور</button>
       </div>
+      <div class="resume-box" id="resume-box"></div>
       <button class="sample-link" type="button" onclick="loadSample()">دیدن یک صنف نمونه</button>
     </div>
   </div>
 </template>
 
 <script src="/static/ui.js?v=20261020"></script>
-<script src="/static/board_core.js?v=20261021"></script>
-<script src="/static/board_math.js?v=20261021"></script>
-<script src="/static/board_model.js?v=20261021"></script>
-<script src="/static/board.js?v=20261021"></script>
-<script src="/static/tutor.js?v=20261021"></script>
+<script src="/static/board_core.js?v=20261022"></script>
+<script src="/static/board_math.js?v=20261022"></script>
+<script src="/static/board_model.js?v=20261022"></script>
+<script src="/static/board.js?v=20261022"></script>
+<script src="/static/tutor.js?v=20261022"></script>
 </body>
 </html>

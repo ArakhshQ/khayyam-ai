@@ -17,6 +17,7 @@
     this.sceneIdx = 0; this.st = 0; this.clock = 0; this.run = [];
     this.world = []; this.anims = []; this.ghosts = []; this.particles = []; this.fxs = [];
     this.stack = [];
+    this.live = false; this.atEnd = false; this.askDone = {}; this.waitingAsk = -1;
     this.last = 0; this.raf = 0; this.animDirty = false; this.fxBusy = false;
     this.grains = {};
     this.wrap = document.createElement('div'); this.wrap.className = 'kb-wrap';
@@ -444,11 +445,26 @@
     }
     alive.forEach(function (el) { var e = { el: el, sts: null }; self.world.push(e); self.finishEl(e); });
     liveAnims.forEach(function (a) { self.anims.push(self.liveAnim(a, true)); });
-    this.sceneIdx = i; this.st = 0; this.startScene();
+    this.sceneIdx = i; this.st = 0; this.atEnd = false; this.waitingAsk = -1; this.startScene();
     if (this.anims.length) this.drawAnims();
     this.emit('scene', i, this.model.scenes[i]);
     this.emit('say', this.model.scenes[i].say, i);
     if (autoplay) this.play(); else this.emit('state');
+  };
+  /* Replace everything from scene `from` onward (a class grows, or the student interrupts and the unplayed part is rewritten).
+     Scenes before `from` keep their built objects, so a scene that is being drawn right now is never disturbed. */
+  P.setTimeline = function (from, scenes) {
+    if (!this.lesson || !this.model) return;
+    var old = this.model, self = this, cur = this.lesson.scenes || [];
+    from = KB.clamp(from | 0, 0, cur.length);
+    this.lesson.scenes = cur.slice(0, from).concat(scenes || []);
+    var m = KB.buildModel(this.lesson, this.profile);
+    var keep = Math.min(from, old.scenes.length, m.scenes.length);
+    for (var i = 0; i < keep; i++) m.scenes[i] = old.scenes[i];
+    this.model = m;
+    Object.keys(this.askDone).forEach(function (k) { if (+k >= from) delete self.askDone[k]; });
+    this.emit('timeline', m.scenes.length, from);
+    if (this.atEnd && this.sceneIdx < m.scenes.length - 1) { this.atEnd = false; this.gotoScene(this.sceneIdx + 1, true); }
   };
   P.liveAnim = function (a, instant) {
     return { id: a.id, anim: a.anim, a: a.a, f: a.f, size: a.size, dur: a.dur, loop: a.loop, color: a.color, iconStrokes: a.iconStrokes, shape: a.shape, from: a.from, to: a.to, bodies: a.bodies, t0: instant ? this.clock - a.dur - 1 : this.clock };
@@ -459,7 +475,18 @@
   };
   P.play = function () {
     if (!this.model) return;
-    if (this.sceneEnded && this.sceneIdx >= this.model.scenes.length - 1) { this.gotoScene(0, false); }
+    var last = this.model.scenes.length - 1;
+    if (this.sceneEnded && this.sceneIdx < last) {            // a scene that was held at its end (question asked, or paused there)
+      if (this.waitingAsk === this.sceneIdx) { this.askDone[this.sceneIdx] = true; this.waitingAsk = -1; }
+      this.gotoScene(this.sceneIdx + 1, true); return;
+    }
+    if (this.sceneEnded && this.sceneIdx >= last) {
+      if (this.live) {                                         // the class is waiting for the teacher's next lines
+        if (this.waitingAsk === this.sceneIdx) { this.askDone[this.sceneIdx] = true; this.waitingAsk = -1; }
+        this.atEnd = true; this.emit('end'); return;
+      }
+      this.gotoScene(0, false);
+    }
     this.playing = true; this.last = 0; this.emit('state');
     if (!this.raf) this.raf = requestAnimationFrame(this._tick);
   };
@@ -548,8 +575,11 @@
         for (var j = 0; j < sc.acts.length; j++) { var rr = this.run[j]; if (rr.state === 0) this.beginAct(sc.acts[j], rr); if (rr.state === 1) { if (sc.acts[j].type === 'draw') this.finishEl(rr.entry); else if (sc.acts[j].type === 'erase') this.finishErase(sc.acts[j], rr); rr.state = 2; } }
         this.sceneEnded = true; this.pen = null;
         this.emit('sceneEnd', this.sceneIdx);
-        if (this.sceneIdx < m.scenes.length - 1) { if (!this.holdAtEnd) this.gotoScene(this.sceneIdx + 1, true); }
-        else { this.playing = false; this.emit('end'); this.emit('state'); }
+        var lsc = this.lesson && this.lesson.scenes ? this.lesson.scenes[this.sceneIdx] : null;
+        if (lsc && lsc.ask && !this.askDone[this.sceneIdx]) {          // the teacher asked a question: wait for the student
+          this.playing = false; this.waitingAsk = this.sceneIdx; this.emit('ask', this.sceneIdx); this.emit('state');
+        } else if (this.sceneIdx < m.scenes.length - 1) { if (!this.holdAtEnd) this.gotoScene(this.sceneIdx + 1, true); }
+        else { this.playing = false; this.atEnd = true; this.emit('end'); this.emit('state'); }
       }
       this.emit('time', this.st, sc.dur);
     }

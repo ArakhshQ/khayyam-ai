@@ -3952,5 +3952,11 @@ def save_live_voice_transcript():
         return jsonify(error="Voice save failed; please retry"), 503
 
 
+# ── Continuous tutor class (board beats, save/resume, student profile) ──
+import tutor_class
+tutor_class.register(app, db=db, limiter=limiter, login_required=login_required, current_user=current_user,
+                     metered=_metered_completion, tier_of=active_tutor_tier, curriculum=CURRICULUM)
+
+
 if __name__ == "__main__":
     app.run(debug=os.getenv("FLASK_DEBUG", "").lower() == "true")

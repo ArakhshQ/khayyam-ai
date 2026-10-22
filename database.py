@@ -229,3 +229,32 @@ def json_loads_safe(val):
         return json.loads(val) if val else []
     except:
         return []
+
+class TutorClass(db.Model):
+    """One continuous tutor class: a growing timeline of board beats that can be paused and resumed."""
+    __tablename__ = 'tutor_classes'
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    subject    = db.Column(db.String(40))
+    topic_key  = db.Column(db.String(100))
+    title      = db.Column(db.String(200), nullable=False, default='صنف جدید')
+    request    = db.Column(db.Text)                       # what the student asked to learn
+    outline    = db.Column(db.Text, default='[]')         # JSON list of steps the tutor plans to cover
+    notes      = db.Column(db.Text, default='[]')         # JSON list: one line per generated batch of beats
+    beats      = db.Column(db.Text, default='[]')         # JSON list of cleaned board beats
+    pos        = db.Column(db.Integer, default=0)         # beat the student was on
+    step       = db.Column(db.Integer, default=0)         # outline step the tutor is on
+    status     = db.Column(db.String(12), default='active')   # active | paused | done
+    summary    = db.Column(db.Text)                       # written when the student stops
+    next_plan  = db.Column(db.Text)
+    gen_until  = db.Column(db.DateTime)                   # lease so two tabs cannot generate at once
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+
+class TutorStudent(db.Model):
+    """What the tutor knows about a student's learning, shared by every subject."""
+    __tablename__ = 'tutor_students'
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+    data       = db.Column(db.Text, default='{}')
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
