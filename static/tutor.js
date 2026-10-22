@@ -19,6 +19,8 @@
   var closing = false;       // the class is being saved: nothing more is fetched or played
   var posTimer = 0, retryTimer = 0, delTimer = 0;
   var saved = [];            // the student's saved classes
+  var live = null;           // the live voice session, when the class is spoken
+  var liveWanted = !!window.__LIVE_VOICE && !!window.TutorLive;
 
   /* ───────── helpers ───────── */
   function toast(text) {
@@ -46,7 +48,10 @@
     });
     if (name === 'board' && board) setTimeout(function () { board.onResize(); }, 60);
   };
-  window.voiceSoon = function () { toast('گفتگوی صوتی با استاد به‌زودی در صنف فعال می‌شود.'); };
+  window.voiceSoon = function () {
+    if (live) { var m = !live.muted; live.setMuted(m); $('voice-record-btn').classList.toggle('muted', m); toast(m ? 'میکروفون خاموش شد.' : 'میکروفون روشن شد.'); return; }
+    toast('گفتگوی صوتی با استاد به‌زودی در صنف فعال می‌شود.');
+  };
 
   /* ───────── conversation ───────── */
   function svgIcon(id) {
@@ -204,12 +209,13 @@
   function onScene(i) {
     setWaiting(false);
     markScrub(i);
-    if (!cls) return;
+    if (!cls || live) return;
     savePosSoon(i);
     var left = stepCount() - 1 - i;
     if (left <= 1) fetchNext();
   }
   function onSay(text, i) {
+    if (live) return;
     var cap = $('caption'); cap.classList.remove('waiting'); cap.textContent = '';
     var s = document.createElement('span'); s.textContent = text; cap.appendChild(s);
     var tr = $('transcript'); var p = document.createElement('p'); p.textContent = text; tr.appendChild(p);
@@ -237,7 +243,7 @@
     if (last && last.querySelector('.bubble-content')) last.querySelector('.bubble-content').appendChild(row);
   }
   function onEnd() {
-    if (closing) return;
+    if (closing || live) return;
     if (!cls) { if (sampleOn) addMessage('ai', 'درس نمونه تمام شد. بنویسید چه می‌خواهید یاد بگیرید تا استاد برایتان یک صنف واقعی بچیند.'); return; }
     if (cls.done) {
       if (cls.endNoted) return; cls.endNoted = true;
@@ -257,6 +263,7 @@
   };
   function setHand(on) { handUp = on; $('btn-hand').classList.toggle('on', on); }
   window.raiseHand = function () {
+    if (live) { live.interrupt(); $('voice-record-btn').classList.remove('muted'); toast('استاد گوش می‌دهد؛ صحبت کنید.'); return; }
     if (!board || !board.model) { toast('اول یک صنف شروع کنید.'); return; }
     if (handUp) { setHand(false); board.play(); return; }
     board.pause(); setHand(true);
@@ -267,7 +274,7 @@
 
   /* ───────── writing the class ahead of the student ───────── */
   function fetchNext() {
-    if (!cls || inflight || cls.done || cls.limited || busy || stopAt >= 0 || closing) return;
+    if (live || !cls || inflight || cls.done || cls.limited || busy || stopAt >= 0 || closing) return;
     inflight = true;
     var have = board.lesson.scenes.length, id = cls.id;
     api('/api/class/' + id + '/next', { have: have }).then(function (d) {
@@ -309,6 +316,10 @@
     posTimer = setTimeout(function () { if (cls && posPending >= 0) { api('/api/class/' + cls.id + '/save', { pos: posPending }); posPending = -1; } }, 2500);
   }
   window.addEventListener('pagehide', function () {
+    if (live && cls) {
+      try { var tr = live.stop(); fetch('/api/class/' + cls.id + '/pause', { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pos: Math.max(0, stepCount() - 1), transcript: tr }) }); } catch (e) {}
+      live = null; return;
+    }
     if (cls && board && board.model) {
       try { fetch('/api/class/' + cls.id + '/save', { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pos: board.sceneIdx }) }); } catch (e) {}
     }
@@ -324,7 +335,8 @@
   function loginNotice() {
     addMessage('ai', 'برای شروع صنف باید وارد حساب‌تان شوید.', linkRow('ورود', function () { location.href = '/login'; }));
   }
-  function startClass(text) {
+  function startClass(text, classic) {
+    if (liveWanted && !classic) { startLiveClass(text); return; }
     var start = document.querySelector('.class-start'); if (start) start.remove();
     addMessage('user', text);
     $('user-input').value = ''; $('user-input').style.height = 'auto';
@@ -372,6 +384,7 @@
   }
   function resumeClass(d) {
     if (busy) return;
+    if (liveWanted) { resumeLive(d); return; }
     busy = true; typing(); setWaiting(true, 'استاد مرور را آماده می‌کند…'); showPane('board');
     var tries = 0;
     (function go() {
@@ -397,6 +410,7 @@
   };
   function saveAndClose(auto) {
     if (!cls || !board) return;
+    if (live) { finishLive(); return; }
     closing = true; stopAt = -1;
     board.pause(); setHand(false);
     var id = cls.id;
@@ -417,6 +431,11 @@
     if (!text || busy) return;
     if (text.length > 600) { toast('پیام خیلی طولانی است (حداکثر ۶۰۰ حرف).'); return; }
     if (!cls) { startClass(text); return; }
+    if (live) {
+      addMessage('user', text); input.value = ''; input.style.height = 'auto';
+      if (!live.sendText(text)) toast('هنوز به استاد وصل نیستید.');
+      return;
+    }
     document.querySelectorAll('.skiprow').forEach(function (e) { e.remove(); });
     board.holdAtEnd = false; closing = false;
     addMessage('user', text);
@@ -469,6 +488,7 @@
     }).catch(function () { toast('بارگیری نمونه ممکن نشد.'); });
   };
   window.newClass = function () {
+    if (live) { try { live.stop(); } catch (e) {} live = null; $('voice-record-btn').classList.remove('live', 'muted'); }
     if (board) { board.pause(); board.destroy(); board = null; window.__board = null; }
     if (cls && posPending >= 0) { api('/api/class/' + cls.id + '/save', { pos: posPending }); posPending = -1; }
     cls = null; sampleOn = false; stopAt = -1; closing = false; inflight = false; busy = false; handUp = false; spoken = {};
@@ -481,6 +501,103 @@
     showStart(); showPane('chat'); if (!isMobile()) showPane('board');
     if (isMobile()) { sidebarOpen = false; applySidebar(); }
   };
+
+  /* ───────── the live voice class ───────── */
+  function liveHandlers() {
+    return {
+      onBeat: function (from, beat) {
+        if (!board || !board.model) return;
+        board.setTimeline(from, [beat]);
+        if (board.sceneIdx >= from || board.model.scenes.length === 1) board.gotoScene(from, true);
+      },
+      onProgress: function (d) {
+        if (!cls) return;
+        if (Array.isArray(d.outline) && d.outline.length) cls.outline = d.outline;
+        if (typeof d.step === 'number') cls.step = d.step;
+        if (d.title) { cls.title = d.title; $('lesson-title').textContent = d.title; }
+        renderPath();
+      },
+      onUserText: function (t) { addMessage('user', t); },
+      onAiText: function (t) {
+        var cap = $('caption'); cap.classList.remove('waiting'); cap.textContent = '';
+        var sp = document.createElement('span'); sp.textContent = t; cap.appendChild(sp);
+        var tr = $('transcript'); var p = document.createElement('p'); p.textContent = t; tr.appendChild(p);
+        addMessage('ai', t);
+      },
+      onState: function (st) {
+        var b = $('voice-record-btn');
+        b.classList.toggle('live', st !== 'idle');
+        b.classList.toggle('talking', st === 'listening');
+      },
+      onEnd: function () { if (live && !closing) finishLive(); },
+      onQuota: function (kind, minutes) {
+        if (kind === 'warn') toast('از سهمیهٔ گفتگوی صوتی حدود ' + faNum(minutes) + ' دقیقه باقی مانده است.');
+        else { toast('سهمیهٔ صوتی تمام شد؛ صنف ذخیره می‌شود.'); if (live && !closing) finishLive(); }
+      },
+      onError: function (msg) { toast(msg); }
+    };
+  }
+  function connectLive(d, resumed) {
+    var h = liveHandlers(); h.classId = d.id; h.resumed = !!resumed;
+    live = new TutorLive.Session(h);
+    setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.');
+    return live.start().then(function () {
+      setPrep(false); $('board-empty').hidden = true;
+      $('voice-record-btn').classList.add('live');
+      placeholder('هر وقت خواستید صحبت کنید، یا اینجا بنویسید…');
+      setWaiting(true, 'استاد می‌آید…');
+      showPane('board');
+    }).catch(function (err) {
+      if (global_console()) console.warn('live voice failed', err);
+      var sess = live; live = null; try { sess.stop(); } catch (e) {}
+      $('voice-record-btn').classList.remove('live', 'muted');
+      setPrep(false); setWaiting(false);
+      var denied = err && /Permission|NotAllowed|denied/i.test(String(err.name || err.message || err));
+      addMessage('ai', denied ? 'برای صنف صوتی به میکروفون نیاز است. اجازهٔ میکروفون را بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.',
+        linkRow('ادامه با نوشتن', function (a) {
+          a.parentNode.remove();
+          var req = d.request || d.title || '';
+          api('/api/class/' + d.id, null, 'DELETE').then(function () { if (cls && cls.id === d.id) { cls = null; } loadSaved(); if (req) startClass(req, true); });
+        }));
+      return false;
+    });
+  }
+  function global_console() { return typeof console !== 'undefined'; }
+  function startLiveClass(text) {
+    var start = document.querySelector('.class-start'); if (start) start.remove();
+    addMessage('user', text);
+    $('user-input').value = ''; $('user-input').style.height = 'auto';
+    busy = true; $('send-btn').disabled = true;
+    setPrep(true, 'استاد صنف را آماده می‌کند…', 'چند لحظه صبر کنید.');
+    showPane('board');
+    api('/api/class/voice/new', { topic: text }).then(function (d) {
+      busy = false; $('send-btn').disabled = false;
+      if (d.__status === 401) { setPrep(false); loginNotice(); return; }
+      if (d.__status !== 200 || d.error) { setPrep(false); addMessage('ai', d.error || 'شروع صنف ممکن نشد.'); return; }
+      return openClass(d, {}).then(function () { board.live = true; return connectLive(d, false); }).then(function () { loadSaved(); });
+    }).catch(function () { busy = false; $('send-btn').disabled = false; setPrep(false); addMessage('ai', 'ارتباط برقرار نشد. اینترنت را بررسی کنید.'); });
+  }
+  function resumeLive(d) {
+    if (busy) return;
+    var n = stepCount();
+    if (n) { board.setTimeline(n, [{ say: '', do: [] }]); board.gotoScene(n, false); }   // the board as it was left
+    cls.status = 'active'; cls.done = false;
+    connectLive(d, true).then(function () { loadSaved(); });
+  }
+  function finishLive() {
+    if (!live || !cls || closing) return;
+    closing = true;
+    var id = cls.id, tr = live.stop(); live = null;
+    $('voice-record-btn').classList.remove('live', 'muted', 'talking');
+    setWaiting(true, 'صنف ذخیره می‌شود…'); typing();
+    api('/api/class/' + id + '/pause', { pos: Math.max(0, stepCount() - 1), transcript: tr }).then(function (d) {
+      untyping(); closing = false; setWaiting(false);
+      if (d.__status !== 200) { toast('ذخیرهٔ صنف ممکن نشد.'); return; }
+      if (cls) cls.status = 'paused';
+      addMessage('ai', 'صنف ذخیره شد. هر وقت خواستید از همین‌جا ادامه می‌دهیم.' + (d.summary ? '\n\n' + d.summary : ''), linkRow('صنف تازه', function () { newClass(); }));
+      loadSaved();
+    }).catch(function () { untyping(); closing = false; setWaiting(false); toast('ذخیرهٔ صنف ممکن نشد.'); });
+  }
 
   /* ───────── init ───────── */
   var input = $('user-input');

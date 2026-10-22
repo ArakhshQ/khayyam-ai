@@ -177,3 +177,8 @@
 @media (prefers-reduced-motion: reduce) {
   .board-mark, .lesson, .class-item, .class-start, .caption span, .board-empty.prep p::after { animation: none; }
 }
+
+/* live voice: the microphone button shows the connection and who is talking */
+#voice-record-btn.live { background: rgba(80, 160, 120, .22); color: #3f9a6c; }
+#voice-record-btn.live.talking { animation: voicePulse 1.1s infinite; }
+#voice-record-btn.muted { background: rgba(194, 87, 75, .14); color: #b8453a; animation: none; }

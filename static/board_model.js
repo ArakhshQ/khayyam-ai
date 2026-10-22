@@ -484,14 +484,14 @@
         else { contain(res.el); S.acts.push({ type: 'draw', el: res.el, natural: Math.max(.3, res.el.dur) }); }
       });
       // pacing: spread the actions over the time the line takes to say
-      var say = speechSecs(S.say), lead = .3, D = 0;
+      var silent = !S.say, say = silent ? 0 : speechSecs(S.say), lead = silent ? .05 : .3, D = 0;
       S.acts.forEach(function (a) { D += a.natural; });
-      var n = Math.max(1, S.acts.length), slack = say * .9 - D, gap = KB.clamp(slack > 0 ? slack / n : 0, .12, 1.8);
+      var n = Math.max(1, S.acts.length), slack = say * .9 - D, gap = silent ? .1 : KB.clamp(slack > 0 ? slack / n : 0, .12, 1.8);
       var t = lead;
-      var squeeze = KB.clamp(say * .95 / Math.max(.1, D + n * .12), .5, 1);   // long drawings are drawn a little faster, never slower than the speech allows
+      var squeeze = silent ? 1 : KB.clamp(say * .95 / Math.max(.1, D + n * .12), .5, 1);   // long drawings are drawn a little faster, never slower than the speech allows
       S.acts.forEach(function (a) { a.dur = a.type === 'anim' ? a.natural : a.natural * squeeze; a.start = t; t += a.dur + gap * Math.max(.4, squeeze); });
       S.speech = say;
-      S.dur = Math.max(say + .5, t + .5);
+      S.dur = silent ? t + .15 : Math.max(say + .5, t + .5);
       model.scenes.push(S);
     });
     return model;

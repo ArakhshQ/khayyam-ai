@@ -1692,9 +1692,22 @@ def chat_page():
 def figures_page():
     return render_template("figures.html")
 
+
+def _live_voice_allowed():
+    """Live voice is a beta for one test account until it is opened to everyone."""
+    try:
+        if not current_user.is_authenticated or not current_user.email_verified:
+            return False
+        if os.getenv("LIVE_VOICE_ENABLED", "false").lower() != "true":
+            return False
+        tid = os.getenv("LIVE_VOICE_TEST_USER_ID", "").strip()
+        return bool(tid) and str(current_user.id) == tid
+    except Exception:
+        return False
+
 @app.route("/tutor")
 def tutor_page():
-    return render_template("tutor.html")
+    return render_template("tutor.html", live_voice=_live_voice_allowed())
 
 @app.route("/tutor/classic")
 def tutor_classic_page():
@@ -3509,8 +3522,14 @@ from itsdangerous import URLSafeSerializer
 
 def _voice_context(data):
     mode = data.get("mode", "chat")
-    if mode not in ("chat", "tutor"):
+    if mode not in ("chat", "tutor", "class"):
         raise ValueError("Invalid voice mode")
+    if mode == "class":                      # the live chalkboard class (tutor_class.py)
+        hook = app.config.get("CLASS_VOICE")
+        if not hook:
+            raise ValueError("Class voice unavailable")
+        ctx, prompt = hook["context"](data)
+        return mode, ctx, prompt
     if mode == "chat":
         conv_id = data.get("conversation_id")
         conv = None
@@ -3781,7 +3800,7 @@ def create_live_voice_session():
         "expires_after": {"anchor": "created_at", "seconds": 30},
         "session": {
             "type": "realtime",
-            "model": VOICE_MODEL,
+            "model": os.getenv("REALTIME_MODEL_CLASS", "gpt-realtime-2.1") if mode == "class" else VOICE_MODEL,
             "instructions": instructions,
             "output_modalities": ["audio"],
             "audio": {
@@ -3797,6 +3816,9 @@ def create_live_voice_session():
             }
         }
     }
+    if mode == "class":
+        payload["session"]["tools"] = app.config["CLASS_VOICE"]["tools"]
+        payload["session"]["tool_choice"] = "auto"
     user_hash = hashlib.sha256(f"khayyam:{current_user.id}".encode()).hexdigest()
     req = urllib.request.Request(
         "https://api.openai.com/v1/realtime/client_secrets",
