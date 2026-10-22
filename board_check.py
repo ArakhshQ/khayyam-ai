@@ -273,28 +273,28 @@ def _clean_op(raw, mapping, known):
         if g('align') in ('center', 'left', 'right'):
             out['align'] = g('align')
     elif op in ('line', 'arrow'):
-        a, c = _pair(g('from'), -50, 150), _pair(g('to'), -50, 150)
+        a, c = _pair(g('from'), -3, 103), _pair(g('to'), -3, 103)
         if not a or not c:
             return None
         out['from'], out['to'] = a, c
         if op == 'arrow' and g('both') is True:
             out['both'] = True
     elif op == 'rect':
-        for k, lo, hi in (('x', -50, 150), ('y', -50, 150), ('w', 1, 200), ('h', 1, 200)):
+        for k, lo, hi in (('x', 0, 100), ('y', 0, 100), ('w', 1, 200), ('h', 1, 200)):
             v = _num(g(k), lo, hi)
             if v is not None:
                 out[k] = v
         if g('fill') in (True, 1):
             out['fill'] = True
     elif op in ('circle', 'ellipse'):
-        for k, lo, hi in (('cx', -50, 150), ('cy', -50, 150), ('r', 1, 150), ('rx', 1, 150), ('ry', 1, 150)):
+        for k, lo, hi in (('cx', 0, 100), ('cy', 0, 100), ('r', 1, 150), ('rx', 1, 150), ('ry', 1, 150)):
             v = _num(g(k), lo, hi)
             if v is not None:
                 out[k] = v
         if g('fill') in (True, 1):
             out['fill'] = True
     elif op == 'poly':
-        pts = [p for p in (_pair(q, -50, 150) for q in (g('pts') if isinstance(g('pts'), list) else [])[:40]) if p]
+        pts = [p for p in (_pair(q, -3, 103) for q in (g('pts') if isinstance(g('pts'), list) else [])[:40]) if p]
         if len(pts) < 2:
             return None
         out['pts'] = pts
@@ -312,7 +312,7 @@ def _clean_op(raw, mapping, known):
         if n not in ICONS:
             return None
         out['name'] = n
-        s = _num(g('scale'), .2, 3)
+        s = _num(g('scale'), .2, 1.5)
         if s is not None:
             out['scale'] = s
     elif op == 'pie':
@@ -412,8 +412,8 @@ def _clean_op(raw, mapping, known):
             out['icon'] = g('icon')
         if g('shape') in ('cup', 'bar', 'pie'):
             out['shape'] = g('shape')
-        for key, lo, hi in (('dur', .5, 20), ('size', 6, 90), ('x', 0, 100),
-                            ('from_y', -20, 120), ('to_y', -20, 120), ('angle', 0, 90), ('period', .5, 30),
+        for key, lo, hi in (('dur', .5, 20), ('size', 6, 50), ('x', 0, 100),
+                            ('from_y', 0, 90), ('to_y', 0, 90), ('angle', 0, 90), ('period', .5, 30),
                             ('fontSize', 20, 200), ('amp', 0, 60), ('cycles', .5, 8), ('hop', 0, 50), ('len', 0, 100),
                             ('spin', -20, 20), ('turns', -20, 20)):
             v = _num(g(key), lo, hi)
@@ -421,7 +421,7 @@ def _clean_op(raw, mapping, known):
                 out[key] = v
         if k == 'move':
             for key in ('from', 'to'):
-                v = _pair(g(key), -20, 120)
+                v = _pair(g(key), 0, 100)
                 if v:
                     out[key] = v
         elif k in ('count', 'fill'):

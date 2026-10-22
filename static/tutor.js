@@ -441,6 +441,7 @@
       var from = d.from;
       Object.keys(spoken).forEach(function (k) { if (+k >= from) delete spoken[k]; });
       for (var k = from; k < from + d.beats.length; k++) spoken[k] = true;
+      if (Array.isArray(d.outline) && d.outline.length > 1) cls.outline = d.outline;
       if (typeof d.step === 'number') { cls.step = d.step; renderPath(); }
       if (d.action === 'done') cls.done = true;
       if (d.action === 'stop') stopAt = from + d.beats.length - 1;

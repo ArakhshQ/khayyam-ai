@@ -32,7 +32,7 @@ OUTPUT: a single JSON object and nothing else.
 {
   "title": "...",        // first call only: short class title in Dari
   "subject": "math",     // first call only: math | science | english | social | dari | computer | other
-  "outline": ["..."],    // first call only: 4-7 steps in Dari that the class will follow
+  "outline": ["..."],    // first call: 4-7 steps in Dari that the class will follow. Later calls: ONLY when the plan changes (for example prerequisite steps added at the front); then give the complete new list
   "beats": [ <beat>, ... ],
   "note": "...",         // one short Dari sentence: what these beats covered (and how the student did, if they answered)
   "step": 0,             // 0-based outline step you are on after these beats
@@ -57,10 +57,18 @@ TEACHING
 - Continue exactly where the class is. Do not repeat what was already taught. Refer to things already on the board ("this circle") using their ids.
 - If a student profile is given, use it quietly: revisit known weak points when they matter, even if they came from another subject. Never read the profile aloud and never invent facts about the student.
 
+PREREQUISITES (very important: students may know nothing about the topic)
+- Never use a technical word, symbol or skill the student has not met yet (for example coefficient, power, term, variable, denominator) before you have explained it in plain words with a picture or a small example. Introduce each new word once, at the moment it is needed.
+- At the start of a new class, before teaching, you ask a pre-check: name the 2-4 specific words or skills the topic stands on (in Dari, short) and ask whether the student knows them; tell them it is fine to say "no" or "some". Do not teach the topic before the answer.
+- When the student answers the pre-check: for what they know, move on quickly (one quick example at most); for what they do not know or are unsure about, teach it first from zero with pictures and everyday examples, and then return a revised "outline" with those prerequisite steps at the front. If they know everything, say so and continue the plan.
+- If the student profile or the notes already show they know a prerequisite, do not ask about it again.
+- If a class resumes after a break, the first question is a warm-up, not a pre-check.
+
 BOARD LAYOUT (the board is wide on a computer, tall on a phone)
 - Zones: "title" (top strip, one line), "a" (first column, read first), "b" (second column), "bottom" (strip), "main" (a and b together), "full", "center".
 - Put text and formulas in zone "a"; they stack downward automatically. Put pictures and diagrams in zone "b". A purely visual beat may use "main" or "center". Avoid "box" and "at" unless you must (for example a label next to a drawing).
 - At most about 5 short lines of text per board page. Short words, not sentences.
+- Capacity: a computer board is short and wide, so one page holds about 4 short lines OR 2 formulas per column, plus one picture in the other column. A phone board is tall and holds more. When a page would be fuller than that, set "clear": true on the next beat and continue on a fresh page. Drawings must stay inside the 0-100 square of their zone; never place anything beyond it, and keep icons at scale 1 or smaller on busy pages.
 - Colours: white (default), yellow (key results, titles), pink, blue, green (correct), orange. Use colour to mean something.
 - Give an "id" (letters and digits, such as "p1") to anything you may later point at, mark or erase. Ids are local to the beat that makes them. To refer to something from an earlier call use the ids listed under "ON THE BOARD NOW".
 
@@ -317,7 +325,7 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             out.append(b)
         return out, problems
 
-    def generate(cls, beats, kind, task, want, student_text=None, max_output=1700):
+    def generate(cls, beats, kind, task, want, student_text=None, max_output=1700, need_ask=False):
         """One model call with a retry if the arithmetic was wrong. -> (result dict, state, reset_ts)"""
         notes = _jl(cls.notes, [])
         outline = _jl(cls.outline, [])
@@ -329,9 +337,10 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         if st != 'ok':
             return None, st, reset
         clean, problems = accept(data, beats, want)
-        if problems or not clean:
-            fix = ('\n\nCORRECTION: your previous answer contained wrong arithmetic (%s) or no usable beats. '
-                   'Recompute every equation carefully and answer again with correct beats.' % '; '.join(problems[:3]))
+        missing_ask = bool(need_ask and clean and not any(b.get('ask') for b in clean))
+        if problems or not clean or missing_ask:
+            fix = ('\n\nCORRECTION: your previous answer contained wrong arithmetic (%s), no usable beats, or no pre-check question. '
+                   'Recompute every equation carefully, make sure one of the beats has "ask": true, and answer again with correct beats.' % '; '.join(problems[:3]))
             data2, st2, reset2 = call(SYSTEM, user + fix, max_output, 'class/' + kind + '-fix', temperature=.3)
             if st2 == 'ok':
                 clean2, problems2 = accept(data2, beats, want)
@@ -339,6 +348,8 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
                     data, clean, problems = data2, clean2, problems2
             if not clean:
                 return None, 'error', None
+        if need_ask and not any(b.get('ask') for b in clean):
+            clean[-1]['ask'] = True                      # the class must wait for the student's answer to the pre-check
         action = data.get('action') if data.get('action') in ('teach', 'stop', 'done') else 'teach'
         return {'data': data, 'beats': clean, 'action': action, 'note': _short(data.get('note'), 160),
                 'problems': problems}, 'ok', None
@@ -409,8 +420,10 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             res, st, reset = generate(cls, [], 'start',
                                       'Start a NEW class on the topic above. Return "title", "subject", "outline" (4-7 steps) '
                                       'and the first 3 beats. Beat 1 greets the student in one or two warm sentences and '
-                                      'writes the class title on the board (zone "title", yellow, clear:true). Beats 2-3 begin '
-                                      'step 1 with a picture or a very simple example.', 3, max_output=2400)
+                                      'writes the class title on the board (zone "title", yellow, clear:true). Beat 2 says in one sentence what the student will '
+                                      'be able to do at the end. Beat 3 is the PRE-CHECK: name the 2-4 specific words or skills this topic '
+                                      'stands on, write them on the board, ask the student whether they know them (it is fine to say no), '
+                                      'and set "ask": true. Do not teach the topic itself yet.', 3, max_output=2400, need_ask=True)
             if st != 'ok':
                 db.session.delete(db.session.get(TutorClass, cls.id))
                 db.session.commit()
@@ -529,7 +542,8 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             res, st, reset = generate(cls, cut, 'ask',
                                       'Answer the student now with 2-4 beats, drawing and solving an example on the board if they '
                                       'asked for one. If they were answering your question, judge the answer. If they want to stop, '
-                                      'give one closing beat and action "stop". Otherwise end by leading back toward the plan.',
+                                      'give one closing beat and action "stop". If they were answering the PRE-CHECK, follow the PREREQUISITES rules: teach '
+                                      'what they do not know first and include the revised "outline". Otherwise end by leading back toward the plan.',
                                       4, student_text=text, max_output=2000)
             if st != 'ok':
                 return fail(st, reset)
@@ -538,8 +552,14 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
                      step=_int(res['data'].get('step'), cls.step or 0),
                      status='done' if res['action'] == 'done' else 'active')
             cls.pos = keep - 1
+            new_outline = _list_of_str(res['data'].get('outline'), 8, 120)
+            if len(new_outline) >= 2:
+                cls.outline = json.dumps(new_outline, ensure_ascii=False)
             db.session.commit()
-            return jsonify(**{'from': keep, 'beats': res['beats'], 'action': res['action'], 'step': cls.step or 0})
+            out = {'from': keep, 'beats': res['beats'], 'action': res['action'], 'step': cls.step or 0}
+            if len(new_outline) >= 2:
+                out['outline'] = new_outline
+            return jsonify(**out)
         except Exception:
             db.session.rollback()
             app.logger.exception('class_ask failed')

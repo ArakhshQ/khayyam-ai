@@ -161,11 +161,20 @@
       var el = mkEl(a, 'math', 'm');
       var src = str(a.m != null ? a.m : a.t, 300); if (!src) return null;
       var sz = (typeof a.size === 'number' ? KB.clamp(a.size, 16, 110) : (KB.own(SIZES, a.size) ? SIZES[a.size] : SIZES.l) * 1.3) * P.ts;
-      var lay = KB.mathLayout(src, sz, digits, function (s, z) { return measure(s, z, 'body', 500); });
+      function mlay(z) { return KB.mathLayout(src, z, digits, function (s2, z2) { return measure(s2, z2, 'body', 500); }); }
+      var lay = mlay(sz);
       var box, zn = KB.own(Z, a.zone) ? a.zone : (Array.isArray(a.box) || Array.isArray(a.at) ? null : 'main');
       if (Array.isArray(a.at)) { box = [num(a.at[0], 10, 0, 100) * W / 100, num(a.at[1], 10, 0, 100) * P.H / 100, lay.w, lay.asc + lay.desc]; }
       else box = resolveBox(a, 'main');
       var y = box[1] + (zn ? (cursors[zn] || 0) : 0);
+      if (!Array.isArray(a.at)) {            // shrink to fit the room that is left in the zone
+        var availM = Math.max(30, box[1] + box[3] - y), tr = 0, s0 = sz;
+        while ((lay.asc + lay.desc > availM || lay.w > box[2]) && tr++ < 10 && sz > s0 * .55) { sz *= .9; lay = mlay(sz); }
+        if (lay.asc + lay.desc > availM + 2) {
+          warnings.push('math overflow: ' + src.slice(0, 20));
+          if (zn && (cursors[zn] || 0) > 0) { delete ids[el.id]; return { overflow: true, el: null }; }
+        }
+      }
       var x = (a.align === 'start' || Array.isArray(a.at)) ? box[0] : box[0] + (box[2] - lay.w) / 2;
       if (lay.w > box[2] && !Array.isArray(a.at)) { warnings.push('math too wide: ' + src.slice(0, 20)); }
       var d = .8 + lay.w / 260;
@@ -179,7 +188,7 @@
     function buildShape(a) {
       var op = a.op, f = fitSquare(resolveBox(a, 'center')), col = KB.color(a.color), el = mkEl(a, op, 'f');
       var sd = el.seed, wd = num(a.width, 3.4, 1.5, 8);
-      function L(x, y) { return lp(f, num(x, 0, -50, 150), num(y, 0, -50, 150)); }
+      function L(x, y) { return lp(f, num(x, 0, -3, 103), num(y, 0, -3, 103)); }
       var o = { color: col, w: wd };
       if (op === 'line' || op === 'arrow') {
         var p1 = L(a.from ? a.from[0] : 10, a.from ? a.from[1] : 50), p2 = L(a.to ? a.to[0] : 90, a.to ? a.to[1] : 50);
@@ -187,12 +196,16 @@
         if (op === 'arrow') strokesOf(el, KB.arrowHead(p1[0], p1[1], p2[0], p2[1], sd + 9, 17), o);
         if (a.both) strokesOf(el, KB.arrowHead(p2[0], p2[1], p1[0], p1[1], sd + 19, 17), o);
       } else if (op === 'rect') {
-        var x = num(a.x, 10, -50, 150), y = num(a.y, 10, -50, 150), w = num(a.w, 80, 1, 200), h = num(a.h, 80, 1, 200);
+        var x = num(a.x, 10, 0, 100), y = num(a.y, 10, 0, 100), w = num(a.w, 80, 1, 200), h = num(a.h, 80, 1, 200);
+        w = Math.min(w, 102 - x); h = Math.min(h, 102 - y);
         var q = L(x, y);
         if (a.fill) strokesOf(el, hatch([q, [q[0] + w * f.s, q[1]], [q[0] + w * f.s, q[1] + h * f.s], [q[0], q[1] + h * f.s]], -.8, 7, sd), { color: col, w: 3 });
         strokesOf(el, KB.rectLines(q[0], q[1], w * f.s, h * f.s, sd), o);
       } else if (op === 'circle' || op === 'ellipse') {
-        var c = L(a.cx != null ? a.cx : 50, a.cy != null ? a.cy : 50), r = num(a.r, 35, 1, 150), rx = (op === 'ellipse' ? num(a.rx, r, 1, 150) : r) * f.s, ry = (op === 'ellipse' ? num(a.ry, r, 1, 150) : r) * f.s;
+        var ccx = num(a.cx != null ? a.cx : 50, 50, 0, 100), ccy = num(a.cy != null ? a.cy : 50, 50, 0, 100);
+        var c = L(ccx, ccy), r = num(a.r, 35, 1, 150);
+        var rxm = Math.max(1, Math.min(ccx, 100 - ccx) + 2), rym = Math.max(1, Math.min(ccy, 100 - ccy) + 2);
+        var rx = (op === 'ellipse' ? Math.min(num(a.rx, r, 1, 150), rxm) : Math.min(r, rxm, rym)) * f.s, ry = (op === 'ellipse' ? Math.min(num(a.ry, r, 1, 150), rym) : Math.min(r, rxm, rym)) * f.s;
         if (a.fill) {
           var pp = KB.ellipse(c[0], c[1], rx, ry, sd, 0, Math.PI * 2).slice(0, -1);
           strokesOf(el, hatch(pp, -.8, 7, sd), { color: col, w: 3 });
@@ -211,7 +224,7 @@
         strokesOf(el, subs.map(function (s, i) { return KB.wobble(s.map(function (p) { return L(p[0], p[1]); }), sd + i, .8, 6); }), o);
       } else if (op === 'icon') {
         var raw = KB.iconStrokes(str(a.name, 20), sd); if (!raw) { warnings.push('unknown icon ' + a.name); return null; }
-        var sc = num(a.scale, 1, .2, 3);
+        var sc = num(a.scale, 1, .2, 1.5);
         var cx = 50 - 50 * sc, strokes = raw.map(function (pts) { return pts.map(function (p) { return L(50 + (p[0] - 50) * sc, 50 + (p[1] - 50) * sc); }); });
         strokesOf(el, strokes, { color: col, w: wd * Math.min(1.1, .55 + f.s * .5) });
       }
@@ -389,11 +402,15 @@
 
     /* ----- animations (drawn live on their own layer) ----- */
     function buildAnim(a) {
+      a = Object.assign({}, a);
+      ['from_y', 'to_y'].forEach(function (k) { if (a[k] != null) a[k] = num(a[k], 50, 0, 90); });
+      if (a.x != null) a.x = num(a.x, 50, 5, 95);
+      ['from', 'to'].forEach(function (k) { if (Array.isArray(a[k])) a[k] = [num(a[k][0], 50, 0, 100), num(a[k][1], 50, 0, 100)]; });
       var b = resolveBox(a, 'center'), f = fitSquare(b), kind = str(a.kind, 12);
       var an = { id: newId(a, 'a'), kind: 'anim', anim: kind, f: f, box: b, a: a, dur: num(a.dur, 3, .5, 20), loop: false, color: KB.color(a.color), seed: KB.hash(kind + (auto + 1)) };
       var ic = KB.own(KB.ICONS, a.icon) ? a.icon : 'ball';
       an.icon = ic; an.iconStrokes = KB.iconStrokes(ic, an.seed);
-      an.size = num(a.size, 22, 6, 90);
+      an.size = num(a.size, 22, 6, 50);
       an.bbox = b.slice();
       if (kind === 'swing' || kind === 'orbit' || kind === 'wave' || kind === 'spin') an.loop = a.loop !== false;
       if (['move', 'fall', 'swing', 'orbit', 'wave', 'grow', 'fill', 'count', 'spin'].indexOf(kind) < 0) { warnings.push('unknown anim ' + kind); return null; }
@@ -402,6 +419,32 @@
       if (kind === 'orbit') an.bodies = (Array.isArray(a.bodies) ? a.bodies : [{ r: 30, period: 4, icon: 'ball' }]).slice(0, 4).map(function (bd, i) { return { r: num(bd.r, 30, 8, 48), period: num(bd.period, 4, 1, 30), icon: KB.own(KB.ICONS, bd.icon) ? bd.icon : 'ball', size: num(bd.size, 12, 4, 30), strokes: KB.iconStrokes(KB.own(KB.ICONS, bd.icon) ? bd.icon : 'ball', an.seed + i) }; });
       ids[an.id] = an;
       return { anim: an };
+    }
+
+    // last safety net: nothing that is drawn may leave the board, whatever the screen size
+    function contain(el) {
+      if (!el || !el.items || !el.items.length) return;
+      var M = 6, x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      function see(x, y) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      el.items.forEach(function (it) {
+        if (it.t === 's') it.pl.pts.forEach(function (p) { see(p[0], p[1]); });
+        else if (it.mode === 'math') { see(it.x, it.y - it.lay.asc); see(it.x + it.boxW, it.y + it.lay.desc); }
+        else if (it.lines) it.lines.forEach(function (l) { see(l.x, l.y); see(l.x + l.w, l.y + it.lh); });
+      });
+      if (x0 > x1) return;
+      if (x0 >= M && y0 >= M && x1 <= W - M && y1 <= P.H - M) return;
+      warnings.push('contained ' + el.id);
+      var bw = x1 - x0, bh = y1 - y0, sc = Math.min(1, (W - 2 * M) / Math.max(1, bw), (P.H - 2 * M) / Math.max(1, bh));
+      var cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, nx0 = cx - bw * sc / 2, ny0 = cy - bh * sc / 2;
+      var dx = 0, dy = 0;
+      if (nx0 < M) dx = M - nx0; else if (nx0 + bw * sc > W - M) dx = W - M - nx0 - bw * sc;
+      if (ny0 < M) dy = M - ny0; else if (ny0 + bh * sc > P.H - M) dy = P.H - M - ny0 - bh * sc;
+      el.items.forEach(function (it) {
+        if (it.t === 's') it.pl = KB.poly(it.pl.pts.map(function (p) { return [cx + (p[0] - cx) * sc + dx, cy + (p[1] - cy) * sc + dy]; }));
+        else if (it.mode === 'math') { it.x += dx; it.y += dy; }
+        else if (it.lines) it.lines.forEach(function (l) { l.x += dx; l.y += dy; });
+      });
+      if (el.bbox) el.bbox = [cx + (el.bbox[0] - cx) * sc + dx, cy + (el.bbox[1] - cy) * sc + dy, el.bbox[2] * sc, el.bbox[3] * sc];
     }
 
     /* ───────── scenes ───────── */
@@ -438,7 +481,7 @@
           try { res = fn(a, 't'); } catch (err2) { return; } if (!res || !res.el) return;
         }
         if (res.anim) S.acts.push({ type: 'anim', anim: res.anim, natural: Math.min(res.anim.dur, 6) });
-        else S.acts.push({ type: 'draw', el: res.el, natural: Math.max(.3, res.el.dur) });
+        else { contain(res.el); S.acts.push({ type: 'draw', el: res.el, natural: Math.max(.3, res.el.dur) }); }
       });
       // pacing: spread the actions over the time the line takes to say
       var say = speechSecs(S.say), lead = .3, D = 0;
