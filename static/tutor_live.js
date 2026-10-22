@@ -53,6 +53,7 @@
     }).then(function () {
       self.active = true; o.onState('connected');
       self.needReply = false;
+      if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
       self.send({ type: 'response.create' });          // the teacher speaks first
     });
   };
@@ -127,7 +128,17 @@
         var when = c.at ? c.at + (c.atChars / CPS) * 1000 : Date.now();
         self.queue.push({ from: d.from, beat: d.beat, at: when });
         self.pump();
-        return { call_id: it.call_id, output: { ok: true, on_board: d.on_board } };
+        var out = { ok: true };
+        var pv = null;
+        try { pv = self.o.preview ? self.o.preview(d.from, d.beat) : null; } catch (err) { pv = null; }
+        if (pv) {
+          out.board = pv.board; out.text_lines_left = pv.text_lines_left; out.picture_slots_free = pv.picture_slots_free;
+          if (pv.wiped) out.wiped = 'The whole board was wiped before this was drawn (it was full). Everything drawn earlier is gone; only the items in "board" remain.';
+          if (pv.wiped_pictures) out.wiped_pictures = 'The picture area was full and was wiped before this was drawn. The text is still there.';
+          if (pv.dropped && pv.dropped.length) out.not_drawn = pv.dropped;
+          if (pv.text_lines_left <= 1 || (pv.picture_slots_free && !pv.picture_slots_free.length)) out.advice = 'The board is nearly full. Before you write or draw anything more, call board with clear:true (with the next thing in the same call).';
+        } else out.on_board = d.on_board;
+        return { call_id: it.call_id, output: out };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'connection problem, try once more' } }; });
     }
     if (it.name === 'progress') {

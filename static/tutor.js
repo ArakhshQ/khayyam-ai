@@ -20,6 +20,7 @@
   var posTimer = 0, retryTimer = 0, delTimer = 0;
   var saved = [];            // the student's saved classes
   var live = null;           // the live voice session, when the class is spoken
+  var liveAll = [];          // every beat the server has accepted for the live class, in order (the board may still be catching up)
   var liveWanted = !!window.__LIVE_VOICE && !!window.TutorLive;
 
   /* ───────── helpers ───────── */
@@ -209,13 +210,13 @@
   function onScene(i) {
     setWaiting(false);
     markScrub(i);
-    if (!cls || live) return;
+    if (!cls || live || cls.voiceClass) return;
     savePosSoon(i);
     var left = stepCount() - 1 - i;
     if (left <= 1) fetchNext();
   }
   function onSay(text, i) {
-    if (live) return;
+    if (live || (cls && cls.voiceClass)) return;
     var cap = $('caption'); cap.classList.remove('waiting'); cap.textContent = '';
     var s = document.createElement('span'); s.textContent = text; cap.appendChild(s);
     var tr = $('transcript'); var p = document.createElement('p'); p.textContent = text; tr.appendChild(p);
@@ -243,7 +244,7 @@
     if (last && last.querySelector('.bubble-content')) last.querySelector('.bubble-content').appendChild(row);
   }
   function onEnd() {
-    if (closing || live) return;
+    if (closing || live || (cls && cls.voiceClass)) return;
     if (!cls) { if (sampleOn) addMessage('ai', 'درس نمونه تمام شد. بنویسید چه می‌خواهید یاد بگیرید تا استاد برایتان یک صنف واقعی بچیند.'); return; }
     if (cls.done) {
       if (cls.endNoted) return; cls.endNoted = true;
@@ -274,7 +275,7 @@
 
   /* ───────── writing the class ahead of the student ───────── */
   function fetchNext() {
-    if (live || !cls || inflight || cls.done || cls.limited || busy || stopAt >= 0 || closing) return;
+    if (live || (cls && cls.voiceClass) || !cls || inflight || cls.done || cls.limited || busy || stopAt >= 0 || closing) return;
     inflight = true;
     var have = board.lesson.scenes.length, id = cls.id;
     api('/api/class/' + id + '/next', { have: have }).then(function (d) {
@@ -360,7 +361,8 @@
     $('board-empty').hidden = true; $('board-controls').hidden = false; $('lesson-title').textContent = d.title;
     $('btn-stop').hidden = false;
     renderPath(); renderSaved();
-    var lesson = { v: 1, digits: 'fa', title: d.title, scenes: d.beats || [] };
+    var lesson = { v: 1, digits: 'fa', title: d.title, scenes: d.beats || [], auto: liveWanted };
+    liveAll = (d.beats || []).slice();
     ensureBoard().live = true; board.askDone = {}; board.atEnd = false; board.waitingAsk = -1; board.stack = []; board.holdAtEnd = false;
     if (!o.keepPlace) { $('transcript').textContent = ''; $('caption').textContent = ''; }
     return board.load(lesson).then(function () {
@@ -489,6 +491,7 @@
   };
   window.newClass = function () {
     if (live) { try { live.stop(); } catch (e) {} live = null; $('voice-record-btn').classList.remove('live', 'muted'); }
+    delete $('classroom').dataset.live;
     if (board) { board.pause(); board.destroy(); board = null; window.__board = null; }
     if (cls && posPending >= 0) { api('/api/class/' + cls.id + '/save', { pos: posPending }); posPending = -1; }
     cls = null; sampleOn = false; stopAt = -1; closing = false; inflight = false; busy = false; handUp = false; spoken = {};
@@ -505,6 +508,13 @@
   /* ───────── the live voice class ───────── */
   function liveHandlers() {
     return {
+      preview: function (from, beat) {
+        liveAll.length = Math.min(liveAll.length, from); liveAll[from] = beat;
+        var m = KB.buildModel({ v: 1, digits: 'fa', auto: true, scenes: liveAll.slice(0, from + 1) }, board && board.profile);
+        var S = m.scenes[from] || {}, st = m.state;
+        return { board: st.board, text_lines_left: st.text_lines_left, picture_slots_free: st.picture_slots_free,
+                 wiped: !!S.wiped && !beat.clear, wiped_pictures: !!S.wipedPictures, dropped: S.dropped };
+      },
       onBeat: function (from, beat) {
         if (!board || !board.model) return;
         board.setTimeline(from, [beat]);
@@ -518,12 +528,7 @@
         renderPath();
       },
       onUserText: function (t) { addMessage('user', t); },
-      onAiText: function (t) {
-        var cap = $('caption'); cap.classList.remove('waiting'); cap.textContent = '';
-        var sp = document.createElement('span'); sp.textContent = t; cap.appendChild(sp);
-        var tr = $('transcript'); var p = document.createElement('p'); p.textContent = t; tr.appendChild(p);
-        addMessage('ai', t);
-      },
+      onAiText: function (t) { addMessage('ai', t); },          // the conversation is the only text; the board has no captions
       onState: function (st) {
         var b = $('voice-record-btn');
         b.classList.toggle('live', st !== 'idle');
@@ -538,11 +543,13 @@
     };
   }
   function connectLive(d, resumed) {
-    var h = liveHandlers(); h.classId = d.id; h.resumed = !!resumed;
+    if (cls) cls.voiceClass = true;
+    var h = liveHandlers(); h.classId = d.id; h.resumed = !!resumed; h.firstText = resumed ? '' : (d.request || '');
     live = new TutorLive.Session(h);
     setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.');
     return live.start().then(function () {
       setPrep(false); $('board-empty').hidden = true;
+      $('classroom').dataset.live = '1';
       $('voice-record-btn').classList.add('live');
       placeholder('هر وقت خواستید صحبت کنید، یا اینجا بنویسید…');
       setWaiting(true, 'استاد می‌آید…');
@@ -588,11 +595,12 @@
     if (!live || !cls || closing) return;
     closing = true;
     var id = cls.id, tr = live.stop(); live = null;
-    $('voice-record-btn').classList.remove('live', 'muted', 'talking');
-    setWaiting(true, 'صنف ذخیره می‌شود…'); typing();
+    $('voice-record-btn').classList.remove('live', 'muted', 'talking'); delete $('classroom').dataset.live;
+    typing();
     api('/api/class/' + id + '/pause', { pos: Math.max(0, stepCount() - 1), transcript: tr }).then(function (d) {
       untyping(); closing = false; setWaiting(false);
       if (d.__status !== 200) { toast('ذخیرهٔ صنف ممکن نشد.'); return; }
+      if (d.deleted) { addMessage('ai', 'هر وقت خواستید دوباره بیایید و بگویید چه می‌خواهید بیاموزید.', linkRow('شروع تازه', function () { newClass(); })); cls = null; loadSaved(); return; }
       if (cls) cls.status = 'paused';
       addMessage('ai', 'صنف ذخیره شد. هر وقت خواستید از همین‌جا ادامه می‌دهیم.' + (d.summary ? '\n\n' + d.summary : ''), linkRow('صنف تازه', function () { newClass(); }));
       loadSaved();

@@ -247,6 +247,13 @@ def _clean_op(raw, mapping, known):
     if w is not None and op in ('line', 'arrow', 'rect', 'circle', 'ellipse', 'poly', 'path', 'icon'):
         out['width'] = w
 
+    if op not in ('text', 'math', 'mark', 'point', 'erase', 'wait'):
+        sl = raw.get('slot')
+        if isinstance(sl, (int, float)) and not isinstance(sl, bool) and 1 <= sl <= 6:
+            out['slot'] = int(sl)
+        if raw.get('big') is True:
+            out['big'] = True
+
     g = lambda k: raw.get(k)
     if op == 'text':
         t = _str(g('t') or g('text'), 240)

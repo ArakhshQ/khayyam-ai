@@ -56,6 +56,8 @@
     var ids = Object.create(null);      // id -> element
     var warnings = [];
     var cursors = {};                   // zone -> y used
+    var created = [];                   // ids made by the scene being built (dropped if the scene is rebuilt)
+    var alive = {}, occ = {}, auto_ = !!lesson.auto;   // what is on the board now; picture slots used per zone; automatic layout (live class)
     var auto = 0;
     var model = { W: W, H: P.H, profile: P, scenes: [], ids: ids, warnings: warnings, digits: digits, title: str(lesson.title, 120) };
 
@@ -73,7 +75,7 @@
 
     function mkEl(a, kind, pre) {
       var el = { id: newId(a, pre), kind: kind, items: [], dur: 0, bbox: null, color: KB.color(a.color), seed: KB.hash(str(a.id) + kind + (auto + 1)) };
-      ids[el.id] = el; return el;
+      ids[el.id] = el; created.push(el.id); return el;
     }
     function addStroke(el, pts, o) {
       o = o || {}; var pl = KB.poly(pts); if (pl.len < 1) return;
@@ -127,13 +129,13 @@
       else box = resolveBox(a, 'main');
       var y = box[1];
       if (zn) { y += (cursors[zn] || 0); }
-      var avail = Math.max(30, box[1] + box[3] - y), maxW = box[2], lines, lh, tries = 0, s = sz;
+      var availRaw = box[1] + box[3] - y, avail = Math.max(30, availRaw), maxW = box[2], lines, lh, tries = 0, s = sz;
       for (;;) {
         lines = wrapText(raw, s, maxW, fam, weight); lh = s * (RTL_RE.test(raw) ? 1.72 : 1.5);
         if (lines.length * lh <= avail || tries++ > 8 || s <= sz * .62) break;
         s *= .92;
       }
-      var overflow = lines.length * lh > avail + 2;
+      var overflow = lines.length * lh > ((zn && (cursors[zn] || 0) > 0) ? availRaw : avail) + 2;
       if (overflow) {
         warnings.push('text overflow: ' + raw.slice(0, 24));
         if (zn && (cursors[zn] || 0) > 0) { delete ids[el.id]; return { overflow: true, el: null }; }
@@ -380,8 +382,12 @@
     }
 
     /* ----- marks on existing things ----- */
+    var gone = [];
     function targetBox(a) {
-      if (typeof a.target === 'string' && ids[a.target] && ids[a.target].bbox) return ids[a.target].bbox;
+      if (typeof a.target === 'string' && ids[a.target] && ids[a.target].bbox) {
+        if (!alive[a.target]) { gone.push(a.target); return null; }
+        return ids[a.target].bbox;
+      }
       if (Array.isArray(a.at)) return [a.at[0] * W / 100 - 30, a.at[1] * P.H / 100 - 30, 60, 60];
       return null;
     }
@@ -417,7 +423,7 @@
       if (kind === 'fill') an.shape = a.shape === 'bar' ? 'bar' : (a.shape === 'pie' ? 'pie' : 'cup');
       if (kind === 'count') { an.from = num(a.from, 0, -1e6, 1e6); an.to = num(a.to, 10, -1e6, 1e6); }
       if (kind === 'orbit') an.bodies = (Array.isArray(a.bodies) ? a.bodies : [{ r: 30, period: 4, icon: 'ball' }]).slice(0, 4).map(function (bd, i) { return { r: num(bd.r, 30, 8, 48), period: num(bd.period, 4, 1, 30), icon: KB.own(KB.ICONS, bd.icon) ? bd.icon : 'ball', size: num(bd.size, 12, 4, 30), strokes: KB.iconStrokes(KB.own(KB.ICONS, bd.icon) ? bd.icon : 'ball', an.seed + i) }; });
-      ids[an.id] = an;
+      ids[an.id] = an; created.push(an.id);
       return { anim: an };
     }
 
@@ -452,37 +458,128 @@
     var BUILD = { text: buildText, math: buildMath, line: buildShape, arrow: buildShape, rect: buildShape, circle: buildShape, ellipse: buildShape, poly: buildShape, path: buildShape, icon: buildShape,
                   pie: buildPie, bars: buildBars, numberline: buildNumberline, graph: buildGraph, table: buildTable, dots: buildDots, mark: buildMark, anim: buildAnim };
     var scenes = Array.isArray(lesson.scenes) ? lesson.scenes.slice(0, 800) : [];
-    scenes.forEach(function (sc, si) {
-      var S = { say: str(sc.say, 1200), acts: [], dur: 0, clear: !!sc.clear || si === 0 && false, index: si, aliveAfter: null };
-      if (S.clear) {
-        Object.keys(cursors).forEach(function (k) { delete cursors[k]; });
+
+    /* ----- automatic layout (live class): text stacks in column "a", pictures go into slots of column "b" ----- */
+    var ALIAS = { left: 'b', right: 'a', first: 'a', second: 'b' };
+    var GRID = P.wide ? { cols: 2, rows: 2 } : { cols: 3, rows: 2 };
+    var TEXTY = { text: 1, math: 1 };
+    var BIGOP = { graph: 1, table: 1, bars: 1 };
+    var BIGANIM = { orbit: 1, swing: 1, move: 1, wave: 1 };
+    function zoneName(a) { var z = KB.own(Z, a.zone) ? (ALIAS[a.zone] || a.zone) : null; return z; }
+    function slotRect(k) {
+      var b = pct(Z.b, P), cw = b[2] / GRID.cols, ch = b[3] / GRID.rows, c = k % GRID.cols, r = Math.floor(k / GRID.cols);
+      return [b[0] + c * cw, b[1] + r * ch, cw, ch];
+    }
+    function toPct(r) { return [r[0] * 100 / W, r[1] * 100 / P.H, r[2] * 100 / W, r[3] * 100 / P.H]; }
+    function freeSlots() { var o = occ.b || {}, out = []; if (o.big) return out; for (var k = 0; k < GRID.cols * GRID.rows; k++) if (!(o.cells && o.cells[k])) out.push(k + 1); return out; }
+    // rewrite the placement of one operation for the automatic layout; returns false when the picture column is full
+    function place(a, beat) {
+      if (a.box || a.at) return true;
+      var op = a.op, zn = zoneName(a);
+      if (TEXTY[op]) {
+        if (zn === 'title' || zn === 'bottom') return true;
+        a.zone = 'a'; if (a.size == null) a.size = 's';
+        return true;
+      }
+      if (op === 'numberline' && (!zn || zn === 'bottom')) { a.zone = 'bottom'; return true; }
+      if (zn === 'bottom' || zn === 'title') return true;
+      var big = a.big === true || BIGOP[op] || (op === 'anim' && BIGANIM[a.kind]) || zn === 'main' || zn === 'center' || zn === 'full';
+      var o = occ.b = occ.b || { cells: [], big: false };
+      a.zone = 'b';
+      if (big) {
+        if (o.big && beat.bigTaken) { a.box = toPct(pct(Z.b, P)); return true; }
+        if (o.big || o.cells.some(Boolean)) return false;
+        o.big = true; beat.bigTaken = true; beat.slot = 'b'; a.box = toPct(pct(Z.b, P)); return true;
+      }
+      if (o.big && !beat.bigTaken) return false;
+      if (o.big) { a.box = toPct(pct(Z.b, P)); return true; }
+      var k = beat.cell;
+      if (typeof a.slot === 'number' && a.slot >= 1 && a.slot <= GRID.cols * GRID.rows && !o.cells[Math.round(a.slot) - 1]) k = Math.round(a.slot) - 1;
+      if (k == null) { var fs = freeSlots(); if (!fs.length) return false; k = fs[0] - 1; }
+      o.cells[k] = true; beat.cell = k; beat.slot = 'b' + (k + 1);
+      a.box = toPct(slotRect(k));
+      return true;
+    }
+    function snap() { return JSON.stringify({ c: cursors, o: occ, a: alive }); }
+    function restore(js) {
+      var d = JSON.parse(js);
+      Object.keys(cursors).forEach(function (k) { delete cursors[k]; }); Object.keys(d.c).forEach(function (k) { cursors[k] = d.c[k]; });
+      occ = d.o; alive = d.a;
+    }
+    function wipeAll() { Object.keys(cursors).forEach(function (k) { delete cursors[k]; }); occ = {}; alive = {}; }
+
+
+    // build one scene; `again` = a second try after the board turned out to be too full (the whole beat then goes on a fresh page)
+    function buildScene(sc, si, again) {
+      var S = { say: str(sc.say, 1200), acts: [], dur: 0, clear: !!sc.clear, index: si, aliveAfter: null, wiped: false, dropped: [] };
+      var beat = { cell: null, bigTaken: false };
+      var before = snap(); S.before = before;
+      if (S.clear || again) {
+        wipeAll(); S.wiped = true;
         S.acts.push({ type: 'erase', targets: 'all', natural: 1.1 });
       }
-      (Array.isArray(sc.do) ? sc.do : []).slice(0, 16).forEach(function (a) {
-        if (!a || typeof a !== 'object') return;
-        var op = str(a.op, 14);
+      var ops = (Array.isArray(sc.do) ? sc.do : []).slice(0, 16), full = false;
+      for (var oi = 0; oi < ops.length && !full; oi++) {
+        var a0 = ops[oi];
+        if (!a0 || typeof a0 !== 'object') continue;
+        var a = Object.assign({}, a0), op = str(a.op, 14);
         if (op === 'erase') {
           var ts = a.target === 'all' || !a.target ? 'all' : [].concat(a.target).filter(function (t) { return typeof t === 'string' && ids[t]; });
-          if (ts === 'all') Object.keys(cursors).forEach(function (k) { delete cursors[k]; });
+          if (ts === 'all') { wipeAll(); S.wiped = true; }
+          else ts.forEach(function (t) { delete alive[t]; });
           if (ts === 'all' || ts.length) S.acts.push({ type: 'erase', targets: ts, natural: ts === 'all' ? 1.1 : .8 });
-          return;
+          continue;
         }
-        if (op === 'wait' || op === 'pause') { S.acts.push({ type: 'wait', natural: num(a.s, 1, .2, 6) }); return; }
+        if (op === 'wait' || op === 'pause') { S.acts.push({ type: 'wait', natural: num(a.s, 1, .2, 6) }); continue; }
         if (op === 'point') {
           var tb = targetBox(a); if (tb) S.acts.push({ type: 'point', box: tb, natural: 1.6 });
-          return;
+          else if (typeof a.target === 'string') S.dropped.push('point: ' + a.target + ' is no longer on the board');
+          continue;
         }
-        var fn = KB.own(BUILD, op) ? BUILD[op] : null; if (!fn) { warnings.push('unknown op ' + op); return; }
-        var res; try { res = fn(a, 't'); } catch (err) { warnings.push('bad ' + op + ': ' + err.message); return; }
-        if (!res) return;
-        if (res.overflow) {                     // zone full: start a fresh page, then place it
-          Object.keys(cursors).forEach(function (k) { delete cursors[k]; });
-          S.acts.push({ type: 'erase', targets: 'all', natural: 1.1 });
-          try { res = fn(a, 't'); } catch (err2) { return; } if (!res || !res.el) return;
+        var fn = KB.own(BUILD, op) ? BUILD[op] : null; if (!fn) { warnings.push('unknown op ' + op); continue; }
+        if (auto_ && op !== 'mark') {
+          if (!place(a, beat)) {                                  // the picture column is full
+            if (!again && !S.acts.some(function (x) { return x.type === 'draw'; })) {
+              // nothing of this beat is drawn yet: wipe just the pictures and go on
+              var gone_ = Object.keys(alive).filter(function (id) { return ids[id] && ids[id].zone === 'b'; });
+              gone_.forEach(function (id) { delete alive[id]; });
+              if (gone_.length) S.acts.push({ type: 'erase', targets: gone_, natural: .8 });
+              occ.b = { cells: [], big: false }; S.wipedPictures = true;
+              beat.cell = null; beat.bigTaken = false;
+              if (!place(a, beat)) { S.dropped.push(op + ': no room'); continue; }
+            } else { full = true; break; }
+          }
         }
-        if (res.anim) S.acts.push({ type: 'anim', anim: res.anim, natural: Math.min(res.anim.dur, 6) });
-        else { contain(res.el); S.acts.push({ type: 'draw', el: res.el, natural: Math.max(.3, res.el.dur) }); }
-      });
+        var res; try { res = fn(a, 't'); } catch (err) { warnings.push('bad ' + op + ': ' + err.message); continue; }
+        if (!res) continue;
+        if (res.overflow) { full = true; break; }
+        if (res.anim) {
+          res.anim.zone = zoneName(a) || 'b'; res.anim.slot = beat.slot; res.anim.label = op + ' ' + str(a.kind, 12); alive[res.anim.id] = true;
+          S.acts.push({ type: 'anim', anim: res.anim, natural: Math.min(res.anim.dur, 6) });
+        } else {
+          contain(res.el);
+          res.el.zone = zoneName(a) || 'a'; res.el.slot = TEXTY[op] ? '' : beat.slot; res.el.label = str(a.t != null ? a.t : (a.m != null ? a.m : (a.name || op)), 40);
+          if (!res.noBox) alive[res.el.id] = true;
+          S.acts.push({ type: 'draw', el: res.el, natural: Math.max(.3, res.el.dur) });
+        }
+      }
+      if (full && again) {
+        S.dropped.push('the rest of this call did not fit on the page and was NOT drawn: ' + ops.slice(oi).map(function (x) { return x && (x.op + (x.t ? ' "' + String(x.t).slice(0, 14) + '"' : '')); }).join(', '));
+      }
+      if (full && !again) { created.forEach(function (id) { delete ids[id]; }); }
+      return { S: S, full: full };
+    }
+
+    scenes.forEach(function (sc, si) {
+      created = [];
+      var r = buildScene(sc, si, false);
+      if (r.full) {                                               // too full: restore the board state, wipe it and put the whole beat on a fresh page
+        restore(r.S.before); created = [];
+        r = buildScene(sc, si, true);
+        if (r.full) { warnings.push('beat does not fit on a page: ' + si); }
+      }
+      var S = r.S; delete S.before;
+      if (gone.length) { gone.forEach(function (g) { S.dropped.push('mark/point: ' + g + ' is no longer on the board'); }); gone = []; }
       // pacing: spread the actions over the time the line takes to say
       var silent = !S.say, say = silent ? 0 : speechSecs(S.say), lead = silent ? .05 : .3, D = 0;
       S.acts.forEach(function (a) { D += a.natural; });
@@ -494,6 +591,17 @@
       S.dur = silent ? t + .15 : Math.max(say + .5, t + .5);
       model.scenes.push(S);
     });
+
+    // what is on the board after the last scene, and how much room is left (told to the live teacher)
+    var za = pct(Z.a, P), lineH = SIZES.s * P.ts * 1.72;
+    model.state = {
+      board: Object.keys(alive).map(function (id) {
+        var e = ids[id]; return e ? { id: id, kind: e.kind || e.anim, where: e.zone === 'b' ? (e.slot || 'b') : (e.zone || 'a'), text: e.label || '' } : null;
+      }).filter(Boolean),
+      text_lines_left: Math.max(0, Math.floor((za[3] - (cursors.a || 0)) / lineH)),
+      picture_slots_free: freeSlots(),
+      picture_slots_total: GRID.cols * GRID.rows
+    };
     return model;
   };
 
