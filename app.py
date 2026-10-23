@@ -3977,7 +3977,7 @@ def save_live_voice_transcript():
 # ── Continuous tutor class (board beats, save/resume, student profile) ──
 import tutor_class
 tutor_class.register(app, db=db, limiter=limiter, login_required=login_required, current_user=current_user,
-                     metered=_metered_completion, tier_of=active_tutor_tier, curriculum=CURRICULUM)
+                     metered=_metered_completion, tier_of=active_tutor_tier, curriculum=CURRICULUM, poetry=poetry_search)
 
 
 if __name__ == "__main__":

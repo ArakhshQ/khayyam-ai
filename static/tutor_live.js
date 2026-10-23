@@ -141,6 +141,17 @@
         return { call_id: it.call_id, output: out };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'connection problem, try once more' } }; });
     }
+    if (it.name === 'start_class') {
+      return post('/api/class/' + id + '/progress', { step: 0, note: 'شروع صنف', outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
+        if (d.ok) { d.started = true; self.o.onProgress(d); }
+        return { call_id: it.call_id, output: { ok: !!d.ok, note: d.ok ? 'class started: now write the title on the board and do the pre-check' : 'give a title and an outline of 4-7 steps' } };
+      }).catch(function () { return { call_id: it.call_id, output: { ok: false } }; });
+    }
+    if (it.name === 'find_poem') {
+      return post('/api/class/' + id + '/poem', { query: args.query, poet: args.poet, whole: args.whole === true }).then(function (d) {
+        delete d.__status; return { call_id: it.call_id, output: d };
+      }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'search failed, try again' } }; });
+    }
     if (it.name === 'progress') {
       return post('/api/class/' + id + '/progress', { step: args.step, note: args.note, outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
         if (d.ok) self.o.onProgress(d);

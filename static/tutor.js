@@ -51,7 +51,8 @@
   };
   window.voiceSoon = function () {
     if (live) { var m = !live.muted; live.setMuted(m); $('voice-record-btn').classList.toggle('muted', m); toast(m ? 'میکروفون خاموش شد.' : 'میکروفون روشن شد.'); return; }
-    toast('گفتگوی صوتی با استاد به‌زودی در صنف فعال می‌شود.');
+    if (liveWanted && !busy && !closing) { if (cls && !cls.voiceClass && cls.id) { toast('برای ادامه با صدا، صنف را باز کنید و «ادامهٔ صنف» را بزنید.'); return; } startLiveClass(''); return; }
+    toast('گفتگوی صوتی هنوز برای حساب شما باز نشده است.');
   };
 
   /* ───────── conversation ───────── */
@@ -115,7 +116,7 @@
   /* ───────── the sidebar ───────── */
   function renderPath() {
     var box = $('path-box');
-    if (!cls) { box.hidden = true; return; }
+    if (!cls || cls.lobby || !(cls.outline || []).length) { box.hidden = true; return; }
     box.hidden = false;
     $('course-name').textContent = cls.title;
     var list = $('lesson-list'); list.textContent = '';
@@ -348,6 +349,7 @@
       busy = false; $('send-btn').disabled = false; untyping();
       if (d.__status === 401) { setPrep(false); loginNotice(); return; }
       if (d.limited) { setPrep(false); limitNotice(d.reset_ts); return; }
+      if (d.chat) { setPrep(false); addMessage('ai', d.chat); return; }
       if (d.__status !== 200 || d.error) { setPrep(false); addMessage('ai', d.error || 'شروع صنف ممکن نشد. دوباره امتحان کنید.'); return; }
       addMessage('ai', 'خوب است. به تخته نگاه کنید؛ من می‌نویسم و می‌کشم و توضیح می‌دهم. هر وقت خواستید «دست بالا» را بزنید یا همین‌جا بنویسید.');
       openClass(d, { fresh: true }); loadSaved();
@@ -355,7 +357,8 @@
   }
   function openClass(d, o) {
     o = o || {};
-    cls = { id: d.id, title: d.title, outline: d.outline || [], step: d.step || 0, status: d.status, done: d.status === 'done', limited: false };
+    cls = { id: d.id, title: d.title, outline: d.outline || [], step: d.step || 0, status: d.status, done: d.status === 'done', limited: false,
+            lobby: liveWanted && !(d.outline || []).length && !(d.count > 0) };
     sampleOn = false; spoken = {}; stopAt = -1; closing = false; failures = 0; inflight = false;
     placeholder('سؤال یا جوابتان را بنویسید…');
     $('board-empty').hidden = true; $('board-controls').hidden = false; $('lesson-title').textContent = d.title;
@@ -517,6 +520,7 @@
       },
       onBeat: function (from, beat) {
         if (!board || !board.model) return;
+        leaveLobby(true);
         board.setTimeline(from, [beat]);
         if (board.sceneIdx >= from || board.model.scenes.length === 1) board.gotoScene(from, true);
       },
@@ -524,7 +528,8 @@
         if (!cls) return;
         if (Array.isArray(d.outline) && d.outline.length) cls.outline = d.outline;
         if (typeof d.step === 'number') cls.step = d.step;
-        if (d.title) { cls.title = d.title; $('lesson-title').textContent = d.title; }
+        if (d.title && !(cls.lobby && !d.started)) { cls.title = d.title; $('lesson-title').textContent = d.title; }
+        if (d.started || (cls.outline && cls.outline.length > 1)) leaveLobby();
         renderPath();
       },
       onUserText: function (t) { addMessage('user', t); },
@@ -548,7 +553,8 @@
     live = new TutorLive.Session(h);
     setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.');
     return live.start().then(function () {
-      setPrep(false); $('board-empty').hidden = true;
+      setPrep(false);
+      $('board-empty').hidden = !cls.lobby; $('board-controls').hidden = !!cls.lobby; $('lesson-title').textContent = cls.lobby ? 'گفتگو با استاد' : cls.title;
       $('classroom').dataset.live = '1';
       $('voice-record-btn').classList.add('live');
       placeholder('هر وقت خواستید صحبت کنید، یا اینجا بنویسید…');
@@ -569,13 +575,21 @@
       return false;
     });
   }
+  // the conversation became a class (the teacher called start_class, or began drawing): show the board
+  function leaveLobby(drawn) {
+    if (!cls || !cls.lobby) return;
+    cls.lobby = false;
+    $('board-empty').hidden = true; $('board-controls').hidden = false;
+    if (drawn && cls.title === 'گفتگو با استاد') $('lesson-title').textContent = 'گفتگو با استاد';
+    renderPath();
+  }
   function global_console() { return typeof console !== 'undefined'; }
   function startLiveClass(text) {
     var start = document.querySelector('.class-start'); if (start) start.remove();
-    addMessage('user', text);
+    if (text) addMessage('user', text);
     $('user-input').value = ''; $('user-input').style.height = 'auto';
     busy = true; $('send-btn').disabled = true;
-    setPrep(true, 'استاد صنف را آماده می‌کند…', 'چند لحظه صبر کنید.');
+    setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.');
     showPane('board');
     api('/api/class/voice/new', { topic: text }).then(function (d) {
       busy = false; $('send-btn').disabled = false;
