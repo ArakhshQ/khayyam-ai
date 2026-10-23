@@ -19,6 +19,8 @@ from datetime import datetime, timedelta
 from flask import jsonify, request
 
 import board_check as BC
+import media as media_store
+import tutor_media as TM
 from database import TutorClass, TutorStudent
 
 SUBJECTS = ('math', 'science', 'english', 'social', 'dari', 'computer', 'other')
@@ -26,7 +28,7 @@ MAX_CLASSES = 60
 MAX_BEATS = 700
 SPEECH_CPS = 12.5
 
-SYSTEM = r"""You are "Ustad Khayyam" (استاد خیام), a warm, patient Afghan teacher giving a live one-to-one class on a dark green chalkboard. You speak natural Afghan Dari. Your student is Afghan, may be a child or an adult, and may be learning with little help at home.
+SYSTEM = r"""You are "Ustad Khayyam" (استاد خیام), a warm, patient Afghan teacher giving a live one-to-one class on a dark green chalkboard. You speak natural Afghan Dari. Afghan words: say «موتر» (not ماشین), «شفاخانه» (not بیمارستان), «لیسه» (not دبیرستان), and «ابتدایی» for basic or elementary (never «پایه»). Your student is Afghan, may be a child or an adult, and may be learning with little help at home.
 
 OUTPUT: a single JSON object and nothing else.
 {
@@ -67,8 +69,8 @@ PREREQUISITES (very important: students may know nothing about the topic)
 BOARD LAYOUT (the board is wide on a computer, tall on a phone)
 - Zones: "title" (top strip, one line), "a" (first column, read first), "b" (second column), "bottom" (strip), "main" (a and b together), "full", "center".
 - Put text and formulas in zone "a"; they stack downward automatically. Put pictures and diagrams in zone "b". A purely visual beat may use "main" or "center". Avoid "box" and "at" unless you must (for example a label next to a drawing).
-- At most about 5 short lines of text per board page. Short words, not sentences.
-- Capacity: a computer board is short and wide, so one page holds about 4 short lines OR 2 formulas per column, plus one picture in the other column. A phone board is tall and holds more. When a page would be fuller than that, set "clear": true on the next beat and continue on a fresh page. Drawings must stay inside the 0-100 square of their zone; never place anything beyond it, and keep icons at scale 1 or smaller on busy pages.
+- At most about 7 short lines of text per board page. Short words, not sentences.
+- Capacity: a computer board is short and wide, so one page holds about 6 short lines OR 3 formulas per column, plus one picture in the other column. A phone board is tall and holds more. When a page would be fuller than that, set "clear": true on the next beat and continue on a fresh page. Drawings must stay inside the 0-100 square of their zone; never place anything beyond it, and keep icons at scale 1 or smaller on busy pages.
 - Colours: white (default), yellow (key results, titles), pink, blue, green (correct), orange. Use colour to mean something.
 - Give an "id" (letters and digits, such as "p1") to anything you may later point at, mark or erase. Ids are local to the beat that makes them. To refer to something from an earlier call use the ids listed under "ON THE BOARD NOW".
 
@@ -106,25 +108,38 @@ VOICE_SYSTEM = r"""You are "Ustad Khayyam", a warm, brilliant teacher giving a L
 Everything you say is spoken aloud. The student hears you and can talk back or interrupt at any moment.
 
 HOW YOU SPEAK
-- Natural spoken Afghan Dari, the way a good teacher in Kabul talks to one student: warm, relaxed, simple words, short sentences. Not Iranian Persian, not bookish or formal. No lists, no markdown, no emojis, never read symbols out letter by letter. Say numbers as words.
+- Natural spoken Afghan Dari, the way a good teacher in Kabul talks to one student: warm, relaxed, simple words, short sentences. Not Iranian Persian, not bookish or formal. Afghan words: say «موتر» (not ماشین), «شفاخانه» (not بیمارستان), «لیسه» (not دبیرستان), and «ابتدایی» for basic or elementary (never «پایه»). No lists, no markdown, no emojis, never read symbols out letter by letter. Say numbers as words.
 - Talk like a person in a room, not like a lecture recording. Think aloud, use small reactions («خوب»، «ببینید»، «درست است؟»). Speak in short stretches (2-4 sentences), then check in: a quick question, or a pause for the student to react. Never go more than about 30 seconds without involving the student.
 - Ask questions in the middle of an explanation, and wait for the answer. Listen to what the student really says; answer exactly that.
 - Address the student as «شما». Never scold. If they seem lost, slow down and explain it differently, with a picture.
 
 THE BOARD IS YOUR HAND (tool "board")
 - You control the chalkboard yourself, live, and the student mostly WATCHES it. Speech explains; the board shows. Something must happen on the board all the time: put something on it after every one or two sentences you say. Never speak three sentences in a row without a board call (the only exceptions: you are asking the student something and waiting, or answering a quick yes/no).
-- Draw at the exact moment you say a thing: when you say "a car", call board with the car icon in that same breath; when you explain a fraction, draw it as you speak; when you solve an equation, write each line as you say it. Do not announce that you are drawing («حالا می‌کشم»).
+- Speak WHILE you draw: the student must hear you whenever chalk moves, never a silent board filling up. Say the sentence (or half a sentence) that names the thing, and call board right after it, in the same turn: the drawing starts while your words are still being heard. When you say "a car", the car icon follows that very phrase; when you explain a fraction, say what you are showing and draw it; when you solve an equation, say each line as you write it. After the call just keep talking naturally. Never call board before you have said anything (the only exception is clearing the page and drawing in the same call right after a short spoken lead-in). One small call per sentence, never a big silent batch. Do not announce that you are drawing («حالا می‌کشم»).
 - Show, do not write sentences. Board text is only short labels, numbers, formulas, keywords (1-4 words). Never copy what you are saying onto the board. More pictures, fewer words.
 - Make many small calls (1-4 operations each) rather than one big one. Picture first, words second, formula last. Use everyday Afghan examples (nān, apples, pomegranates, the bazaar, afghani coins, mountains, a village road).
 - Give an "id" to anything you may mark or erase later.
 
 HOW THE BOARD IS ORGANISED (follow this so nothing overlaps or runs out)
 - Title strip: zone "title" (one short line, only at the start of a class or a new part).
-- Text column: zone "a". Text and formulas stack downward by themselves, about 5 short lines in all. Always write text and formulas in zone "a".
+- Text column: zone "a". Text and formulas stack downward by themselves, about 7 short lines in all. Always write text and formulas in zone "a".
 - Picture area: zone "b" is divided into slots (4 on a computer, 6 on a phone). Every new picture you draw in zone "b" automatically takes the next free slot, so pictures never cover each other. ALL the operations that make ONE picture (for example a circle, a line and a label) must be in the SAME call so they share one slot. You can choose a slot with "slot": 1..6. A graph, table or bars takes the whole picture area; set "big": true if you want a single large picture.
 - After every board call you receive the real state of the board: "board" (what is on it now, with ids), "text_lines_left", "picture_slots_free", and, if it happened, "wiped" / "wiped_pictures" (something was wiped because the board was full) and "not_drawn". Believe it. Only mark, point at or erase ids listed in "board". Never refer to things that were wiped.
 - Plan ahead. The board has limited room: before you write something that needs several lines or pictures (for example the student's answer, your check of it and a tick), look at text_lines_left and picture_slots_free. If there is not enough room, call board with clear:true FIRST, with the first thing you want to write in that same call. Never let the board fill up in the middle of one thought. Clear it at the start of every new idea, and always before you check a student's answer.
 - Use colour with meaning: yellow for titles and key results, green for correct, pink for mistakes, blue and orange to tell things apart.
+
+PICTURES AND DOCUMENT PAGES THE STUDENT BRINGS (like a teacher with the student's notebook open between you)
+- A picture or page arrives in the conversation as an image, with a note that gives its key (p1, p2 ...) and what is in it. It is yours to teach from.
+- Bring it onto the board at once: board ops [{"op":"image","image":"p1","id":"pic"}] (use clear:true in the same call if the board is busy). A picture takes the whole picture area. Then explain it the way a good teacher does with a shared page: say what you see in short sentences and, for each thing you talk about, POINT at it first and then circle or underline it:
+  {"op":"point","target":"pic","region":"r3","label":"1-3 Dari words"}     (a chalk pointer flies to that part)
+  {"op":"mark","target":"pic","region":"r3","style":"circle"}     (styles: circle, box, underline, arrow, highlight, tick, cross)
+  "target" is the id you gave the image op. Always name a part by its region id (r1, r2 ...), which comes from the note about the picture or from the tool "look". Never invent coordinates.
+- If the part you need is not in the list, call the tool "look" with {"image":"p1","find":"what you need"}; it returns a new region id. If the note says the picture has not been looked at yet, call "look" first.
+- To zoom into one part: {"op":"image","image":"p1","crop":"r3","id":"zoom","big":true} shows just that part, large (call it with clear:true; the page itself is then wiped, so show the page again afterwards if you need it).
+- Speak while you point: say «این‌جا را ببینید» in the same breath as the pointer moves; one pointing or one mark per call, 1-2 sentences per part, and check in with the student often. Go through the picture in the order a student would read it (for Dari and Arabic script, from the right).
+- Read text in the picture exactly as written. If a part is unclear, say so and ask. When it is the student's own work (homework, an answer), check it carefully: circle what is wrong in pink, say why in one sentence, and let them try again.
+- For a document with several pages, show the page you are on; when you move on, call board with clear:true and the next page. Never claim to see what is not there.
+- If the student sends a picture with no words, begin explaining it right away; no long greeting needed.
 
 WHEN THE STUDENT MAKES A MISTAKE
 - Notice it right away, in what they say or type. Be gentle and quick: say what is not right in one sentence, and at the same moment show it on the board: first make sure there is room (see above), then write their answer short, mark it (circle or cross, target the id of their line) and write the correct step in green next to it. Do the whole check on one clean page. Prefer a hint before the full answer, then let them try again. When they are right, say so warmly and briefly, and mark it with a tick.
@@ -162,11 +177,18 @@ VOICE_RESUME = ("\n\nTHIS CLASS IS BEING RESUMED. The board already shows what w
 
 VOICE_TOOLS = [
     {"type": "function", "name": "board",
-     "description": "Write or draw on the chalkboard right now, while you speak. ops is a list of 1-4 board operations exactly as in OPERATIONS. "
+     "description": "Write or draw on the chalkboard right now, while you speak. ops is a list of 1-4 board operations exactly as in OPERATIONS (and the picture operations image / point / mark with a region). "
                     "Set clear:true to wipe the board first. Returns what is on the board (with ids you can mark or erase) or an error to fix.",
      "parameters": {"type": "object", "properties": {
          "clear": {"type": "boolean"},
          "ops": {"type": "array", "items": {"type": "object"}}}, "required": ["ops"]}},
+    {"type": "function", "name": "look",
+     "description": "Look closely at one of the student's pictures or pages. Returns what is in it and a list of named regions (r1, r2 ...) you can point at and circle with the board tool. "
+                    "Give \"find\" to locate one more specific thing (for example \"the second equation\" or \"the red car\") and get a region id for it.",
+     "parameters": {"type": "object", "properties": {
+         "image": {"type": "string", "description": "the picture's key, for example p1"},
+         "find": {"type": "string", "description": "optional: a specific thing to locate in the picture"}},
+         "required": ["image"]}},
     {"type": "function", "name": "start_class",
      "description": "Call this once, when the student has asked to learn something specific, before you begin teaching it. Not for greetings or small talk.",
      "parameters": {"type": "object", "properties": {
@@ -350,6 +372,52 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         except Exception:
             db.session.rollback()
 
+    # ---- pictures and document pages the student brought ----
+    def owner_key():
+        return 'u:%s' % current_user.id
+
+    def drop_materials(cid):
+        try:
+            media_store.delete_for_conversation(db, owner_key(), -int(cid))
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('Could not remove the class pictures')
+
+    def materials(cid):
+        """The class's pictures, oldest first, each with a short key (p1, p2 ...) that the teacher uses on the board."""
+        out = []
+        rows = media_store.list_for(db, owner_key(), -int(cid), TM.MAX_MATERIALS + 5)
+        rows = [r for _i, r in sorted(enumerate(rows), key=lambda t: ((t[1]['meta'] or {}).get('seq', 0), t[0]))]      # upload order (seq), never the clock
+        for i, r in enumerate(rows):
+            m = r['meta'] or {}
+            out.append({'key': 'p%d' % (i + 1), 'media': r['id'], 'title': m.get('title') or r['name'], 'page': m.get('page'), 'pages': m.get('pages'),
+                        'w': m.get('w') or 1000, 'h': m.get('h') or 1000, 'meta': m})
+        return out
+
+    def image_map(mats):
+        return {m['key']: {'media': m['media'], 'w': m['w'], 'h': m['h'],
+                           'regions': {r['id']: r['box'] for r in (m['meta'].get('regions') or []) if r.get('id') and r.get('box')}} for m in mats}
+
+    def public_material(m):
+        meta = m['meta']
+        return {'key': m['key'], 'id': m['media'], 'url': '/media/' + m['media'], 'title': m['title'], 'page': m['page'], 'pages': m['pages'],
+                'w': m['w'], 'h': m['h'], 'looked': bool(meta.get('looked'))}
+
+    def materials_text(mats):
+        if not mats:
+            return ''
+        lines = ['PICTURES AND PAGES THE STUDENT BROUGHT (show them with the board tool, op "image", using these keys):']
+        for m in mats[-14:]:
+            where = (' - page %s of %s' % (m['page'], m['pages'])) if m.get('page') else ''
+            lines.append('  %s: "%s"%s' % (m['key'], str(m['title'])[:60], where))
+            if m['meta'].get('looked'):
+                body = TM.regions_for_prompt(m['meta'])
+                if body:
+                    lines.append('\n'.join('    ' + l for l in body.split('\n')))
+            else:
+                lines.append('    (not looked at yet: call the tool "look" with this key before you point at anything in it)')
+        return '\n'.join(lines)
+
     # ---- model calls ----
     def call(system, user_text, max_output, label, temperature=.6):
         """-> (data|None, state) with state 'ok' | 'limited' | 'error'. Also returns reset_ts when limited."""
@@ -477,6 +545,10 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
              'updated_at': cls.updated_at.isoformat() if cls.updated_at else None}
         if with_beats:
             d['beats'] = beats
+            try:
+                d['materials'] = [public_material(m) for m in materials(cls.id)]
+            except Exception:
+                d['materials'] = []
         return d
 
     # ---- routes ----
@@ -583,6 +655,7 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             return jsonify(error='صنف پیدا نشد'), 404
         db.session.delete(cls)
         db.session.commit()
+        drop_materials(cid)
         return jsonify(ok=True)
 
     @app.route('/api/class/<int:cid>/next', methods=['POST'])
@@ -702,6 +775,7 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         if not beats and len(_jl(cls.outline, [])) < 2 and not cls.summary:     # only a greeting happened: nothing worth saving
             db.session.delete(cls)
             db.session.commit()
+            drop_materials(cid)
             return jsonify(ok=True, summary='', status='deleted', deleted=True)
         cls.pos = max(0, min(_int(p.get('pos'), cls.pos or 0), max(0, len(beats) - 1)))
         if cls.status != 'done':
@@ -771,7 +845,10 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         if len(beats) >= MAX_BEATS:
             return jsonify(ok=False, error='the board history is full; call board with clear:true is not possible now, keep talking instead')
         idx = len(beats)
-        b, _ids = BC.clean_beat({'say': '..', 'do': ops, 'clear': p.get('clear') is True}, 'k%d_' % idx, BC.live_ids(beats))
+        on_board = BC.live_image_map(beats)
+        mats = materials(cid) if (on_board or any(isinstance(o, dict) and o.get('op') == 'image' for o in ops)) else []
+        b, _ids = BC.clean_beat({'say': '..', 'do': ops, 'clear': p.get('clear') is True}, 'k%d_' % idx, BC.live_ids(beats),
+                                images=image_map(mats), image_of=on_board)
         if not b or (not b['do'] and not b.get('clear')):
             return jsonify(ok=False, error='nothing valid to draw. Check the operation names and keys against OPERATIONS.')
         bad = BC.equation_problems(b)
@@ -833,6 +910,125 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
                         'partial': bool(pm.get('partial')), **({'note': note} if note else {})})
         return jsonify(ok=True, found=True, poems=out)
 
+    @app.route('/api/class/<int:cid>/upload', methods=['POST'])
+    @limiter.limit('20 per hour')
+    @login_required
+    def class_upload(cid):
+        """The student brings a picture or a document: keep it with the class and (for a PDF) cut it into page pictures."""
+        cls = owned(cid)
+        if not cls:
+            return jsonify(ok=False, error='صنف پیدا نشد'), 404
+        f = request.files.get('file')
+        if not f:
+            return jsonify(ok=False, error='فایلی انتخاب نشده است.'), 400
+        data = f.read(TM.MAX_UPLOAD + 1)
+        if not data or len(data) > TM.MAX_UPLOAD:
+            return jsonify(ok=False, error='فایل خالی یا بزرگ‌تر از ۱۲ مگابایت است.'), 400
+        kind = TM.kind_of(data)
+        if not kind:
+            return jsonify(ok=False, error='فقط عکس (JPG، PNG، WEBP) یا فایل PDF پذیرفته می‌شود.'), 400
+        existing = media_store.list_for(db, owner_key(), -cid, TM.MAX_MATERIALS + 5)
+        have = len(existing)
+        seq = max([(e['meta'] or {}).get('seq', 0) for e in existing] + [0])
+        name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', str(f.filename or '').rsplit('/', 1)[-1]).strip()[:80] or 'تصویر'
+        try:
+            if kind == 'image':
+                if have + 1 > TM.MAX_MATERIALS:
+                    return jsonify(ok=False, error='تعداد تصویرهای این صنف زیاد است.'), 400
+                jpeg, w, h = TM.prepare_image(data)
+                ids = [media_store.save(db, owner_key(), 'image', 'image/jpeg', name, jpeg, conversation_id=-cid,
+                                        meta={'role': 'material', 'title': name, 'w': w, 'h': h, 'seq': seq + 1})]
+            else:
+                r = TM.render_pdf(data)
+                if have + len(r['items']) > TM.MAX_MATERIALS:
+                    return jsonify(ok=False, error='تعداد صفحه‌های این صنف زیاد است.'), 400
+                ids = []
+                for it in r['items']:
+                    meta = {'role': 'material', 'title': name, 'w': it['w'], 'h': it['h'], 'page': it['page'], 'pages': r['pages'], 'seq': seq + it['page']}
+                    if it['regions']:
+                        meta.update(looked=True, kind='textbook', regions=it['regions'], text=it['text'])
+                    ids.append(media_store.save(db, owner_key(), 'image', 'image/jpeg', '%s-%d' % (name, it['page']), it['jpeg'],
+                                                conversation_id=-cid, meta=meta))
+        except ValueError as e:
+            return jsonify(ok=False, error='این فایل خوانده نشد: %s' % e), 400
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('Class upload failed')
+            return jsonify(ok=False, error='بارگذاری ممکن نشد. دوباره امتحان کنید.'), 500
+        cls.updated_at = _now()
+        db.session.commit()
+        new = [public_material(m) for m in materials(cid) if m['media'] in ids]
+        total_pages = new[0]['pages'] if new and new[0].get('pages') else None
+        return jsonify(ok=True, items=new, pages=total_pages, shown=len(new))
+
+    @app.route('/api/class/<int:cid>/materials')
+    @login_required
+    def class_materials(cid):
+        if not owned(cid):
+            return jsonify(ok=False), 404
+        return jsonify(ok=True, items=[public_material(m) for m in materials(cid)])
+
+    @app.route('/api/class/<int:cid>/look', methods=['POST'])
+    @limiter.limit('40 per hour')
+    @login_required
+    def class_look(cid):
+        """The teacher looks at a picture: what is in it, and named regions it can point at.  Optionally find one more thing."""
+        if not owned(cid):
+            return jsonify(ok=False, error='class not found'), 404
+        p = request.get_json(silent=True) or {}
+        key = _short(p.get('image'), 8)
+        find = _short(p.get('find'), 120)
+        mats = materials(cid)
+        m = next((x for x in mats if x['key'] == key), None)
+        if not m:
+            return jsonify(ok=False, error='there is no picture with this key. Keys: ' + ', '.join(x['key'] for x in mats))
+        meta = dict(m['meta'])
+        if meta.get('looked') and not find:
+            return jsonify(ok=True, **look_view(m, meta))
+        row = media_store.get(db, m['media'])
+        if not row or row['owner_key'] != owner_key():
+            return jsonify(ok=False, error='picture not found')
+        try:
+            import base64
+            shot = TM.grid_overlay(row['data'])
+            taken = {r['id'] for r in (meta.get('regions') or [])}
+            n = 1
+            while 'r%d' % n in taken:
+                n += 1
+            ask = 'Describe this picture.' + ((TM.FIND_NOTE % (find, 'r%d' % n)) if find else '')
+            reply, _sw, reset_ts, model = metered('tutor', TM.LOOK_SYSTEM, [{'role': 'user', 'content': ask}], current_user.id, tier_of(current_user),
+                                                  temperature=.2, image_b64=base64.b64encode(shot).decode('ascii'), image_type='image/jpeg',
+                                                  max_output=3200, level='standard', json_mode=True, intent_label='class/look')
+        except Exception:
+            app.logger.exception('class_look failed')
+            return jsonify(ok=False, error='could not look at the picture now, try again in a moment')
+        if reply is None:
+            return jsonify(ok=False, error='the picture reader is busy or the allowance is used up' if model == 'limited' else 'could not look at the picture now, try again')
+        d = TM.parse_look(reply)
+        if not d:
+            return jsonify(ok=False, error='could not read the picture, try once more')
+        if find:
+            if d['found']:
+                regs = list(meta.get('regions') or []) + [d['found']]
+                meta['regions'] = regs[-TM.MAX_REGIONS - 6:]
+                if not meta.get('looked') and d['regions']:
+                    meta.update(looked=True, kind=d['kind'], summary=d['summary'], text=d['text'], regions=d['regions'] + [d['found']])
+                media_store.update_meta(db, m['media'], owner_key(), meta)
+                return jsonify(ok=True, found=True, region={k: d['found'][k] for k in ('id', 'label', 'what', 'text')})
+            if not meta.get('looked'):
+                meta.update(looked=True, kind=d['kind'], summary=d['summary'], text=d['text'], regions=d['regions'])
+                media_store.update_meta(db, m['media'], owner_key(), meta)
+            return jsonify(ok=True, found=False, note='that is not visible in the picture; say so honestly')
+        meta.update(looked=True, kind=d['kind'], summary=d['summary'], text=d['text'])
+        meta['regions'] = d['regions'] or meta.get('regions') or []
+        media_store.update_meta(db, m['media'], owner_key(), meta)
+        return jsonify(ok=True, **look_view(m, meta))
+
+    def look_view(m, meta):
+        return {'image': m['key'], 'kind': meta.get('kind', ''), 'summary': meta.get('summary', ''), 'text': (meta.get('text') or '')[:900],
+                'regions': [{k: r.get(k, '') for k in ('id', 'label', 'what', 'text')} for r in (meta.get('regions') or [])],
+                'note': 'point at a region with {"op":"point","target":<the id you gave the image op>,"region":"r2"} and circle it with {"op":"mark","style":"circle",...same keys}'}
+
     def voice_context(data):
         """Used by the live voice session: -> (context, instructions)."""
         cls = owned(_int(data.get('class_id'), 0))
@@ -850,6 +1046,9 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         if cls.status == 'paused':
             cls.status = 'active'
             db.session.commit()
+        mt = materials_text(materials(cls.id))
+        if mt:
+            text += '\n\n' + mt
         prompt = VOICE_SYSTEM + '\n\n' + OPS_REF + '\n\n' + text + (VOICE_RESUME if resumed else VOICE_NEW)
         return {'class_id': cls.id}, prompt
     app.config['CLASS_VOICE'] = {'context': voice_context, 'tools': VOICE_TOOLS}

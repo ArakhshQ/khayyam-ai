@@ -15,7 +15,7 @@
     this.playing = false;
     this.lesson = null; this.model = null; this.profile = null;
     this.sceneIdx = 0; this.st = 0; this.clock = 0; this.run = [];
-    this.world = []; this.anims = []; this.ghosts = []; this.particles = []; this.fxs = [];
+    this.world = []; this.anims = []; this.ghosts = []; this.particles = []; this.fxs = []; this.ptr = null;
     this.stack = [];
     this.live = false; this.atEnd = false; this.askDone = {}; this.waitingAsk = -1;
     this.last = 0; this.raf = 0; this.animDirty = false; this.fxBusy = false;
@@ -52,7 +52,7 @@
     var hb = this.hostBox(), cw = hb.w, ch = hb.h, asp = cw / ch, W = 1000;
     var wide = asp >= 1.2;
     var H = wide ? KB.clamp(W / asp, 520, 700) : KB.clamp(W / asp, 820, 1300);
-    var next = { wide: wide, H: Math.round(H), ts: wide ? (cw < 700 ? 1.18 : 1) : 1.3, cw: cw, ch: ch };
+    var next = { wide: wide, H: Math.round(H), ts: wide ? (cw < 700 ? .96 : .78) : 1.04, cw: cw, ch: ch };
     var changed = !this.profile || this.profile.wide !== next.wide || Math.abs(this.profile.H - next.H) > 24 || this.profile.ts !== next.ts;
     this.nextProfile = next;
     return changed;
@@ -260,6 +260,11 @@
           else { self.strokeSeg(ctx, it, st.idx, target, !st.started, p >= 1 && !st.ended); st.idx = target; st.started = true; if (p >= 1) st.ended = true; }
         }
         if (p < 1) pen = KB.pointAt(it.pl, p * it.pl.len);
+      } else if (it.t === 'i') {
+        var qi = instant ? 1 : KB.clamp((t - it.t0) / it.d, 0, 1);
+        if (qi <= 0) return;
+        var ip = self.paintImage(ctx, it, st, qi);
+        if (ip) pen = ip;
       } else if (it.t === 'x') {
         var q = instant ? 1 : KB.clamp((t - it.t0) / it.d, 0, 1);
         if (q <= 0) return;
@@ -270,6 +275,27 @@
     return pen;
   };
   P.finishEl = function (entry) { this.drawEl(entry, 1e6, true); };
+
+  // a picture the student brought: pinned to the board, revealed top to bottom (it waits for the file if it has not loaded yet)
+  P.paintImage = function (ctx, it, st, p) {
+    var self = this, img = KB.getImage(it.src, function () { if (self.model) self.redrawAll(); });
+    if (!img) return null;
+    var prev = st.ih || 0, hh = it.h * p;
+    if (hh <= prev + .5 && p < 1) return null;
+    var cr = it.crop, sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+    if (cr) { sx = img.naturalWidth * cr[0] / 1000; sy = img.naturalHeight * cr[1] / 1000; sw = img.naturalWidth * cr[2] / 1000; sh = img.naturalHeight * cr[3] / 1000; }
+    self.setLogical(ctx);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(it.x - 1, it.y + prev - 1, it.w + 2, hh - prev + 2); ctx.clip();
+    ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 3;
+    ctx.fillStyle = '#f4f1e4'; ctx.fillRect(it.x - 3, it.y - 3, it.w + 6, it.h + 6);     // a little paper border
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.globalAlpha = .97;
+    ctx.drawImage(img, sx, sy, sw, sh, it.x, it.y, it.w, it.h);
+    ctx.restore();
+    st.ih = hh;
+    return p < 1 ? [it.x + it.w * (.15 + .7 * ((hh / 40) % 1)), it.y + hh] : null;
+  };
 
   /* ───────── fx: chalk tip, dust, eraser, pointer ───────── */
   P.dust = function (x, y) {
@@ -302,8 +328,10 @@
       f.draw(c, (now - f.start) / (f.end - f.start)); fl.push(f); any = true;
     }
     this.fxs = fl;
+    var pm = false;
+    if (this.ptr) { c.setTransform(S, 0, 0, S, 0, 0); pm = this.drawPointer(c); if (pm) any = true; }
     this.fxBusy = any;
-    if (!any) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, this.pxW, this.pxH); }
+    if (!any && !this.ptr) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, this.pxW, this.pxH); }
   };
 
   /* ───────── live animations ───────── */
@@ -423,6 +451,7 @@
     var self = this;
     this.world.forEach(function (e) { e.sts = null; e.el.items.forEach(function (it) { it._r = null; }); self.finishEl(e); });
     this.drawAnims();
+    if (this.ptr) this.drawFx(0);
   };
 
   // state at the start of scene i: every earlier scene is applied instantly
@@ -431,7 +460,7 @@
     i = KB.clamp(i, 0, this.model.scenes.length - 1);
     var ink = this.cx.ink, fx = this.cx.fx, an = this.cx.anim;
     [ink, fx, an].forEach(function (c) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, c.canvas.width, c.canvas.height); });
-    this.world = []; this.anims = []; this.fxs = []; this.particles = []; this.pen = null; this.ghosts = []; this.paintBg();
+    this.world = []; this.anims = []; this.fxs = []; this.particles = []; this.pen = null; this.ghosts = []; if (!this.live) this.ptr = null; this.paintBg();
     var alive = [], liveAnims = [], self = this;
     for (var s = 0; s < i; s++) {
       this.model.scenes[s].acts.forEach(function (a) {
@@ -447,6 +476,7 @@
     liveAnims.forEach(function (a) { self.anims.push(self.liveAnim(a, true)); });
     this.sceneIdx = i; this.st = 0; this.atEnd = false; this.waitingAsk = -1; this.startScene();
     if (this.anims.length) this.drawAnims();
+    if (this.ptr) this.drawFx(0);
     this.emit('scene', i, this.model.scenes[i]);
     this.emit('say', this.model.scenes[i].say, i);
     if (autoplay) this.play(); else this.emit('state');
@@ -508,11 +538,51 @@
       this.fxs.push({ start: this.clock, end: this.clock + a.dur, draw: function (c, q) { self.drawEraser(c, bb, q); }, done: null });
     } else if (a.type === 'point') {
       var b = a.box, self2 = this;
+      this.flyPointer(b, a.label);
       this.fxs.push({ start: this.clock, end: this.clock + a.dur, draw: function (c, q) {
-        var rad = 22 + Math.sin(q * Math.PI * 4) * 6, cx = b[0] + b[2] / 2, cy = b[1] + b[3] / 2;
-        c.strokeStyle = 'rgba(244,216,110,' + (.9 * (1 - q * .6)) + ')'; c.lineWidth = 4; c.beginPath(); c.ellipse(cx, cy, b[2] / 2 + rad, b[3] / 2 + rad * .7, 0, 0, TAU); c.stroke();
+        if (q < .3) return;                                    // the ring appears when the pointer arrives
+        var u = (q - .3) / .7, rad = 14 + Math.sin(u * Math.PI * 4) * 5, cx = b[0] + b[2] / 2, cy = b[1] + b[3] / 2;
+        c.strokeStyle = 'rgba(244,216,110,' + (.85 * (1 - u * .7)) + ')'; c.lineWidth = 3.4; c.beginPath(); c.ellipse(cx, cy, b[2] / 2 + rad, b[3] / 2 + rad * .7, 0, 0, TAU); c.stroke();
       } });
     }
+  };
+  /* ───────── the teacher's pointer: flies to a part of the board, like a hand reaching to show you something ───────── */
+  P.flyPointer = function (box, label) {
+    var tx = box[0] + box[2] * .55, ty = box[1] + box[3] * .6, W = this.model ? this.model.W : 1000, H = this.model ? this.model.H : 600;
+    var from = this.ptr ? [this.ptr.tx, this.ptr.ty] : [W * .62, H + 30];
+    var dist = Math.hypot(tx - from[0], ty - from[1]);
+    this.ptr = { fx: from[0], fy: from[1], tx: tx, ty: ty, t0: performance.now() / 1000, fly: KB.clamp(.35 + dist / 900, .45, 1.0), arc: Math.min(110, dist * .22), label: label || '', seen: 0 };
+    this.fxBusy = true; this.animDirty = true; if (!this.raf) this.raf = requestAnimationFrame(this._tick);
+  };
+  P.drawPointer = function (c) {
+    var p = this.ptr; if (!p) return false;
+    var now = performance.now() / 1000, q = KB.clamp((now - p.t0) / p.fly, 0, 1);
+    var ease = function (v) { return v < .5 ? 2 * v * v : 1 - Math.pow(-2 * v + 2, 2) / 2; };
+    var at = function (v) { var e = ease(v); return [p.fx + (p.tx - p.fx) * e, p.fy + (p.ty - p.fy) * e - Math.sin(Math.PI * e) * p.arc]; };
+    var pos = at(q), nxt = at(Math.min(1, q + .03)), flying = q < 1;
+    var ang = Math.atan2(nxt[1] - pos[1], nxt[0] - pos[0]), rest = -2.36;
+    var k = KB.clamp((q - .7) / .3, 0, 1), rot = flying && q < 1 ? ang * (1 - k) + rest * k : rest;
+    if (!flying) { var bob = Math.sin((now - p.t0 - p.fly) * 3.2) * 1.6; pos = [p.tx + bob, p.ty + bob]; }
+    var ps = KB.clamp((this.dpr / this.S) * .62, 1, 2.4);                // the pointer and its label stay readable on a small phone board
+    var sc = (1 + .28 * Math.sin(Math.PI * ease(q))) * ps;
+    c.save(); c.translate(pos[0], pos[1]); c.rotate(rot); c.scale(sc, sc);
+    c.shadowColor = 'rgba(244,216,110,.75)'; c.shadowBlur = 16;
+    c.fillStyle = '#f4d86e'; c.strokeStyle = 'rgba(8,28,22,.9)'; c.lineWidth = 2.2; c.lineJoin = 'round';
+    c.beginPath(); c.moveTo(0, 0); c.lineTo(-30, -13); c.lineTo(-22, 0); c.lineTo(-30, 13); c.closePath(); c.fill(); c.shadowBlur = 0; c.stroke();
+    c.restore();
+    if (flying && Math.random() < .5) this.dust(pos[0], pos[1]);
+    if (!flying && p.label) {
+      var W = this.model ? this.model.W : 1000, H = this.model ? this.model.H : 600, fs = 22 * ps;
+      c.save(); c.font = '700 ' + fs + 'px Vazirmatn, system-ui, sans-serif';
+      var tw = c.measureText(p.label).width + 26 * ps, th = fs + 18 * ps;
+      var bx = KB.clamp(pos[0] + 14 * ps, 6, W - tw - 6), by = KB.clamp(pos[1] + 26 * ps, 6, H - th - 6);
+      var a = KB.clamp((now - p.t0 - p.fly) / .25, 0, 1);
+      c.globalAlpha = a; c.fillStyle = 'rgba(244,216,110,.96)'; c.strokeStyle = 'rgba(8,28,22,.85)'; c.lineWidth = 2;
+      var r = 12; c.beginPath(); c.moveTo(bx + r, by); c.lineTo(bx + tw - r, by); c.quadraticCurveTo(bx + tw, by, bx + tw, by + r); c.lineTo(bx + tw, by + th - r); c.quadraticCurveTo(bx + tw, by + th, bx + tw - r, by + th); c.lineTo(bx + r, by + th); c.quadraticCurveTo(bx, by + th, bx, by + th - r); c.lineTo(bx, by + r); c.quadraticCurveTo(bx, by, bx + r, by); c.closePath(); c.fill(); c.stroke();
+      c.fillStyle = '#10241d'; c.textBaseline = 'middle'; c.textAlign = 'center'; c.direction = KB.RTL_RE.test(p.label) ? 'rtl' : 'ltr';
+      c.fillText(p.label, bx + tw / 2, by + th / 2 + 1); c.restore();
+    }
+    return flying || (p.label && now - p.t0 - p.fly < .3);
   };
   P.eraseBox = function (a) {
     if (a.targets === 'all') return [0, 0, this.model.W, this.model.H];
@@ -544,7 +614,7 @@
   };
   P.finishErase = function (a, r) {
     var self = this;
-    if (a.targets === 'all') { this.world = []; this.anims = []; }
+    if (a.targets === 'all') { this.world = []; this.anims = []; this.ptr = null; }
     else { this.world = this.world.filter(function (e) { return a.targets.indexOf(e.el.id) < 0; }); this.anims = this.anims.filter(function (e) { return a.targets.indexOf(e.id) < 0; }); }
     var ink = this.cx.ink; ink.setTransform(1, 0, 0, 1, 0, 0); ink.clearRect(0, 0, this.pxW, this.pxH);
     this.world.forEach(function (e) { e.sts = null; self.finishEl(e); });

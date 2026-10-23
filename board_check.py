@@ -21,7 +21,7 @@ ICONS = ('apple', 'book', 'sun', 'moon', 'star', 'tree', 'house', 'car', 'ball',
 ZONES = ('title', 'main', 'a', 'b', 'left', 'right', 'first', 'second', 'bottom', 'full', 'center')
 SIZES = ('xl', 'l', 'm', 's', 'xs')
 ANIM_KINDS = ('move', 'fall', 'swing', 'orbit', 'wave', 'grow', 'fill', 'count', 'spin')
-MARK_STYLES = ('underline', 'box', 'circle', 'tick', 'cross', 'arrow')
+MARK_STYLES = ('underline', 'box', 'circle', 'tick', 'cross', 'arrow', 'highlight')
 
 MAX_SAY = 520
 MAX_OPS = 12
@@ -46,8 +46,9 @@ KEYS = {
     'graph': ('fn', 'xmin', 'xmax', 'ymin', 'ymax', 'grid', 'points'),
     'table': ('rows', 'header'),
     'dots': ('n', 'cols'),
-    'mark': ('target', 'style'),
-    'point': ('target',),
+    'mark': ('target', 'style', 'region', 'spot', 'area', 'image'),
+    'point': ('target', 'region', 'spot', 'area', 'label', 'image'),
+    'image': ('image', 'crop'),
     'erase': ('target',),
     'wait': ('s',),
     'anim': ('kind', 'icon', 'shape', 'dur', 'loop', 'size', 'from', 'to', 'bodies', 'x', 'from_y', 'to_y',
@@ -212,9 +213,33 @@ def _by_local_name(name, known):
     return best
 
 
+def _spot_box(v):
+    """A point [x, y] in thousandths of a picture -> a small box around it."""
+    p = _pair(v, 0, 1000)
+    if not p:
+        return None
+    x, y = min(955, max(0, p[0] - 45)), min(955, max(0, p[1] - 45))
+    return [int(x), int(y), 90, 90]
+
+
+def _pic_box(v):
+    if isinstance(v, (list, tuple)) and len(v) == 4:
+        try:
+            x, y, w, h = [float(t) for t in v]
+        except (TypeError, ValueError):
+            return None
+        if any(t != t for t in (x, y, w, h)):
+            return None
+        x, y = min(992, max(0, x)), min(992, max(0, y))
+        w, h = min(1000 - x, max(8, w)), min(1000 - y, max(8, h))
+        return [int(x), int(y), int(w), int(h)] if w >= 4 and h >= 4 else None
+    return None
+
+
 def _clean_op(raw, mapping, known):
     if not isinstance(raw, dict):
         return None
+    images = mapping.get('images') or {}
     op = _str(raw.get('op'), 14).lower()
     if op == 'pause':
         op = 'wait'
@@ -246,6 +271,35 @@ def _clean_op(raw, mapping, known):
     w = _num(raw.get('width'), 1.5, 8)
     if w is not None and op in ('line', 'arrow', 'rect', 'circle', 'ellipse', 'poly', 'path', 'icon'):
         out['width'] = w
+
+    if op == 'image':
+        key = raw.get('image')
+        info = images.get(key) if isinstance(key, str) else None
+        if not info:
+            return None
+        if 'id' not in out:
+            out['id'] = mapping['prefix'] + 'img_' + key
+            mapping['own'][key] = out['id']
+        mapping['imgof'][out['id']] = key
+        out['image'] = key
+        out['src'] = '/media/' + info['media']
+        aspect = (info['w'] / float(info['h'])) if info.get('h') else 1.0
+        crop = raw.get('crop')
+        box = None
+        if isinstance(crop, str):
+            box = (info.get('regions') or {}).get(crop)
+        elif crop is not None:
+            box = _pic_box(crop)
+        if box:
+            out['crop'] = list(box)
+            aspect = (box[2] * info['w']) / float(max(1, box[3] * info['h']))
+        out['aspect'] = round(min(6.0, max(.17, aspect)), 4)
+        sl = raw.get('slot')
+        if isinstance(sl, (int, float)) and not isinstance(sl, bool) and 1 <= sl <= 6:
+            out['slot'] = int(sl)
+        if raw.get('big') is True or (raw.get('big') is not False and 'slot' not in out and 'crop' not in out):
+            out['big'] = True
+        return out
 
     if op not in ('text', 'math', 'mark', 'point', 'erase', 'wait'):
         sl = raw.get('slot')
@@ -392,6 +446,9 @@ def _clean_op(raw, mapping, known):
             out['target'] = 'all'
         else:
             lst = tg if isinstance(tg, list) else [tg]
+            if tg is None and op in ('mark', 'point') and isinstance(g('image'), str):     # "that picture" instead of an element id
+                latest = [i for i, k in mapping['imgof'].items() if k == g('image') and (i in known or i in mapping['own'].values())]
+                lst = [latest[-1]] if latest else []
             res = []
             for t in lst[:8]:
                 if not isinstance(t, str):
@@ -406,6 +463,21 @@ def _clean_op(raw, mapping, known):
                     return None
             else:
                 out['target'] = res[0] if (len(res) == 1 and op != 'erase') else res
+        if op in ('mark', 'point') and out.get('target') and isinstance(out['target'], str) and out['target'] in mapping['imgof']:
+            info = images.get(mapping['imgof'][out['target']]) or {}
+            rb = None
+            if isinstance(g('region'), str):
+                rb = (info.get('regions') or {}).get(g('region'))
+            if not rb and g('area') is not None:
+                rb = _pic_box(g('area'))
+            if not rb and g('spot') is not None:
+                rb = _spot_box(g('spot'))
+            if rb:
+                out['rbox'] = list(rb)
+            elif g('region') is not None or g('area') is not None or g('spot') is not None:
+                return None                    # it named a part of the picture that does not exist: better nothing than a wrong circle
+        if op == 'point' and _str(g('label'), 40):
+            out['label'] = _str(g('label'), 40)
         if op == 'mark':
             out['style'] = g('style') if g('style') in MARK_STYLES else 'underline'
     elif op == 'wait':
@@ -451,14 +523,15 @@ def _clean_op(raw, mapping, known):
     return out
 
 
-def clean_beat(raw, prefix='b', known_ids=()):
-    """Returns (beat or None, ids_defined_by_this_beat).  `known_ids` = ids still valid from earlier beats."""
+def clean_beat(raw, prefix='b', known_ids=(), images=None, image_of=None):
+    """Returns (beat or None, ids_defined_by_this_beat).  `known_ids` = ids still valid from earlier beats.
+    `images` = the pictures of the class {key: {media, w, h, regions:{rid: box}}}; `image_of` = {element id: key} for pictures still on the board."""
     if not isinstance(raw, dict):
         return None, set()
     say = _str(raw.get('say'), MAX_SAY)
     if len(say) < 2:
         return None, set()
-    mapping = {'prefix': prefix, 'own': {}}
+    mapping = {'prefix': prefix, 'own': {}, 'images': images or {}, 'imgof': dict(image_of or {})}
     ops = []
     for r in (raw.get('do') if isinstance(raw.get('do'), list) else [])[:MAX_OPS]:
         # point/mark/erase may refer to items defined earlier in the same beat, so clean in order
@@ -494,6 +567,25 @@ def live_ids(beats):
     return ids
 
 
+def live_image_map(beats):
+    """{element id: picture key} for the pictures still on the board after the last clear."""
+    m = {}
+    for b in beats:
+        if b.get('clear'):
+            m = {}
+        for op in b.get('do', []):
+            if op.get('op') == 'erase':
+                tg = op.get('target')
+                if tg == 'all':
+                    m = {}
+                else:
+                    for t in (tg if isinstance(tg, list) else [tg]):
+                        m.pop(t, None)
+            elif op.get('op') == 'image' and op.get('id'):
+                m[op['id']] = op.get('image')
+    return m
+
+
 def describe_op(op):
     k = op.get('op')
     d = _describe(op)
@@ -518,6 +610,8 @@ def _describe(op):
         return 'جدول %d ردیف' % len(op.get('rows') or [])
     if k == 'icon':
         return 'نقش ' + op.get('name', '')
+    if k == 'image':
+        return 'تصویر ' + str(op.get('image', '')) + (' (بخشی از آن)' if op.get('crop') else '')
     if k == 'anim':
         return 'انیمیشن ' + op.get('kind', '')
     return k or ''

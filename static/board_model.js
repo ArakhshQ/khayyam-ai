@@ -9,7 +9,7 @@
   var KB = global.KB;
   var W = 1000;
 
-  var SIZES = { xl: 58, l: 46, m: 37, s: 30, xs: 25 };
+  var SIZES = { xl: 58, l: 46, m: 37, s: 30, xs: 25 };   // base sizes; Board.chooseProfile scales them (ts) so a big board holds more
   var ZONES = {
     wide: { title: [6, 3, 88, 13], main: [6, 18, 88, 62], b: [6, 18, 43, 62], a: [51, 18, 43, 62], bottom: [6, 81, 88, 14], full: [4, 4, 92, 92], center: [22, 22, 56, 56] },
     tall: { title: [6, 2, 88, 10], main: [6, 14, 88, 70], a: [6, 14, 88, 34], b: [6, 50, 88, 34], bottom: [6, 86, 88, 11], full: [4, 3, 92, 94], center: [10, 20, 80, 60] }
@@ -28,6 +28,20 @@
     return mctx.measureText(str).width;
   }
   KB.measure = measure;
+
+  // pictures the student brought: loaded once, shared by every rebuild of the model
+  var imgs = {};
+  KB.getImage = function (src, cb) {
+    var e = imgs[src];
+    if (!e) {
+      e = imgs[src] = { img: new Image(), ok: false, bad: false, cbs: [] };
+      e.img.onload = function () { e.ok = true; e.cbs.splice(0).forEach(function (f) { try { f(); } catch (err) { } }); };
+      e.img.onerror = function () { e.bad = true; e.cbs.length = 0; };
+      e.img.src = src;
+    }
+    if (!e.ok && cb && !e.bad) e.cbs.push(cb);
+    return e.ok ? e.img : null;
+  };
 
   function num(v, d, lo, hi) { v = +v; if (!isFinite(v)) v = d; return KB.clamp(v, lo == null ? -1e4 : lo, hi == null ? 1e4 : hi); }
   function str(v, n) { return typeof v === 'string' ? v.slice(0, n || 400) : (v == null ? '' : String(v).slice(0, n || 400)); }
@@ -386,7 +400,15 @@
     function targetBox(a) {
       if (typeof a.target === 'string' && ids[a.target] && ids[a.target].bbox) {
         if (!alive[a.target]) { gone.push(a.target); return null; }
-        return ids[a.target].bbox;
+        var tg = ids[a.target];
+        if (tg.img && Array.isArray(a.rbox) && a.rbox.length === 4) {          // a named part of a picture (thousandths of the picture)
+          var im = tg.img, rb = a.rbox.map(Number), cr = im.crop;
+          if (cr) { rb = [(rb[0] - cr[0]) / cr[2] * 1000, (rb[1] - cr[1]) / cr[3] * 1000, rb[2] / cr[2] * 1000, rb[3] / cr[3] * 1000]; }
+          var x0 = KB.clamp(rb[0], 0, 1000), y0 = KB.clamp(rb[1], 0, 1000), x1 = KB.clamp(rb[0] + rb[2], 0, 1000), y1 = KB.clamp(rb[1] + rb[3], 0, 1000);
+          if (x1 - x0 < 4 || y1 - y0 < 4) return tg.bbox;
+          return [im.x + im.w * x0 / 1000, im.y + im.h * y0 / 1000, im.w * (x1 - x0) / 1000, im.h * (y1 - y0) / 1000];
+        }
+        return tg.bbox;
       }
       if (Array.isArray(a.at)) return [a.at[0] * W / 100 - 30, a.at[1] * P.H / 100 - 30, 60, 60];
       return null;
@@ -397,6 +419,10 @@
       var x = tb[0], y = tb[1], w = tb[2], h = tb[3], p = 8;
       if (style === 'box') strokesOf(el, KB.rectLines(x - p, y - p, w + 2 * p, h + 2 * p, sd), o);
       else if (style === 'circle') strokesOf(el, [KB.ellipse(x + w / 2, y + h / 2, w / 2 + 18, h / 2 + 12, sd, 0, 6.5)], o);
+      else if (style === 'highlight') {
+        var hp = 3, hy = y - hp, hh = h + 2 * hp, hx = x - hp, hw = w + 2 * hp, hk = 0;
+        for (var ly = hy + 6; ly < hy + hh - 2; ly += 9, hk++) strokesOf(el, [KB.line(hx + 2, ly, hx + hw - 2, ly + (hk % 2 ? 1.5 : -1.5), sd + hk, .6)], { color: KB.color(a.color || 'yellow'), w: 7, speed: 900 });
+      }
       else if (style === 'tick') strokesOf(el, [KB.wobble([[x + w + 14, y + h * .5], [x + w + 28, y + h * .5 + 16], [x + w + 54, y + h * .5 - 18]], sd, .5, 4)], { color: KB.color('green'), w: 5 });
       else if (style === 'cross') strokesOf(el, [KB.line(x + w + 14, y + h * .5 - 14, x + w + 42, y + h * .5 + 14, sd), KB.line(x + w + 42, y + h * .5 - 14, x + w + 14, y + h * .5 + 14, sd + 1)], { color: KB.color('pink'), w: 5 });
       else if (style === 'arrow') {
@@ -404,6 +430,26 @@
         strokesOf(el, [KB.line(ax, ay, x + w + 10, y + h / 2, sd)], o); strokesOf(el, KB.arrowHead(ax, ay, x + w + 10, y + h / 2, sd + 1, 16), o);
       } else { var uy = y + h - 2; strokesOf(el, [KB.line(x - 4, uy, x + w + 4, uy, sd, 1.2), KB.line(x, uy + 7, x + w * .8, uy + 6, sd + 5, 1)], o); }
       return { el: el, noBox: true };
+    }
+
+    /* ----- a picture or document page the student brought ----- */
+    function buildImage(a) {
+      var src = str(a.src, 200);
+      if (src.indexOf('/media/') !== 0) { warnings.push('bad image'); return null; }
+      var b = resolveBox(a, 'b'), el = mkEl(a, 'image', 'p'), sd = el.seed, m = 12;
+      var asp = num(a.aspect, 1.3, .17, 6), aw = Math.max(40, b[2] - 2 * m), ah = Math.max(40, b[3] - 2 * m);
+      var w = aw, h = w / asp;
+      if (h > ah) { h = ah; w = h * asp; }
+      var x = b[0] + (b[2] - w) / 2, y = b[1] + (b[3] - h) / 2;
+      var crop = Array.isArray(a.crop) && a.crop.length === 4 ? a.crop.map(Number) : null;
+      if (crop && crop.some(function (v) { return !isFinite(v); })) crop = null;
+      el.img = { key: str(a.image, 8), src: src, x: x, y: y, w: w, h: h, crop: crop };
+      el.items.push({ t: 'i', src: src, x: x, y: y, w: w, h: h, crop: crop, t0: 0, d: 1.2 });
+      el.dur = 1.2;
+      strokesOf(el, KB.rectLines(x - 6, y - 6, w + 12, h + 12, sd), { color: KB.color('white'), w: 3.2, speed: 800 });
+      el.bbox = [x, y, w, h];
+      KB.getImage(src);
+      return { el: el };
     }
 
     /* ----- animations (drawn live on their own layer) ----- */
@@ -456,7 +502,7 @@
     /* ───────── scenes ───────── */
     function speechSecs(s) { return Math.max(1.8, str(s, 1200).length / SPEECH_CPS); }
     var BUILD = { text: buildText, math: buildMath, line: buildShape, arrow: buildShape, rect: buildShape, circle: buildShape, ellipse: buildShape, poly: buildShape, path: buildShape, icon: buildShape,
-                  pie: buildPie, bars: buildBars, numberline: buildNumberline, graph: buildGraph, table: buildTable, dots: buildDots, mark: buildMark, anim: buildAnim };
+                  pie: buildPie, bars: buildBars, numberline: buildNumberline, graph: buildGraph, table: buildTable, dots: buildDots, mark: buildMark, anim: buildAnim, image: buildImage };
     var scenes = Array.isArray(lesson.scenes) ? lesson.scenes.slice(0, 800) : [];
 
     /* ----- automatic layout (live class): text stacks in column "a", pictures go into slots of column "b" ----- */
@@ -482,6 +528,14 @@
         return true;
       }
       if (op === 'numberline' && (!zn || zn === 'bottom')) { a.zone = 'bottom'; return true; }
+      if (op === 'image' && a.big === true) {                  // a page or photo to look at: the whole left column (the whole board on a phone)
+        var oi = occ.b = occ.b || { cells: [], big: false };
+        if (oi.big || oi.cells.some(Boolean)) return false;
+        oi.big = true; beat.bigTaken = true; beat.slot = 'b'; a.zone = 'b';
+        a.box = P.wide ? [2, 4, 48, 92] : [2, 2, 96, 96];
+        if (!P.wide) cursors.a = pct(Z.a, P)[3];
+        return true;
+      }
       if (zn === 'bottom' || zn === 'title') return true;
       var big = a.big === true || BIGOP[op] || (op === 'anim' && BIGANIM[a.kind]) || zn === 'main' || zn === 'center' || zn === 'full';
       var o = occ.b = occ.b || { cells: [], big: false };
@@ -519,6 +573,9 @@
         S.acts.push({ type: 'erase', targets: 'all', natural: 1.1 });
       }
       var ops = (Array.isArray(sc.do) ? sc.do : []).slice(0, 16), full = false;
+      if (auto_ && !S.clear && !again && ops.some(function (o) { return o && o.op === 'image' && o.big === true; }) && Object.keys(alive).length) {
+        wipeAll(); S.wiped = true; S.acts.push({ type: 'erase', targets: 'all', natural: 1.1 });         // a big picture needs a clean board
+      }
       for (var oi = 0; oi < ops.length && !full; oi++) {
         var a0 = ops[oi];
         if (!a0 || typeof a0 !== 'object') continue;
@@ -532,7 +589,7 @@
         }
         if (op === 'wait' || op === 'pause') { S.acts.push({ type: 'wait', natural: num(a.s, 1, .2, 6) }); continue; }
         if (op === 'point') {
-          var tb = targetBox(a); if (tb) S.acts.push({ type: 'point', box: tb, natural: 1.6 });
+          var tb = targetBox(a); if (tb) S.acts.push({ type: 'point', box: tb, natural: a.label ? 2.6 : 2.2, label: str(a.label, 40) });
           else if (typeof a.target === 'string') S.dropped.push('point: ' + a.target + ' is no longer on the board');
           continue;
         }
@@ -558,7 +615,7 @@
           S.acts.push({ type: 'anim', anim: res.anim, natural: Math.min(res.anim.dur, 6) });
         } else {
           contain(res.el);
-          res.el.zone = zoneName(a) || 'a'; res.el.slot = TEXTY[op] ? '' : beat.slot; res.el.label = str(a.t != null ? a.t : (a.m != null ? a.m : (a.name || op)), 40);
+          res.el.zone = zoneName(a) || 'a'; res.el.slot = TEXTY[op] ? '' : beat.slot; res.el.label = str(a.t != null ? a.t : (a.m != null ? a.m : (a.name || a.image || op)), 40);
           if (!res.noBox) alive[res.el.id] = true;
           S.acts.push({ type: 'draw', el: res.el, natural: Math.max(.3, res.el.dur) });
         }

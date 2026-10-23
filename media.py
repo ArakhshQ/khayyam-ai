@@ -95,6 +95,29 @@ def recent(db, owner, conversation_id, limit=6):
     return out
 
 
+def list_for(db, owner, conversation_id, limit=40):
+    """All visible files of one conversation (or one tutor class: its id, negated), oldest first, with their meta."""
+    rows = db.session.execute(text('''SELECT id, kind, name, mime, meta, created_at FROM media_files
+        WHERE owner_key=:o AND conversation_id=:c AND hidden=0 ORDER BY created_at ASC, id ASC LIMIT :n'''),
+        {'o': owner, 'c': conversation_id, 'n': int(limit)}).mappings().all()
+    out = []
+    for r in rows:
+        try:
+            meta = json.loads(r['meta']) if r['meta'] else {}
+        except ValueError:
+            meta = {}
+        out.append({'id': r['id'], 'kind': r['kind'], 'name': r['name'], 'mime': r['mime'], 'meta': meta})
+    return out
+
+
+def update_meta(db, mid, owner, meta):
+    if not valid_id(mid):
+        return
+    db.session.execute(text('UPDATE media_files SET meta=:m WHERE id=:i AND owner_key=:o'),
+                       {'m': json.dumps(meta, ensure_ascii=False), 'i': mid, 'o': owner})
+    db.session.commit()
+
+
 def attach_to_conversation(db, ids, owner, conversation_id):
     for mid in ids:
         if valid_id(mid):
@@ -113,6 +136,10 @@ def cleanup_media(db, days=None):
     """Delete files older than MEDIA_RETENTION_DAYS (default 60). Returns how many were removed."""
     days = int(days or os.getenv('MEDIA_RETENTION_DAYS', '60'))
     cutoff = datetime.utcnow() - timedelta(days=days)
-    res = db.session.execute(text('DELETE FROM media_files WHERE created_at < :c'), {'c': cutoff})
+    # pictures a student brought to a tutor class (conversation_id is the class id, negated) live much longer: a class is resumed weeks later
+    class_cutoff = datetime.utcnow() - timedelta(days=int(os.getenv('CLASS_MEDIA_RETENTION_DAYS', '365')))
+    res = db.session.execute(text('''DELETE FROM media_files WHERE
+        ((conversation_id IS NULL OR conversation_id >= 0) AND created_at < :c) OR (conversation_id < 0 AND created_at < :k)'''),
+        {'c': cutoff, 'k': class_cutoff})
     db.session.commit()
     return res.rowcount or 0

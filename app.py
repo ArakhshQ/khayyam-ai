@@ -197,7 +197,7 @@ PLAN_CONFIG = {
 
 PLAN_NAMES = {
     'free':    'رایگان',
-    'basic':   'پایه — $12',
+    'basic':   'ابتدایی — $12',
     'pro':     'حرفه‌ای — $25',
     'premium': 'پریمیوم — $49',
     'tutor_pro': 'استاد حرفه‌ای — $69',
@@ -623,11 +623,39 @@ def load_examples():
     return _kb_cached('examples', _load_examples_db)
 
 
+
+# Words the site itself decided on. They are added once to the saved dictionary (the admin can still delete them later).
+BUILTIN_DIALECT = [
+    {'id': 'basic-ibtidayi', 'correct': 'ابتدایی', 'wrong': 'پایه',
+     'note': 'Basic / elementary level: «پایه» is not Dari for this meaning, say «ابتدایی»'},
+]
+
+
+def _seed_dialect(data):
+    """Add the built-in Dari words to a dictionary saved earlier (only once per word, so admin deletions stick)."""
+    try:
+        done = data.setdefault('_seeded', [])
+        items = data.setdefault('dari_dialect', [])
+        changed = False
+        for w in BUILTIN_DIALECT:
+            if w['id'] in done:
+                continue
+            done.append(w['id'])
+            if not any(i.get('correct') == w['correct'] for i in items):
+                items.append({k: w[k] for k in ('correct', 'wrong', 'note')})
+            changed = True
+        if changed:
+            save_knowledge(data)
+    except Exception as e:
+        print(f"seed dialect error: {e}")
+    return data
+
 def _load_knowledge_db():
     try:
         row = SiteConfig.query.filter_by(key='knowledge').first()
         if row:
-            return json.loads(row.value)
+            data = json.loads(row.value)
+            return _seed_dialect(data)
         with open(KNOWLEDGE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             save_knowledge(data)
@@ -1298,7 +1326,7 @@ TUTOR_PLANS = ('free', 'tutor_pro')
 
 
 def plan_label(plan):
-    """'پایه — $12' -> 'پایه'."""
+    """'ابتدایی — $12' -> 'ابتدایی'."""
     return PLAN_NAMES.get(plan, plan).split(' — ')[0]
 
 
@@ -2726,10 +2754,10 @@ CURRICULUM = {
                 'title': 'مبتدی',
                 'topics': [
                     {'key': 'math_1_1', 'title': 'اعداد و شمارش', 'desc': 'آشنایی با اعداد ۱ تا ۱۰۰۰'},
-                    {'key': 'math_1_2', 'title': 'جمع پایه', 'desc': 'جمع اعداد یک و دو رقمی'},
-                    {'key': 'math_1_3', 'title': 'تفریق پایه', 'desc': 'تفریق اعداد یک و دو رقمی'},
+                    {'key': 'math_1_2', 'title': 'جمع ابتدایی', 'desc': 'جمع اعداد یک و دو رقمی'},
+                    {'key': 'math_1_3', 'title': 'تفریق ابتدایی', 'desc': 'تفریق اعداد یک و دو رقمی'},
                     {'key': 'math_1_4', 'title': 'اشکال هندسی', 'desc': 'مثلث، مربع، دایره و مستطیل'},
-                    {'key': 'math_1_5', 'title': 'اندازه‌گیری پایه', 'desc': 'طول، وزن و زمان'},
+                    {'key': 'math_1_5', 'title': 'اندازه‌گیری ابتدایی', 'desc': 'طول، وزن و زمان'},
                 ]
             },
             2: {
@@ -2749,8 +2777,8 @@ CURRICULUM = {
                     {'key': 'math_3_1', 'title': 'معادلات خطی', 'desc': 'حل معادلات با یک مجهول'},
                     {'key': 'math_3_2', 'title': 'نسبت و تناسب', 'desc': 'نسبت، تناسب و کاربرد'},
                     {'key': 'math_3_3', 'title': 'درصد', 'desc': 'محاسبه درصد و کاربرد'},
-                    {'key': 'math_3_4', 'title': 'آمار پایه', 'desc': 'میانگین، میانه و نما'},
-                    {'key': 'math_3_5', 'title': 'احتمال پایه', 'desc': 'مفهوم احتمال و محاسبه'},
+                    {'key': 'math_3_4', 'title': 'آمار ابتدایی', 'desc': 'میانگین، میانه و نما'},
+                    {'key': 'math_3_5', 'title': 'احتمال ابتدایی', 'desc': 'مفهوم احتمال و محاسبه'},
                     {'key': 'math_3_6', 'title': 'هندسه متوسط', 'desc': 'قضیه فیثاغورس و زوایا'},
                 ]
             },
@@ -2760,7 +2788,7 @@ CURRICULUM = {
                     {'key': 'math_4_1', 'title': 'جبر', 'desc': 'معادلات، نامعادلات و دستگاه'},
                     {'key': 'math_4_2', 'title': 'توابع', 'desc': 'تابع خطی، درجه دوم و نمودار'},
                     {'key': 'math_4_3', 'title': 'مثلثات', 'desc': 'sin, cos, tan و کاربرد'},
-                    {'key': 'math_4_4', 'title': 'حساب دیفرانسیل مقدماتی', 'desc': 'مشتق و انتگرال پایه'},
+                    {'key': 'math_4_4', 'title': 'حساب دیفرانسیل مقدماتی', 'desc': 'مشتق و انتگرال ابتدایی'},
                     {'key': 'math_4_5', 'title': 'آمار پیشرفته', 'desc': 'انحراف معیار، توزیع نرمال'},
                 ]
             }
@@ -2774,7 +2802,7 @@ CURRICULUM = {
                 'title': 'مبتدی',
                 'topics': [
                     {'key': 'sci_1_1', 'title': 'موجودات زنده', 'desc': 'حیوانات، گیاهان و تفاوت آن‌ها'},
-                    {'key': 'sci_1_2', 'title': 'بدن انسان پایه', 'desc': 'اعضای اصلی بدن'},
+                    {'key': 'sci_1_2', 'title': 'بدن انسان ابتدایی', 'desc': 'اعضای اصلی بدن'},
                     {'key': 'sci_1_3', 'title': 'گیاهان', 'desc': 'رشد گیاه، فتوسنتز ساده'},
                     {'key': 'sci_1_4', 'title': 'زمین و آسمان', 'desc': 'روز و شب، فصول، ستارگان'},
                     {'key': 'sci_1_5', 'title': 'مواد', 'desc': 'جامد، مایع و گاز'},
@@ -2793,8 +2821,8 @@ CURRICULUM = {
             3: {
                 'title': 'متوسط',
                 'topics': [
-                    {'key': 'sci_3_1', 'title': 'شیمی پایه', 'desc': 'اتم، مولکول، مواد و تغییرات'},
-                    {'key': 'sci_3_2', 'title': 'برق پایه', 'desc': 'مدار، ولت، آمپر'},
+                    {'key': 'sci_3_1', 'title': 'شیمی ابتدایی', 'desc': 'اتم، مولکول، مواد و تغییرات'},
+                    {'key': 'sci_3_2', 'title': 'برق ابتدایی', 'desc': 'مدار، ولت، آمپر'},
                     {'key': 'sci_3_3', 'title': 'موج و صدا', 'desc': 'موج، فرکانس، صدا و نور'},
                     {'key': 'sci_3_4', 'title': 'وراثت', 'desc': 'ژن، DNA و وراثت'},
                     {'key': 'sci_3_5', 'title': 'منظومه شمسی', 'desc': 'سیارات، ماه و ستارگان'},
@@ -2820,18 +2848,18 @@ CURRICULUM = {
                 'title': 'مبتدی',
                 'topics': [
                     {'key': 'dari_1_1', 'title': 'الفبا و حروف', 'desc': 'حروف دری و تلفظ'},
-                    {'key': 'dari_1_2', 'title': 'کلمات پایه', 'desc': 'واژگان روزمره'},
-                    {'key': 'dari_1_3', 'title': 'جملات ساده', 'desc': 'ساختار جمله پایه'},
+                    {'key': 'dari_1_2', 'title': 'کلمات ابتدایی', 'desc': 'واژگان روزمره'},
+                    {'key': 'dari_1_3', 'title': 'جملات ساده', 'desc': 'ساختار جمله ابتدایی'},
                     {'key': 'dari_1_4', 'title': 'خواندن متون ساده', 'desc': 'متون کوتاه و درک'},
                 ]
             },
             2: {
                 'title': 'ابتدایی',
                 'topics': [
-                    {'key': 'dari_2_1', 'title': 'دستور زبان پایه', 'desc': 'اسم، فعل، صفت'},
+                    {'key': 'dari_2_1', 'title': 'دستور زبان ابتدایی', 'desc': 'اسم، فعل، صفت'},
                     {'key': 'dari_2_2', 'title': 'فعل‌ها', 'desc': 'فعل حال، گذشته، آینده'},
                     {'key': 'dari_2_3', 'title': 'صفت‌ها و قیدها', 'desc': 'توصیف و تعریف'},
-                    {'key': 'dari_2_4', 'title': 'نوشتن پایه', 'desc': 'انشای ساده'},
+                    {'key': 'dari_2_4', 'title': 'نوشتن ابتدایی', 'desc': 'انشای ساده'},
                     {'key': 'dari_2_5', 'title': 'درک مطلب', 'desc': 'خواندن و پاسخ سوال'},
                 ]
             },
@@ -2864,7 +2892,7 @@ CURRICULUM = {
                 'title': 'مبتدی',
                 'topics': [
                     {'key': 'eng_1_1', 'title': 'الفبای انگلیسی', 'desc': 'حروف A-Z و تلفظ'},
-                    {'key': 'eng_1_2', 'title': 'کلمات روزمره', 'desc': 'واژگان پایه انگلیسی'},
+                    {'key': 'eng_1_2', 'title': 'کلمات روزمره', 'desc': 'واژگان ابتدایی انگلیسی'},
                     {'key': 'eng_1_3', 'title': 'سلام و احوال‌پرسی', 'desc': 'Hello, How are you'},
                     {'key': 'eng_1_4', 'title': 'اعداد و رنگ‌ها', 'desc': 'Numbers 1-100, Colors'},
                     {'key': 'eng_1_5', 'title': 'جملات ساده', 'desc': 'I am, You are, This is'},
@@ -2873,7 +2901,7 @@ CURRICULUM = {
             2: {
                 'title': 'ابتدایی',
                 'topics': [
-                    {'key': 'eng_2_1', 'title': 'گرامر پایه', 'desc': 'Nouns, Verbs, Adjectives'},
+                    {'key': 'eng_2_1', 'title': 'گرامر ابتدایی', 'desc': 'Nouns, Verbs, Adjectives'},
                     {'key': 'eng_2_2', 'title': 'فعل‌های اساسی', 'desc': 'To be, To have, To do'},
                     {'key': 'eng_2_3', 'title': 'زمان حال', 'desc': 'Present Simple and Continuous'},
                     {'key': 'eng_2_4', 'title': 'زمان گذشته', 'desc': 'Past Simple and Regular verbs'},
@@ -2887,7 +2915,7 @@ CURRICULUM = {
                     {'key': 'eng_3_2', 'title': 'فعل‌های کمکی', 'desc': 'Can, Could, Should, Must'},
                     {'key': 'eng_3_3', 'title': 'پرسش و جواب', 'desc': 'WH questions and answers'},
                     {'key': 'eng_3_4', 'title': 'خواندن متون', 'desc': 'Reading comprehension'},
-                    {'key': 'eng_3_5', 'title': 'نوشتن پایه', 'desc': 'Paragraphs and short essays'},
+                    {'key': 'eng_3_5', 'title': 'نوشتن ابتدایی', 'desc': 'Paragraphs and short essays'},
                 ]
             },
             4: {
@@ -2910,7 +2938,7 @@ CURRICULUM = {
                 'title': 'مبتدی',
                 'topics': [
                     {'key': 'comp_1_1', 'title': 'آشنایی با کمپیوتر', 'desc': 'CPU، RAM، حافظه'},
-                    {'key': 'comp_1_2', 'title': 'اینترنت پایه', 'desc': 'مرورگر، جستجو، ایمیل'},
+                    {'key': 'comp_1_2', 'title': 'اینترنت ابتدایی', 'desc': 'مرورگر، جستجو، ایمیل'},
                     {'key': 'comp_1_3', 'title': 'تایپ و کیبورد', 'desc': 'تایپ سریع و میانبرها'},
                     {'key': 'comp_1_4', 'title': 'مایکروسافت ورد', 'desc': 'ایجاد و فرمت‌بندی سند'},
                     {'key': 'comp_1_5', 'title': 'مایکروسافت اکسل', 'desc': 'جداول و فرمول‌های ساده'},
@@ -2932,7 +2960,7 @@ CURRICULUM = {
                     {'key': 'comp_3_1', 'title': 'HTML و CSS کامل', 'desc': 'صفحه وب کامل'},
                     {'key': 'comp_3_2', 'title': 'Python مقدماتی', 'desc': 'متغیر، حلقه، شرط'},
                     {'key': 'comp_3_3', 'title': 'منطق برنامه‌نویسی', 'desc': 'الگوریتم و pseudocode'},
-                    {'key': 'comp_3_4', 'title': 'پایگاه داده پایه', 'desc': 'SQL و جداول داده'},
+                    {'key': 'comp_3_4', 'title': 'پایگاه داده ابتدایی', 'desc': 'SQL و جداول داده'},
                     {'key': 'comp_3_5', 'title': 'طراحی وب', 'desc': 'responsive design'},
                 ]
             },
@@ -2940,7 +2968,7 @@ CURRICULUM = {
                 'title': 'پیشرفته',
                 'topics': [
                     {'key': 'comp_4_1', 'title': 'Python پیشرفته', 'desc': 'تابع، کلاس، کتابخانه'},
-                    {'key': 'comp_4_2', 'title': 'JavaScript پایه', 'desc': 'DOM، رویداد، AJAX'},
+                    {'key': 'comp_4_2', 'title': 'JavaScript ابتدایی', 'desc': 'DOM، رویداد، AJAX'},
                     {'key': 'comp_4_3', 'title': 'پروژه‌های وب', 'desc': 'ساخت وب‌سایت کامل'},
                     {'key': 'comp_4_4', 'title': 'هوش مصنوعی مقدماتی', 'desc': 'ML، chatbot، کاربرد AI'},
                     {'key': 'comp_4_5', 'title': 'امنیت سایبری', 'desc': 'هک اخلاقی، آسیب‌پذیری'},

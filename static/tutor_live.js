@@ -2,12 +2,18 @@
    The teacher talks, and calls tools while talking: "board" (write or draw), "progress" (plan notes) and "end_class".
    This file only manages the voice connection and the tool calls; tutor.js owns the page.
 
-   Timing: the model writes its words faster than they are spoken, so a drawing that is called after N spoken characters is shown
-   when the speech has reached about N characters, not at once. If the student interrupts, everything waiting is shown immediately,
-   so the board always matches what the server has saved. */
+   Timing (draw while speaking): the model writes its words much faster than they are spoken, so the page keeps a "speech clock":
+   the moment each response's audio starts, and about how long it lasts. A drawing called after N spoken characters starts a little
+   before the speech reaches N (so the chalk moves while the word is being said). A drawing called before the teacher has said
+   anything is held until the next words start, then drawn along with them. If the student interrupts, everything waiting is shown
+   immediately, so the board always matches what the server has saved. */
 (function (global) {
   'use strict';
   var CPS = 13;                       // spoken characters per second (Dari), used only to line drawings up with speech
+  var LEAD = 16;                      // a drawing starts about this many characters (a little over a second) before the words that explain it end
+  var HOLD_MAX = 4000;                // a drawing called before any speech waits at most this long (ms) for the next words
+
+  function KB_clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
   function post(url, body) {
     return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
@@ -19,7 +25,7 @@
     this.pc = null; this.dc = null; this.mic = null; this.audio = null;
     this.receipt = null; this.deadline = 0; this.warned = false; this.timer = 0;
     this.active = false; this.responding = false; this.userSpeaking = false; this.needReply = false; this.ending = false; this.closed = false;
-    this.cur = null; this.queue = []; this.pumpT = 0; this.transcript = []; this.muted = false; this.endT = 0;
+    this.cur = null; this.queue = []; this.resps = []; this.spEnd = 0; this.pumpT = 0; this.transcript = []; this.muted = false; this.endT = 0;
   }
   var P = Session.prototype;
 
@@ -54,6 +60,7 @@
       self.active = true; o.onState('connected');
       self.needReply = false;
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
+      if (o.firstPicture) self.putPicture(o.firstPicture);
       self.send({ type: 'response.create' });          // the teacher speaks first
     });
   };
@@ -69,16 +76,20 @@
   P.onEvent = function (e) {
     var self = this, t = e.type;
     if (t === 'response.created') {
-      this.responding = true; this.cur = { chars: 0, start: 0, calls: [], text: '' }; this.o.onState('speaking');
+      this.responding = true; this.cur = { chars: 0, begin: 0, calls: [], text: '', items: [], started: false }; this.o.onState('speaking');
     } else if (t === 'output_audio_buffer.started') {
-      if (this.cur && !this.cur.start) this.cur.start = Date.now();
+      this.audioStarted();
     } else if (t === 'response.output_audio_transcript.delta') {
-      if (this.cur) { this.cur.chars += (e.delta || '').length; this.cur.text += e.delta || ''; if (!this.cur.start) this.cur.start = Date.now(); }
+      if (this.cur) {
+        if (!this.cur.begin) this.beginSpeech(this.cur);
+        this.cur.chars += (e.delta || '').length; this.cur.text += e.delta || '';
+        this.spEnd = Math.max(this.spEnd, this.cur.begin + (this.cur.chars / CPS) * 1000);
+      }
     } else if (t === 'response.output_audio_transcript.done') {
       if (e.transcript && e.transcript.trim()) { this.transcript.push({ role: 'assistant', text: e.transcript.trim() }); this.o.onAiText(e.transcript.trim()); }
     } else if (t === 'response.output_item.done') {
       var it = e.item;
-      if (it && it.type === 'function_call' && this.cur) this.cur.calls.push({ item: it, atChars: this.cur.chars, at: this.cur.start });
+      if (it && it.type === 'function_call' && this.cur) this.cur.calls.push({ item: it, atChars: this.cur.chars, resp: this.cur });
     } else if (t === 'response.done') {
       this.responding = false;
       var cur = this.cur; this.cur = null;
@@ -91,6 +102,7 @@
       var tx = (e.transcript || '').trim();
       if (tx) { this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); }
     } else if (t === 'output_audio_buffer.stopped' || t === 'output_audio_buffer.cleared') {
+      this.spEnd = Date.now();                         // nothing is playing now
       if (this.ending && !this.responding) this.finishSoon(900);
       else if (!this.responding) this.o.onState('idle');
     } else if (t === 'error') {
@@ -98,6 +110,32 @@
       if (global.console) console.warn('realtime error', e.error);
       if (!/active response|cancel|no active/i.test(m)) this.o.onError('خطایی در گفتگوی صوتی رخ داد.');
     }
+  };
+
+  /* ───────── speech clock ───────── */
+  // the first words of a response: they are heard after whatever is still playing
+  P.beginSpeech = function (r) {
+    r.begin = Math.max(Date.now(), this.spEnd);
+    this.resps.push(r); if (this.resps.length > 8) this.resps.shift();
+    var held = this.queue.filter(function (q) { return q.hold; });          // drawings that were waiting for words: draw along with these
+    held.forEach(function (q) { q.hold = false; q.at = r.begin; r.items.push(q); });
+    if (held.length) this.pump();
+  };
+  // real start of the audio of the oldest response not yet heard: correct our estimate (and the drawings tied to it)
+  P.audioStarted = function () {
+    var r = null, i;
+    for (i = 0; i < this.resps.length; i++) if (!this.resps[i].started) { r = this.resps[i]; break; }
+    if (!r) return;
+    r.started = true;
+    var d = Date.now() - r.begin;
+    if (Math.abs(d) < 120) return;
+    r.begin += d; r.items.forEach(function (q) { q.at += d; });
+    for (i = this.resps.indexOf(r); i < this.resps.length; i++) {
+      var x = this.resps[i];
+      if (x !== r) { x.begin += d; x.items.forEach(function (q) { q.at += d; }); }
+    }
+    this.spEnd += d;
+    this.pump();
   };
 
   // run the tool calls of a finished response, give the results back, and let the teacher continue
@@ -125,8 +163,10 @@
     if (it.name === 'board') {
       return post('/api/class/' + id + '/draw', { ops: args.ops, clear: args.clear === true }).then(function (d) {
         if (!d.ok) return { call_id: it.call_id, output: { ok: false, error: d.error || 'could not draw' } };
-        var when = c.at ? c.at + (c.atChars / CPS) * 1000 : Date.now();
-        self.queue.push({ from: d.from, beat: d.beat, at: when });
+        var r = c.resp, q = { from: d.from, beat: d.beat, at: Date.now(), hold: false };
+        if (r && r.begin) { q.at = Math.max(Date.now(), r.begin + (Math.max(0, c.atChars - LEAD) / CPS) * 1000); r.items.push(q); }
+        else { q.hold = true; q.at = Date.now() + KB_clamp(self.spEnd - Date.now(), 1500, HOLD_MAX); }   // nothing said yet: wait for the words this drawing goes with
+        self.queue.push(q);
         self.pump();
         var out = { ok: true };
         var pv = null;
@@ -140,6 +180,11 @@
         } else out.on_board = d.on_board;
         return { call_id: it.call_id, output: out };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'connection problem, try once more' } }; });
+    }
+    if (it.name === 'look') {
+      return post('/api/class/' + id + '/look', { image: args.image, find: args.find }).then(function (d) {
+        delete d.__status; return { call_id: it.call_id, output: d };
+      }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not look now, try once more' } }; });
     }
     if (it.name === 'start_class') {
       return post('/api/class/' + id + '/progress', { step: 0, note: 'شروع صنف', outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
@@ -160,7 +205,7 @@
     }
     if (it.name === 'end_class') {
       this.ending = true;
-      var wait = c.at ? Math.max(0, c.at + (c.atChars / CPS) * 1000 - Date.now()) : 0;
+      var wait = Math.max(0, this.spEnd - Date.now());
       this.finishSoon(wait + 5000);                    // normally ended earlier by the end of the speech
       return Promise.resolve({ call_id: it.call_id, output: { ok: true } });
     }
@@ -180,12 +225,26 @@
     if (this.queue.length) this.pumpT = setTimeout(function () { self.pump(); }, Math.max(40, Math.min(1000, this.queue[0].at - Date.now())));
   };
   P.flush = function () {
-    clearTimeout(this.pumpT);
+    clearTimeout(this.pumpT); this.spEnd = Date.now();
     this.queue.sort(function (a, b) { return a.from - b.from; });
     while (this.queue.length) { var q = this.queue.shift(); this.o.onBeat(q.from, q.beat); }
   };
 
   /* ───────── the student ───────── */
+  // put a picture on the table: the teacher gets the image itself and a note with its key and its named parts
+  P.putPicture = function (pic) {
+    var content = [{ type: 'input_text', text: pic.note }];
+    if (pic.dataUrl) content.push({ type: 'input_image', image_url: pic.dataUrl });
+    this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: content } });
+    this.transcript.push({ role: 'user', text: '[تصویر] ' + (pic.title || '') });
+  };
+  P.sendPicture = function (pic) {
+    if (!this.active) return false;
+    this.stopSpeaking();
+    this.putPicture(pic);
+    if (this.responding) this.needReply = true; else this.send({ type: 'response.create' });
+    return true;
+  };
   P.sendText = function (text) {
     if (!this.active) return false;
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + text }] } });

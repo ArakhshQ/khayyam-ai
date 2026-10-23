@@ -24,8 +24,12 @@
       "correct": "لیسه",
       "wrong": "دبیرستان",
       "note": "High school in Afghan Dari"
+    },
+    {
+      "correct": "ابتدایی",
+      "wrong": "پایه",
+      "note": "Basic / elementary level: «پایه» is not Dari for this meaning, say «ابتدایی»"
     }
-    
   ],
   "cultural_customs": [
     {

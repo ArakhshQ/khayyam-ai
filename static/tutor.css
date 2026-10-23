@@ -185,3 +185,14 @@
 
 /* live voice class: no captions under the board; the conversation holds the words */
 #classroom[data-live] .caption, #classroom[data-live] #caption { display: none !important; }
+
+
+/* pictures and pages the student sends */
+.attach-chip { display: none; }
+.live-on .attach-chip { display: block; line-height: 1.2; }
+.chat-thumb { display: block; max-width: 220px; max-height: 160px; border-radius: 10px; margin-top: 8px; border: 1px solid rgba(15, 92, 73, .25); }
+.chat-thumb-note { font-size: 14px; opacity: .8; }
+.drop-hint { position: absolute; inset: 0; z-index: 30; display: none; place-items: center; background: rgba(10, 43, 35, .72); color: #f4d86e; font-size: 22px; font-weight: 700; border-radius: 14px; pointer-events: none; }
+.classroom.dropping .drop-hint { display: grid; }
+.classroom { position: relative; }
+.tool-btn[hidden] { display: none; }

@@ -47,7 +47,7 @@
     ['board', 'chat'].forEach(function (n) {
       var t = $('tab-' + n); t.classList.toggle('active', n === name); t.setAttribute('aria-selected', n === name ? 'true' : 'false');
     });
-    if (name === 'board' && board) setTimeout(function () { board.onResize(); }, 60);
+    if (name === 'board' && board) setTimeout(function () { if (board) board.onResize(); }, 60);
   };
   window.voiceSoon = function () {
     if (live) { var m = !live.muted; live.setMuted(m); $('voice-record-btn').classList.toggle('muted', m); toast(m ? 'میکروفون خاموش شد.' : 'میکروفون روشن شد.'); return; }
@@ -547,9 +547,9 @@
       onError: function (msg) { toast(msg); }
     };
   }
-  function connectLive(d, resumed) {
+  function connectLive(d, resumed, pic) {
     if (cls) cls.voiceClass = true;
-    var h = liveHandlers(); h.classId = d.id; h.resumed = !!resumed; h.firstText = resumed ? '' : (d.request || '');
+    var h = liveHandlers(); h.classId = d.id; h.resumed = !!resumed; h.firstText = resumed ? '' : (d.request || ''); if (pic) h.firstPicture = pic;
     live = new TutorLive.Session(h);
     setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.');
     return live.start().then(function () {
@@ -620,6 +620,113 @@
       loadSaved();
     }).catch(function () { untyping(); closing = false; setWaiting(false); toast('ذخیرهٔ صنف ممکن نشد.'); });
   }
+
+  /* ───────── pictures and document pages ───────── */
+  function toJpeg(file, maxSide, q) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file), im = new Image();
+      im.onload = function () {
+        var k = Math.min(1, maxSide / Math.max(im.naturalWidth, im.naturalHeight, 1)), c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(im.naturalWidth * k)); c.height = Math.max(1, Math.round(im.naturalHeight * k));
+        var x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { if (b) resolve(b); else reject(new Error('jpeg')); }, 'image/jpeg', q);
+      };
+      im.onerror = function () { URL.revokeObjectURL(url); reject(new Error('decode')); };
+      im.src = url;
+    });
+  }
+  function blobUrl(blob) {
+    return new Promise(function (resolve, reject) { var r = new FileReader(); r.onload = function () { resolve(r.result); }; r.onerror = function () { reject(r.error); }; r.readAsDataURL(blob); });
+  }
+  function regionsNote(info) {
+    var L = [];
+    if (info.summary) L.push('What it shows: ' + info.summary);
+    if (info.regions && info.regions.length) {
+      L.push('Parts you can point at (use these ids as "region"):');
+      info.regions.slice(0, 18).forEach(function (r) { L.push('  ' + r.id + ': ' + r.label + (r.what ? ' - ' + r.what : '') + (r.text ? ' ; "' + String(r.text).slice(0, 90) + '"' : '')); });
+    }
+    if (info.text) L.push('Text in it: ' + String(info.text).slice(0, 700));
+    return L.join('\n');
+  }
+  function pictureNote(items, pdf, info) {
+    var first = items[0], last = items[items.length - 1], L = [];
+    L.push('[تصویر از شاگرد] The student has just sent ' + (pdf ? 'a document' : 'a picture') + ' ("' + first.title + '").');
+    if (pdf) L.push('It has ' + (first.pages || items.length) + ' pages' + (items.length < (first.pages || 0) ? ' (only the first ' + items.length + ' can be used)' : '') + '. The pages are the keys ' + first.key + (items.length > 1 ? ' to ' + last.key : '') + ' in order (page 1 = ' + first.key + '). The image attached is page 1 (' + first.key + ').');
+    else L.push('Its key is ' + first.key + '. The image is attached.');
+    L.push(info ? regionsNote(info) : 'You have not looked at it closely yet: call the tool "look" with its key before you point at anything.');
+    L.push('Now bring it onto the board with the board tool (op "image", image "' + first.key + '") and begin explaining it right away, in Dari: say what it is, then go through it part by part, pointing at each part (op "point" with a region) and circling what matters, while you talk.');
+    return L.join('\n');
+  }
+  function addPictureMessage(items, pdf) {
+    var first = items[0], img = document.createElement('img');
+    img.className = 'chat-thumb'; img.src = first.url; img.alt = first.title;
+    addMessage('user', pdf ? 'فایل «' + first.title + '»' + (first.pages ? ' (' + faNum(first.pages) + ' صفحه)' : '') : 'یک تصویر فرستادم.', img);
+  }
+  window.pickFile = function () {
+    if (!liveWanted) { toast('فرستادن عکس در صنف صوتی فعال است.'); return; }
+    if (busy || closing) { toast('یک لحظه صبر کنید.'); return; }
+    if (cls && cls.id && !live) { toast('برای فرستادن عکس، اول صنف را با صدا ادامه بدهید.'); return; }
+    $('file-input').click();
+  };
+  function sendFile(file) {
+    if (!file) return Promise.resolve();
+    if (busy || closing) { toast('یک لحظه صبر کنید.'); return Promise.resolve(); }
+    if (!liveWanted) { toast('فرستادن عکس در صنف صوتی فعال است.'); return Promise.resolve(); }
+    if (cls && cls.id && !live) { toast('برای فرستادن عکس، اول صنف را با صدا ادامه بدهید.'); return Promise.resolve(); }
+    var pdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+    if (!pdf && !/^image\//.test(file.type || '')) { toast('فقط عکس یا فایل PDF بفرستید.'); return Promise.resolve(); }
+    if (file.size > 40 * 1024 * 1024) { toast('فایل خیلی بزرگ است (حداکثر ۱۲ مگابایت).'); return Promise.resolve(); }
+    busy = true; $('send-btn').disabled = true;
+    var fresh = !(cls && cls.id), d = null, items = null, info = null, small = null;
+    if (fresh) { var st = document.querySelector('.class-start'); if (st) st.remove(); setPrep(true, 'استاد تصویر را می‌بیند…', 'چند لحظه صبر کنید.'); showPane('board'); }
+    else setWaiting(true, 'استاد تصویر را می‌بیند…');
+    var p = fresh ? api('/api/class/voice/new', { topic: '' }).then(function (r) {
+      if (r.__status === 401) { loginNotice(); throw { quiet: true }; }
+      if (r.__status !== 200 || r.error) throw new Error(r.error || 'شروع صنف ممکن نشد.');
+      d = r; return openClass(r, {}).then(function () { board.live = true; });
+    }) : Promise.resolve().then(function () { d = { id: cls.id }; });
+    return p.then(function () {
+      return (pdf ? Promise.resolve(file) : toJpeg(file, 1600, .88).catch(function () { return file; }));
+    }).then(function (blob) {
+      var fd = new FormData(); fd.append('file', blob, pdf ? (file.name || 'file.pdf') : String(file.name || 'photo').replace(/\.\w+$/, '') + '.jpg');
+      return fetch('/api/class/' + d.id + '/upload', { method: 'POST', body: fd, credentials: 'same-origin' });
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (up) {
+        if (!r.ok || !up.ok || !(up.items || []).length) throw new Error(up.error || 'بارگذاری ممکن نشد.');
+        items = up.items; addPictureMessage(items, pdf);
+      });
+    }).then(function () {
+      var tm = new Promise(function (res) { setTimeout(function () { res(null); }, 30000); });
+      return Promise.race([api('/api/class/' + d.id + '/look', { image: items[0].key }), tm]).then(function (lk) { if (lk && lk.ok) info = lk; }).catch(function () {});
+    }).then(function () {
+      return (pdf ? fetch(items[0].url, { credentials: 'same-origin' }).then(function (r) { return r.blob(); }) : Promise.resolve(file))
+        .then(function (b) { return toJpeg(b, 1280, .82); }).then(blobUrl).then(function (u) { small = u; }).catch(function () { small = null; });
+    }).then(function () {
+      var pic = { note: pictureNote(items, pdf, info), dataUrl: small, title: items[0].title };
+      busy = false; $('send-btn').disabled = false;
+      if (live) { setWaiting(false); if (!live.sendPicture(pic)) toast('هنوز به استاد وصل نیستید.'); return; }
+      return connectLive(d, false, pic).then(function () { loadSaved(); });
+    }).catch(function (err) {
+      busy = false; $('send-btn').disabled = false; setWaiting(false);
+      if (fresh) {
+        setPrep(false);
+        if (d && d.id) api('/api/class/' + d.id, null, 'DELETE').then(function () { if (cls && cls.id === d.id) newClass(); loadSaved(); });   // nothing came of it: no empty class is left behind
+      }
+      if (err && err.quiet) return;
+      toast((err && err.message) || 'فرستادن تصویر ممکن نشد.');
+    });
+  }
+  (function pictureInit() {
+    var inp = $('file-input'), room = $('classroom'), ta = $('user-input');
+    if (liveWanted) { $('attach-btn').hidden = false; document.body.classList.add('live-on'); }
+    inp.addEventListener('change', function () { var f = inp.files && inp.files[0]; inp.value = ''; if (f) sendFile(f); });
+    var hasFiles = function (e) { return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') >= 0; };
+    ['dragenter', 'dragover'].forEach(function (n) { room.addEventListener(n, function (e) { if (hasFiles(e)) { e.preventDefault(); room.classList.add('dropping'); } }); });
+    ['dragleave', 'drop'].forEach(function (n) { room.addEventListener(n, function () { room.classList.remove('dropping'); }); });
+    room.addEventListener('drop', function (e) { if (!hasFiles(e)) return; e.preventDefault(); var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) sendFile(f); });
+    ta.addEventListener('paste', function (e) { var fs = e.clipboardData && e.clipboardData.files; if (fs && fs.length) { e.preventDefault(); sendFile(fs[0]); } });
+  })();
 
   /* ───────── init ───────── */
   var input = $('user-input');

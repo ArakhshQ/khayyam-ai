@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
   <link rel="stylesheet" href="/static/chat.css?v=20261020">
-  <link rel="stylesheet" href="/static/tutor.css?v=20261022">
+  <link rel="stylesheet" href="/static/tutor.css?v=20261023">
 </head>
 <body class="app on-light tutor-page">
 
@@ -33,6 +33,7 @@
   <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5.5v13M16 5.5v13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></symbol>
   <symbol id="i-hand" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V6.5a1.5 1.5 0 0 1 3 0V11"/><path d="M11 10.5V4.5a1.5 1.5 0 0 1 3 0V11"/><path d="M14 10.5V6a1.5 1.5 0 0 1 3 0v8c0 4-2.5 6.5-6 6.5-2.6 0-4-1.5-5.2-3.7L4 13.6a1.4 1.4 0 0 1 2.4-1.4L8 14"/></g></symbol>
   <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.500" width="14" height="9.500" rx="2.200"/><path d="M8.500 10.500V8a3.500 3.500 0 0 1 7 0v2.500"/></g></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20 11.500-8.200 8.200a5 5 0 0 1-7-7l8.600-8.600a3.300 3.300 0 0 1 4.700 4.700l-8.600 8.600a1.600 1.600 0 0 1-2.300-2.300l7.900-7.900" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-prev" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-next" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
 </svg>
@@ -98,6 +99,7 @@
     </div>
 
     <div class="classroom" data-pane="board" id="classroom">
+      <div class="drop-hint" aria-hidden="true">عکس یا فایل را همین‌جا رها کنید</div>
 
       <!-- Chalkboard -->
       <section class="board-pane" aria-label="تختهٔ صنف">
@@ -133,6 +135,8 @@
           <div class="composer">
             <div class="input-box">
               <textarea id="user-input" rows="1" placeholder="بگویید چه می‌خواهید بیاموزید…" aria-label="پیام به استاد"></textarea>
+              <button type="button" id="attach-btn" class="tool-btn" onclick="pickFile()" title="فرستادن عکس یا فایل PDF" aria-label="فرستادن عکس یا فایل PDF" hidden><svg><use href="#i-clip"/></svg></button>
+              <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" hidden>
               <button type="button" id="voice-record-btn" class="tool-btn voice-action-btn" onclick="voiceSoon()" title="گفتگوی صوتی با استاد" aria-label="گفتگوی صوتی با استاد"><svg><use href="#i-mic"/></svg></button>
               <button id="send-btn" type="button" onclick="sendMessage()" aria-label="ارسال"><svg><use href="#i-send"/></svg></button>
             </div>
@@ -154,9 +158,10 @@
       <h1>امروز چه چیزی بیاموزیم؟</h1>
       <p>موضوع را به زبان خودتان بگویید؛ از ریاضی و زبان تا برنامه‌نویسی و تاریخ. استاد برایتان یک مسیر درس می‌چیند و یکی‌یکی آموزش می‌دهد.</p>
       <div class="suggestion-grid start-chips">
-        <button class="suggestion" type="button" data-say="می‌خواهم ریاضی پایه را از اول یاد بگیرم">ریاضی پایه</button>
+        <button class="suggestion" type="button" data-say="می‌خواهم ریاضی ابتدایی را از اول یاد بگیرم">ریاضی ابتدایی</button>
         <button class="suggestion" type="button" data-say="می‌خواهم زبان انگلیسی یاد بگیرم">زبان انگلیسی</button>
         <button class="suggestion" type="button" data-say="می‌خواهم برنامه‌نویسی را شروع کنم">برنامه‌نویسی</button>
+        <button class="suggestion attach-chip" type="button" onclick="pickFile()">عکس یا صفحهٔ کتاب بفرستید</button>
         <button class="suggestion" type="button" data-say="می‌خواهم برای کنکور آماده شوم">آمادگی کنکور</button>
       </div>
       <div class="resume-box" id="resume-box"></div>
@@ -166,12 +171,12 @@
 </template>
 
 <script src="/static/ui.js?v=20261020"></script>
-<script src="/static/board_core.js?v=20261022"></script>
-<script src="/static/board_math.js?v=20261022"></script>
-<script src="/static/board_model.js?v=20261022"></script>
-<script src="/static/board.js?v=20261022"></script>
+<script src="/static/board_core.js?v=20261023"></script>
+<script src="/static/board_math.js?v=20261023"></script>
+<script src="/static/board_model.js?v=20261023"></script>
+<script src="/static/board.js?v=20261023"></script>
 <script>window.__LIVE_VOICE = {{ "true" if live_voice else "false" }};</script>
-<script src="/static/tutor_live.js?v=20261022"></script>
-<script src="/static/tutor.js?v=20261022"></script>
+<script src="/static/tutor_live.js?v=20261023"></script>
+<script src="/static/tutor.js?v=20261023"></script>
 </body>
 </html>
