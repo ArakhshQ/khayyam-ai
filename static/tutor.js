@@ -24,11 +24,48 @@
   var liveWanted = !!window.__LIVE_VOICE && !!window.TutorLive;
 
   /* ───────── helpers ───────── */
-  function toast(text) {
-    var el = $('toast');
-    el.textContent = text; el.classList.add('show');
-    clearTimeout(toast._t); toast._t = setTimeout(function () { el.classList.remove('show'); }, 3600);
-  }
+  /* Status popups: one small pill per thing that is happening. A "busy" pill (spinner) stays until that thing is finished, then turns into
+     a check mark ("ok") and leaves by itself; "warn" / "fail" stay a few seconds; "info" is a short note. delay = show a busy pill only if it
+     lasts longer than that (so quick things do not flash); max = give up showing it after this long (never stuck forever). */
+  var Stat = (function () {
+    var stack = $('status-stack'), items = {}, seq = 0;
+    function hide(key) {
+      var it = items[key]; if (!it) return;
+      clearTimeout(it.t); clearTimeout(it.d); delete items[key];
+      if (!it.el) return;
+      it.el.classList.remove('in'); it.el.classList.add('out');
+      setTimeout(function () { if (it.el && it.el.parentNode) it.el.parentNode.removeChild(it.el); }, 380);
+    }
+    function paint(key, text, kind, ms) {
+      var it = items[key]; if (!it) return;
+      if (!it.el) {
+        var el = document.createElement('div'); el.className = 'status';
+        el.innerHTML = '<i class="st-ic" aria-hidden="true"></i><span class="st-tx"></span>';
+        stack.appendChild(el); it.el = el;
+        var kids = stack.children; while (kids.length > 4) { var first = kids[0]; for (var k in items) if (items[k].el === first) { delete items[k]; } first.parentNode.removeChild(first); }
+        requestAnimationFrame(function () { requestAnimationFrame(function () { el.classList.add('in'); }); });
+      }
+      it.el.className = 'status in ' + kind;
+      it.el.querySelector('.st-tx').textContent = text;
+      clearTimeout(it.t); if (ms) it.t = setTimeout(function () { hide(key); }, ms);
+    }
+    function set(key, text, kind, ms, delay) {
+      var it = items[key];
+      if (!it) it = items[key] = { el: null, t: 0, d: 0 };
+      clearTimeout(it.d);
+      if (delay && !it.el) it.d = setTimeout(function () { paint(key, text, kind, ms); }, delay); else paint(key, text, kind, ms);
+    }
+    return {
+      busy: function (key, text, delay, max) { set(key, text, 'busy', max || 120000, delay || 0); },
+      ok: function (key, text, ms) { var it = items[key]; if (it && !it.el && it.d) { hide(key); return; } set(key, text, 'ok', ms || 2400, 0); },     // a quick thing that never showed leaves no trace
+      warn: function (key, text, ms) { set(key, text, 'warn', ms || 6000, 0); },
+      fail: function (key, text, ms) { set(key, text, 'fail', ms || 6000, 0); },
+      info: function (text, ms) { set('i' + (++seq), text, 'info', ms || 3600, 0); },
+      clear: hide,
+      has: function (key) { return !!(items[key] && items[key].el); }
+    };
+  })();
+  function toast(text) { Stat.info(text, 3600); }
   function faNum(n) { return String(n).replace(/\d/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[d]; }); }
   function api(url, body, method) {
     var init = { method: method || (body ? 'POST' : 'GET'), credentials: 'same-origin', headers: {} };
@@ -205,8 +242,8 @@
   }
   function setWaiting(on, text) {
     var cap = $('caption');
-    cap.classList.toggle('waiting', !!on);
-    if (on) { cap.textContent = ''; var s = document.createElement('span'); s.textContent = text || 'استاد در حال نوشتن است…'; cap.appendChild(s); }
+    cap.classList.toggle('waiting', !!on); cap.textContent = '';
+    if (on) Stat.busy('wait', text || 'استاد در حال نوشتن است…', 350, 60000); else Stat.clear('wait');
   }
   function onScene(i) {
     setWaiting(false);
@@ -328,7 +365,8 @@
   });
 
   /* ───────── starting, opening, stopping a class ───────── */
-  function setPrep(on, title, text) {
+  function setPrep(on, title, text, quiet) {
+    if (!quiet) { if (on) Stat.busy('prep', title, 0, 90000); else Stat.clear('prep'); }
     var box = $('board-empty');
     var h = box.querySelector('h2'), p = box.querySelector('p');
     if (on) { h.textContent = title; p.innerHTML = text; box.classList.add('prep'); }
@@ -379,8 +417,10 @@
   function openSaved(id) {
     if (busy) return;
     if (board) board.pause();
+    Stat.busy('open', 'در حال باز کردن صنف…', 400, 30000);
     api('/api/class/' + id).then(function (d) {
-      if (d.__status !== 200) { toast('باز کردن صنف ممکن نشد.'); return; }
+      Stat.clear('open');
+      if (d.__status !== 200) { Stat.fail('open', 'باز کردن صنف ممکن نشد.'); return; }
       $('messages').textContent = '';
       addMessage('ai', 'خوش آمدید. ' + (d.summary ? d.summary : 'از همان‌جا که مانده بودیم ادامه می‌دهیم.'),
         linkRow('ادامهٔ صنف', function (a) { a.parentNode.remove(); resumeClass(d); }));
@@ -419,15 +459,16 @@
     closing = true; stopAt = -1;
     board.pause(); setHand(false);
     var id = cls.id;
-    typing();
+    typing(); Stat.busy('save', 'صنف ذخیره می‌شود…', 0, 90000);
     api('/api/class/' + id + '/pause', { pos: board.sceneIdx }).then(function (d) {
       untyping(); closing = false;
-      if (d.__status !== 200) { closing = false; toast('ذخیرهٔ صنف ممکن نشد.'); return; }
+      if (d.__status !== 200) { closing = false; Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); return; }
+      Stat.ok('save', 'صنف ذخیره شد ✓', 2600);
       cls.status = 'paused';
       var txt = 'صنف ذخیره شد. هر وقت خواستید از همین‌جا ادامه می‌دهیم.' + (d.summary ? '\n\n' + d.summary : '');
       addMessage('ai', txt, linkRow('صنف تازه', function () { newClass(); }));
       loadSaved();
-    }).catch(function () { untyping(); closing = false; toast('ذخیرهٔ صنف ممکن نشد.'); });
+    }).catch(function () { untyping(); closing = false; Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); });
   }
 
   /* ───────── the student speaks ───────── */
@@ -538,34 +579,53 @@
         var b = $('voice-record-btn');
         b.classList.toggle('live', st !== 'idle');
         b.classList.toggle('talking', st === 'listening');
+        if (st === 'thinking') Stat.busy('think', 'استاد فکر می‌کند…', 900, 40000);
+        else if (st !== 'connected') { Stat.clear('think'); if (st === 'speaking') Stat.clear('wait'); }
+      },
+      onStage: function (s) {
+        if (s === 'mic') Stat.busy('voice', 'اجازهٔ میکروفون را بدهید…', 0, 90000);
+        else if (s === 'session') Stat.busy('voice', 'در حال اتصال به استاد…', 0, 60000);
+        else if (s === 'connect') Stat.busy('voice', 'در حال برقراری ارتباط صوتی…', 0, 60000);
+      },
+      onWork: function (kind, on) {
+        var txt = { look: 'استاد تصویر را دقیق نگاه می‌کند…', poem: 'استاد شعر را در مجموعه می‌جوید…', start: 'استاد درس را آماده می‌کند…' }[kind];
+        if (!txt) return;
+        if (on) Stat.busy('work-' + kind, txt, 500, 40000); else Stat.clear('work-' + kind);
+      },
+      onNet: function (up) {
+        if (!up) Stat.busy('net', 'اتصال ضعیف است؛ دوباره وصل می‌شویم…', 1500, 60000);
+        else if (Stat.has('net')) Stat.ok('net', 'اتصال برگشت ✓', 2000); else Stat.clear('net');
       },
       onEnd: function () { if (live && !closing) finishLive(); },
       onQuota: function (kind, minutes) {
-        if (kind === 'warn') toast('از سهمیهٔ گفتگوی صوتی حدود ' + faNum(minutes) + ' دقیقه باقی مانده است.');
-        else { toast('سهمیهٔ صوتی تمام شد؛ صنف ذخیره می‌شود.'); if (live && !closing) finishLive(); }
+        if (kind === 'warn') Stat.warn('quota', 'از سهمیهٔ گفتگوی صوتی حدود ' + faNum(minutes) + ' دقیقه باقی مانده است.', 9000);
+        else { Stat.fail('quota', 'سهمیهٔ صوتی تمام شد؛ صنف ذخیره می‌شود.', 8000); if (live && !closing) finishLive(); }
       },
-      onError: function (msg) { toast(msg); }
+      onError: function (msg) { Stat.fail('err', msg, 6000); }
     };
   }
   function connectLive(d, resumed, pic) {
     if (cls) cls.voiceClass = true;
     var h = liveHandlers(); h.classId = d.id; h.resumed = !!resumed; h.firstText = resumed ? '' : (d.request || ''); if (pic) h.firstPicture = pic;
     live = new TutorLive.Session(h);
-    setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.');
+    setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.', true);
+    Stat.busy('voice', 'در حال اتصال به استاد…', 0, 60000);
     return live.start().then(function () {
-      setPrep(false);
+      setPrep(false, '', '', true);
+      Stat.ok('voice', 'به استاد وصل شدید ✓', 2600);
+      Stat.busy('wait', 'استاد می‌آید…', 0, 30000);
       $('board-empty').hidden = !cls.lobby; $('board-controls').hidden = !!cls.lobby; $('lesson-title').textContent = cls.lobby ? 'گفتگو با استاد' : cls.title;
       $('classroom').dataset.live = '1';
       $('voice-record-btn').classList.add('live');
       placeholder('هر وقت خواستید صحبت کنید، یا اینجا بنویسید…');
-      setWaiting(true, 'استاد می‌آید…');
       showPane('board');
     }).catch(function (err) {
       if (global_console()) console.warn('live voice failed', err);
       var sess = live; live = null; try { sess.stop(); } catch (e) {}
       $('voice-record-btn').classList.remove('live', 'muted');
-      setPrep(false); setWaiting(false);
+      setPrep(false, '', '', true); setWaiting(false);
       var denied = err && /Permission|NotAllowed|denied/i.test(String(err.name || err.message || err));
+      Stat.fail('voice', denied ? 'میکروفون اجازه نگرفت. اجازه بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.', 7000);
       addMessage('ai', denied ? 'برای صنف صوتی به میکروفون نیاز است. اجازهٔ میکروفون را بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.',
         linkRow('ادامه با نوشتن', function (a) {
           a.parentNode.remove();
@@ -589,36 +649,40 @@
     if (text) addMessage('user', text);
     $('user-input').value = ''; $('user-input').style.height = 'auto';
     busy = true; $('send-btn').disabled = true;
-    setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.');
+    setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.', true);
+    Stat.busy('voice', 'در حال آماده‌کردن صنف…', 0, 60000);
     showPane('board');
     api('/api/class/voice/new', { topic: text }).then(function (d) {
       busy = false; $('send-btn').disabled = false;
-      if (d.__status === 401) { setPrep(false); loginNotice(); return; }
-      if (d.__status !== 200 || d.error) { setPrep(false); addMessage('ai', d.error || 'شروع صنف ممکن نشد.'); return; }
+      if (d.__status === 401) { setPrep(false, '', '', true); Stat.fail('voice', 'برای شروع باید وارد حساب‌تان شوید.'); loginNotice(); return; }
+      if (d.__status !== 200 || d.error) { setPrep(false, '', '', true); Stat.fail('voice', d.error || 'شروع صنف ممکن نشد.'); addMessage('ai', d.error || 'شروع صنف ممکن نشد.'); return; }
       return openClass(d, {}).then(function () { board.live = true; return connectLive(d, false); }).then(function () { loadSaved(); });
-    }).catch(function () { busy = false; $('send-btn').disabled = false; setPrep(false); addMessage('ai', 'ارتباط برقرار نشد. اینترنت را بررسی کنید.'); });
+    }).catch(function () { busy = false; $('send-btn').disabled = false; setPrep(false, '', '', true); Stat.fail('voice', 'ارتباط برقرار نشد. اینترنت را بررسی کنید.'); addMessage('ai', 'ارتباط برقرار نشد. اینترنت را بررسی کنید.'); });
   }
   function resumeLive(d) {
     if (busy) return;
     var n = stepCount();
     if (n) { board.setTimeline(n, [{ say: '', do: [] }]); board.gotoScene(n, false); }   // the board as it was left
     cls.status = 'active'; cls.done = false;
+    Stat.busy('voice', 'در حال برگرداندن صنف…', 0, 60000);
     connectLive(d, true).then(function () { loadSaved(); });
   }
   function finishLive() {
     if (!live || !cls || closing) return;
     closing = true;
     var id = cls.id, tr = live.stop(); live = null;
+    Stat.clear('think'); Stat.clear('wait'); Stat.busy('save', 'صنف ذخیره می‌شود…', 0, 90000);
     $('voice-record-btn').classList.remove('live', 'muted', 'talking'); delete $('classroom').dataset.live;
     typing();
     api('/api/class/' + id + '/pause', { pos: Math.max(0, stepCount() - 1), transcript: tr }).then(function (d) {
       untyping(); closing = false; setWaiting(false);
-      if (d.__status !== 200) { toast('ذخیرهٔ صنف ممکن نشد.'); return; }
+      if (d.__status !== 200) { Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); return; }
+      Stat.ok('save', 'صنف ذخیره شد ✓', 2600);
       if (d.deleted) { addMessage('ai', 'هر وقت خواستید دوباره بیایید و بگویید چه می‌خواهید بیاموزید.', linkRow('شروع تازه', function () { newClass(); })); cls = null; loadSaved(); return; }
       if (cls) cls.status = 'paused';
       addMessage('ai', 'صنف ذخیره شد. هر وقت خواستید از همین‌جا ادامه می‌دهیم.' + (d.summary ? '\n\n' + d.summary : ''), linkRow('صنف تازه', function () { newClass(); }));
       loadSaved();
-    }).catch(function () { untyping(); closing = false; setWaiting(false); toast('ذخیرهٔ صنف ممکن نشد.'); });
+    }).catch(function () { untyping(); closing = false; setWaiting(false); Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); });
   }
 
   /* ───────── pictures and document pages ───────── */
@@ -668,25 +732,25 @@
     addMessage('user', pdf ? 'فایل «' + first.title + '»' + (first.pages ? ' (' + faNum(first.pages) + ' صفحه)' : '') : 'یک تصویر فرستادم.', img);
   }
   window.pickFile = function () {
-    if (!liveWanted) { toast('فرستادن عکس در صنف صوتی فعال است.'); return; }
-    if (busy || closing) { toast('یک لحظه صبر کنید.'); return; }
-    if (cls && cls.id && !live) { toast('برای فرستادن عکس، اول صنف را با صدا ادامه بدهید.'); return; }
+    if (!liveWanted) { Stat.warn('pic', 'فرستادن عکس در صنف صوتی فعال است.', 4500); return; }
+    if (busy || closing) { Stat.warn('pic', 'یک لحظه صبر کنید.', 4500); return; }
+    if (cls && cls.id && !live) { Stat.warn('pic', 'برای فرستادن عکس، اول صنف را با صدا ادامه بدهید.', 4500); return; }
     $('file-input').click();
   };
   function sendFile(file) {
     if (!file) return Promise.resolve();
-    if (busy || closing) { toast('یک لحظه صبر کنید.'); return Promise.resolve(); }
-    if (!liveWanted) { toast('فرستادن عکس در صنف صوتی فعال است.'); return Promise.resolve(); }
-    if (cls && cls.id && !live) { toast('برای فرستادن عکس، اول صنف را با صدا ادامه بدهید.'); return Promise.resolve(); }
+    if (busy || closing) { Stat.warn('pic', 'یک لحظه صبر کنید.', 4500); return Promise.resolve(); }
+    if (!liveWanted) { Stat.warn('pic', 'فرستادن عکس در صنف صوتی فعال است.', 4500); return Promise.resolve(); }
+    if (cls && cls.id && !live) { Stat.warn('pic', 'برای فرستادن عکس، اول صنف را با صدا ادامه بدهید.', 4500); return Promise.resolve(); }
     var pdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
-    if (!pdf && !/^image\//.test(file.type || '')) { toast('فقط عکس یا فایل PDF بفرستید.'); return Promise.resolve(); }
-    if (file.size > 40 * 1024 * 1024) { toast('فایل خیلی بزرگ است (حداکثر ۱۲ مگابایت).'); return Promise.resolve(); }
+    if (!pdf && !/^image\//.test(file.type || '')) { Stat.warn('pic', 'فقط عکس یا فایل PDF بفرستید.', 4500); return Promise.resolve(); }
+    if (file.size > 40 * 1024 * 1024) { Stat.warn('pic', 'فایل خیلی بزرگ است (حداکثر ۱۲ مگابایت, 4500).', 4500); return Promise.resolve(); }
     busy = true; $('send-btn').disabled = true;
     var fresh = !(cls && cls.id), d = null, items = null, info = null, small = null;
     var words = ($('user-input').value || '').trim().slice(0, 400);
     if (words) { $('user-input').value = ''; $('user-input').style.height = 'auto'; }
-    if (fresh) { var st = document.querySelector('.class-start'); if (st) st.remove(); setPrep(true, 'استاد تصویر را می‌بیند…', 'چند لحظه صبر کنید.'); showPane('board'); }
-    else setWaiting(true, 'استاد تصویر را می‌بیند…');
+    Stat.busy('pic', pdf ? 'در حال فرستادن فایل…' : 'در حال فرستادن تصویر…', 0, 90000);
+    if (fresh) { var st = document.querySelector('.class-start'); if (st) st.remove(); setPrep(true, 'استاد تصویر را می‌بیند…', 'چند لحظه صبر کنید.', true); showPane('board'); }
     var p = fresh ? api('/api/class/voice/new', { topic: '' }).then(function (r) {
       if (r.__status === 401) { loginNotice(); throw { quiet: true }; }
       if (r.__status !== 200 || r.error) throw new Error(r.error || 'شروع صنف ممکن نشد.');
@@ -703,6 +767,7 @@
         items = up.items; addPictureMessage(items, pdf);
       });
     }).then(function () {
+      Stat.busy('pic', pdf ? 'استاد صفحه‌ها را می‌خواند…' : 'استاد تصویر را بررسی می‌کند…', 0, 90000);
       var tm = new Promise(function (res) { setTimeout(function () { res(null); }, 30000); });
       return Promise.race([api('/api/class/' + d.id + '/look', { image: items[0].key }), tm]).then(function (lk) { if (lk && lk.ok) info = lk; }).catch(function () {});
     }).then(function () {
@@ -711,17 +776,27 @@
     }).then(function () {
       var pic = { note: pictureNote(items, pdf, info, words), dataUrl: small, title: items[0].title };
       busy = false; $('send-btn').disabled = false;
-      if (live) { setWaiting(false); if (!live.sendPicture(pic)) toast('هنوز به استاد وصل نیستید.'); return; }
-      return connectLive(d, false, pic).then(function () { loadSaved(); });
+      if (live) {
+        setWaiting(false);
+        if (!live.sendPicture(pic)) { Stat.fail('pic', 'هنوز به استاد وصل نیستید.'); return; }
+        Stat.ok('pic', (pdf ? 'فایل' : 'تصویر') + ' به استاد رسید ✓', 2400); Stat.busy('think', 'استاد ' + (pdf ? 'فایل' : 'تصویر') + ' را می‌بیند…', 0, 40000);
+        return;
+      }
+      Stat.busy('pic', 'در حال اتصال به استاد…', 0, 90000);
+      return connectLive(d, false, pic).then(function (r) {
+        if (r === false) Stat.clear('pic');
+        else { Stat.ok('pic', (pdf ? 'فایل' : 'تصویر') + ' به استاد رسید ✓', 2400); Stat.busy('think', 'استاد ' + (pdf ? 'فایل' : 'تصویر') + ' را می‌بیند…', 0, 40000); }
+        loadSaved();
+      });
     }).catch(function (err) {
       busy = false; $('send-btn').disabled = false; setWaiting(false);
       if (words && !$('user-input').value) $('user-input').value = words;
       if (fresh) {
-        setPrep(false);
+        setPrep(false, '', '', true);
         if (d && d.id) api('/api/class/' + d.id, null, 'DELETE').then(function () { if (cls && cls.id === d.id) newClass(); loadSaved(); });   // nothing came of it: no empty class is left behind
       }
-      if (err && err.quiet) return;
-      toast((err && err.message) || 'فرستادن تصویر ممکن نشد.');
+      if (err && err.quiet) { Stat.clear('pic'); return; }
+      Stat.fail('pic', (err && err.message) || 'فرستادن تصویر ممکن نشد.', 7000);
     });
   }
   (function pictureInit() {

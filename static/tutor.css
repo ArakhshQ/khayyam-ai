@@ -196,3 +196,19 @@
 .classroom.dropping .drop-hint { display: grid; }
 .classroom { position: relative; }
 .tool-btn[hidden] { display: none; }
+
+
+/* ───────── status popups: what is happening right now ───────── */
+.status-stack { position: fixed; top: 74px; inset-inline: 0; margin-inline: auto; width: max-content; max-width: calc(100vw - 24px); z-index: 260; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+.status { display: flex; align-items: center; gap: 10px; padding: 10px 18px 10px 16px; border-radius: 999px; background: var(--forest-2, #123a2f); color: var(--paper, #f6f0e0); border: 1px solid var(--line-dark, rgba(216,178,90,.35)); box-shadow: 0 14px 36px -12px rgba(0,0,0,.55); font-size: 14px; line-height: 1.5; opacity: 0; transform: translateY(-10px) scale(.97); transition: opacity .28s ease, transform .32s cubic-bezier(.2,.8,.2,1), background .25s; }
+.status.in { opacity: 1; transform: none; }
+.status.out { opacity: 0; transform: translateY(-8px) scale(.97); }
+.st-ic { flex: none; width: 18px; height: 18px; border-radius: 50%; position: relative; }
+.status.busy .st-ic { border: 2.5px solid rgba(244,216,110,.28); border-top-color: #f4d86e; animation: stSpin .8s linear infinite; }
+.status.ok { background: #1a5a3f; } .status.ok .st-ic { background: #7fe0a8; } .status.ok .st-ic::after { content: ''; position: absolute; inset: 4px 5px 6px 5px; border: solid #0e3a28; border-width: 0 2.4px 2.4px 0; transform: rotate(40deg) translate(-1px,-1px); }
+.status.warn { background: #6b4b12; } .status.warn .st-ic { background: #f4c660; } .status.warn .st-ic::after { content: '!'; position: absolute; inset: 0; text-align: center; font: 700 12px/18px system-ui; color: #5a3b06; }
+.status.fail { background: #6a2530; } .status.fail .st-ic { background: #f09aa6; } .status.fail .st-ic::after { content: '×'; position: absolute; inset: 0; text-align: center; font: 700 15px/17px system-ui; color: #5a1520; }
+.status.info .st-ic { display: none; }
+@keyframes stSpin { to { transform: rotate(360deg); } }
+@media (max-width: 760px) { .status-stack { top: 64px; } .status { font-size: 13.5px; padding: 9px 15px; } }
+@media (prefers-reduced-motion: reduce) { .status { transition: opacity .2s; transform: none; } .status.busy .st-ic { animation-duration: 2s; } }

@@ -34,8 +34,10 @@
 
   P.start = function () {
     var self = this, o = this.o;
+    if (o.onStage) o.onStage('mic');
     return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (mic) {
       self.mic = mic;
+      if (o.onStage) o.onStage('session');
       return post('/api/voice/session', { mode: 'class', class_id: o.classId });
     }).then(function (s) {
       if (s.__status !== 200 || !s.value || !s.receipt) throw new Error(s.error || ('session ' + s.__status));
@@ -44,11 +46,16 @@
       var pc = self.pc = new RTCPeerConnection();
       self.audio = document.createElement('audio'); self.audio.autoplay = true; document.body.appendChild(self.audio);
       pc.ontrack = function (e) { self.audio.srcObject = e.streams[0]; self.audio.play().catch(function () {}); };
-      pc.onconnectionstatechange = function () { if (pc.connectionState === 'failed' && !self.closed) o.onError('ارتباط صوتی قطع شد.'); };
+      pc.onconnectionstatechange = function () {
+        if (self.closed) return;
+        if (pc.connectionState === 'failed') o.onError('ارتباط صوتی قطع شد.');
+        else if (o.onNet && self.active) { if (pc.connectionState === 'disconnected') o.onNet(false); else if (pc.connectionState === 'connected') o.onNet(true); }
+      };
       self.mic.getTracks().forEach(function (t) { pc.addTrack(t, self.mic); });
       var dc = self.dc = pc.createDataChannel('oai-events');
       dc.onmessage = function (e) { try { self.onEvent(JSON.parse(e.data)); } catch (err) { if (global.console) console.warn('realtime event', err); } };
       var opened = new Promise(function (res) { dc.onopen = res; });
+      if (o.onStage) o.onStage('connect');
       return pc.createOffer().then(function (offer) {
         return pc.setLocalDescription(offer).then(function () {
           return fetch('https://api.openai.com/v1/realtime/calls', { method: 'POST', headers: { 'Authorization': 'Bearer ' + s.value, 'Content-Type': 'application/sdp' }, body: offer.sdp });
@@ -146,7 +153,12 @@
       if (this.needReply && !this.userSpeaking) { this.needReply = false; this.send({ type: 'response.create' }); }
       return;
     }
-    var jobs = calls.map(function (c) { return self.runCall(c, cur); });
+    var WORK = { look: 'look', find_poem: 'poem', start_class: 'start' };
+    var jobs = calls.map(function (c) {
+      var w = WORK[c.item.name], p = self.runCall(c, cur);
+      if (w && self.o.onWork) { self.o.onWork(w, true); var off = function () { self.o.onWork(w, false); }; p.then(off, off); }
+      return p;
+    });
     Promise.all(jobs).then(function (outs) {
       outs.forEach(function (o) {
         self.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: o.call_id, output: JSON.stringify(o.output) } });
