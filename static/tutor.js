@@ -516,7 +516,7 @@
         var m = KB.buildModel({ v: 1, digits: 'fa', auto: true, scenes: liveAll.slice(0, from + 1) }, board && board.profile);
         var S = m.scenes[from] || {}, st = m.state;
         return { board: st.board, text_lines_left: st.text_lines_left, picture_slots_free: st.picture_slots_free,
-                 wiped: !!S.wiped && !beat.clear, wiped_pictures: !!S.wipedPictures, dropped: S.dropped };
+                 wiped: !!S.wiped && !beat.clear && !(st.page && st.page.length), wiped_pictures: !!S.wipedPictures, dropped: S.dropped, page: st.page };
       },
       onBeat: function (from, beat) {
         if (!board || !board.model) return;
@@ -649,13 +649,17 @@
     if (info.text) L.push('Text in it: ' + String(info.text).slice(0, 700));
     return L.join('\n');
   }
-  function pictureNote(items, pdf, info) {
+  function pictureNote(items, pdf, info, words) {
     var first = items[0], last = items[items.length - 1], L = [];
     L.push('[تصویر از شاگرد] The student has just sent ' + (pdf ? 'a document' : 'a picture') + ' ("' + first.title + '").');
     if (pdf) L.push('It has ' + (first.pages || items.length) + ' pages' + (items.length < (first.pages || 0) ? ' (only the first ' + items.length + ' can be used)' : '') + '. The pages are the keys ' + first.key + (items.length > 1 ? ' to ' + last.key : '') + ' in order (page 1 = ' + first.key + '). The image attached is page 1 (' + first.key + ').');
     else L.push('Its key is ' + first.key + '. The image is attached.');
     L.push(info ? regionsNote(info) : 'You have not looked at it closely yet: call the tool "look" with its key before you point at anything.');
-    L.push('Now bring it onto the board with the board tool (op "image", image "' + first.key + '") and begin explaining it right away, in Dari: say what it is, then go through it part by part, pointing at each part (op "point" with a region) and circling what matters, while you talk.');
+    if (words) L.push('The student wrote with it: «' + words + '»');
+    L.push('Put the picture on the board ONCE (board op "image", image "' + first.key + '"); it then stays there for the whole talk, so never show it again.');
+    L.push(words
+      ? 'Do what the student asked, using the picture (see PICTURES: the tasks).'
+      : 'The student has not said what they want. Do not start explaining yet. Say in one short sentence what you see, then ask ONE short question in Dari offering the choices that fit this picture (for example: solve it with you, learn the lesson in it, translate it, check their answer, or something else), and wait for the answer.');
     return L.join('\n');
   }
   function addPictureMessage(items, pdf) {
@@ -679,6 +683,8 @@
     if (file.size > 40 * 1024 * 1024) { toast('فایل خیلی بزرگ است (حداکثر ۱۲ مگابایت).'); return Promise.resolve(); }
     busy = true; $('send-btn').disabled = true;
     var fresh = !(cls && cls.id), d = null, items = null, info = null, small = null;
+    var words = ($('user-input').value || '').trim().slice(0, 400);
+    if (words) { $('user-input').value = ''; $('user-input').style.height = 'auto'; }
     if (fresh) { var st = document.querySelector('.class-start'); if (st) st.remove(); setPrep(true, 'استاد تصویر را می‌بیند…', 'چند لحظه صبر کنید.'); showPane('board'); }
     else setWaiting(true, 'استاد تصویر را می‌بیند…');
     var p = fresh ? api('/api/class/voice/new', { topic: '' }).then(function (r) {
@@ -703,12 +709,13 @@
       return (pdf ? fetch(items[0].url, { credentials: 'same-origin' }).then(function (r) { return r.blob(); }) : Promise.resolve(file))
         .then(function (b) { return toJpeg(b, 1280, .82); }).then(blobUrl).then(function (u) { small = u; }).catch(function () { small = null; });
     }).then(function () {
-      var pic = { note: pictureNote(items, pdf, info), dataUrl: small, title: items[0].title };
+      var pic = { note: pictureNote(items, pdf, info, words), dataUrl: small, title: items[0].title };
       busy = false; $('send-btn').disabled = false;
       if (live) { setWaiting(false); if (!live.sendPicture(pic)) toast('هنوز به استاد وصل نیستید.'); return; }
       return connectLive(d, false, pic).then(function () { loadSaved(); });
     }).catch(function (err) {
       busy = false; $('send-btn').disabled = false; setWaiting(false);
+      if (words && !$('user-input').value) $('user-input').value = words;
       if (fresh) {
         setPrep(false);
         if (d && d.id) api('/api/class/' + d.id, null, 'DELETE').then(function () { if (cls && cls.id === d.id) newClass(); loadSaved(); });   // nothing came of it: no empty class is left behind

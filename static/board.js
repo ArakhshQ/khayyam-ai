@@ -535,7 +535,7 @@
     else if (a.type === 'erase') {
       var bb = this.eraseBox(a);
       r.bb = bb; r.removed = false;
-      this.fxs.push({ start: this.clock, end: this.clock + a.dur, draw: function (c, q) { self.drawEraser(c, bb, q); }, done: null });
+      if (bb[2] > 1) this.fxs.push({ start: this.clock, end: this.clock + a.dur, draw: function (c, q) { self.drawEraser(c, bb, q); }, done: null });
     } else if (a.type === 'point') {
       var b = a.box, self2 = this;
       this.flyPointer(b, a.label);
@@ -587,7 +587,7 @@
   P.eraseBox = function (a) {
     if (a.targets === 'all') return [0, 0, this.model.W, this.model.H];
     var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, ids = this.model.ids;
-    a.targets.forEach(function (t) { var e = ids[t]; if (e && e.bbox) { x0 = Math.min(x0, e.bbox[0]); y0 = Math.min(y0, e.bbox[1]); x1 = Math.max(x1, e.bbox[0] + e.bbox[2]); y1 = Math.max(y1, e.bbox[1] + e.bbox[3]); } });
+    a.targets.forEach(function (t) { var e = ids[t]; if (e && e.bbox && e.kind !== 'mark') { x0 = Math.min(x0, e.bbox[0]); y0 = Math.min(y0, e.bbox[1]); x1 = Math.max(x1, e.bbox[0] + e.bbox[2]); y1 = Math.max(y1, e.bbox[1] + e.bbox[3]); } });
     if (x0 > x1) return [0, 0, 1, 1];
     return [Math.max(0, x0 - 20), Math.max(0, y0 - 16), x1 - x0 + 40, y1 - y0 + 32];
   };

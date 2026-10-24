@@ -65,13 +65,13 @@
   /* ───────── builder ───────── */
   KB.buildModel = function (lesson, profile) {
     var P = profile || { wide: true, H: 580, ts: 1 };
-    var Z = P.wide ? ZONES.wide : ZONES.tall;
+    var Z = Object.assign({}, P.wide ? ZONES.wide : ZONES.tall), Za0 = Z.a.slice();      // zones of this board (the text zone shrinks on a phone while a page is up)
     var digits = lesson.digits === 'en' ? 'en' : 'fa';
     var ids = Object.create(null);      // id -> element
     var warnings = [];
     var cursors = {};                   // zone -> y used
     var created = [];                   // ids made by the scene being built (dropped if the scene is rebuilt)
-    var alive = {}, occ = {}, auto_ = !!lesson.auto;   // what is on the board now; picture slots used per zone; automatic layout (live class)
+    var alive = {}, marksUp = {}, occ = {}, auto_ = !!lesson.auto;   // what is on the board now; picture slots used per zone; automatic layout (live class)
     var auto = 0;
     var model = { W: W, H: P.H, profile: P, scenes: [], ids: ids, warnings: warnings, digits: digits, title: str(lesson.title, 120) };
 
@@ -444,6 +444,7 @@
       var crop = Array.isArray(a.crop) && a.crop.length === 4 ? a.crop.map(Number) : null;
       if (crop && crop.some(function (v) { return !isFinite(v); })) crop = null;
       el.img = { key: str(a.image, 8), src: src, x: x, y: y, w: w, h: h, crop: crop };
+      el.page = a.big === true && !crop;
       el.items.push({ t: 'i', src: src, x: x, y: y, w: w, h: h, crop: crop, t0: 0, d: 1.2 });
       el.dur = 1.2;
       strokesOf(el, KB.rectLines(x - 6, y - 6, w + 12, h + 12, sd), { color: KB.color('white'), w: 3.2, speed: 800 });
@@ -532,8 +533,8 @@
         var oi = occ.b = occ.b || { cells: [], big: false };
         if (oi.big || oi.cells.some(Boolean)) return false;
         oi.big = true; beat.bigTaken = true; beat.slot = 'b'; a.zone = 'b';
-        a.box = P.wide ? [2, 4, 48, 92] : [2, 2, 96, 96];
-        if (!P.wide) cursors.a = pct(Z.a, P)[3];
+        a.box = P.wide ? [2, 4, 48, 92] : [2, 38, 96, 60];       // computer: page on the left, notes on the right. phone: notes strip on top, page below
+        if (!P.wide) { Z.a = [6, 12, 88, 24]; delete cursors.a; }
         return true;
       }
       if (zn === 'bottom' || zn === 'title') return true;
@@ -554,13 +555,24 @@
       a.box = toPct(slotRect(k));
       return true;
     }
-    function snap() { return JSON.stringify({ c: cursors, o: occ, a: alive }); }
+    function snap() { return JSON.stringify({ c: cursors, o: occ, a: alive, m: marksUp, z: Z.a }); }
     function restore(js) {
       var d = JSON.parse(js);
       Object.keys(cursors).forEach(function (k) { delete cursors[k]; }); Object.keys(d.c).forEach(function (k) { cursors[k] = d.c[k]; });
-      occ = d.o; alive = d.a;
+      occ = d.o; alive = d.a; marksUp = d.m || {}; Z.a = d.z || Za0.slice();
     }
-    function wipeAll() { Object.keys(cursors).forEach(function (k) { delete cursors[k]; }); occ = {}; alive = {}; }
+    function wipeAll() { Object.keys(cursors).forEach(function (k) { delete cursors[k]; }); occ = {}; alive = {}; marksUp = {}; Z.a = Za0.slice(); }
+    // the big page or photo the student brought (it stays up while the teacher explains; only an explicit new picture or "erase all" removes it)
+    function pageIds() { return Object.keys(alive).filter(function (id) { return ids[id] && ids[id].kind === 'image' && ids[id].page; }); }
+    // notes and marks go, the page stays. -> 'all' when there was no page, else the list of ids that were wiped
+    function wipeNotes() {
+      var keep = pageIds();
+      if (!keep.length) { wipeAll(); return 'all'; }
+      var gone_ = Object.keys(alive).filter(function (id) { return keep.indexOf(id) < 0; }).concat(Object.keys(marksUp));
+      gone_.forEach(function (id) { delete alive[id]; }); marksUp = {};
+      Object.keys(cursors).forEach(function (k) { delete cursors[k]; });
+      return gone_;
+    }
 
 
     // build one scene; `again` = a second try after the board turned out to be too full (the whole beat then goes on a fresh page)
@@ -568,32 +580,44 @@
       var S = { say: str(sc.say, 1200), acts: [], dur: 0, clear: !!sc.clear, index: si, aliveAfter: null, wiped: false, dropped: [] };
       var beat = { cell: null, bigTaken: false };
       var before = snap(); S.before = before;
-      if (S.clear || again) {
-        wipeAll(); S.wiped = true;
-        S.acts.push({ type: 'erase', targets: 'all', natural: 1.1 });
-      }
       var ops = (Array.isArray(sc.do) ? sc.do : []).slice(0, 16), full = false;
-      if (auto_ && !S.clear && !again && ops.some(function (o) { return o && o.op === 'image' && o.big === true; }) && Object.keys(alive).length) {
-        wipeAll(); S.wiped = true; S.acts.push({ type: 'erase', targets: 'all', natural: 1.1 });         // a big picture needs a clean board
+      var newPage = auto_ && ops.some(function (o) { return o && o.op === 'image' && o.big === true; });
+      if (S.clear || again) {
+        var wn = (auto_ && !newPage) ? wipeNotes() : (wipeAll(), 'all');            // a clear keeps the student's page; only a new page replaces it
+        S.wiped = true;
+        if (wn === 'all' || wn.length) S.acts.push({ type: 'erase', targets: wn, natural: auto_ ? .7 : 1.1 });
+      } else if (newPage && Object.keys(alive).length) {
+        wipeAll(); S.wiped = true; S.acts.push({ type: 'erase', targets: 'all', natural: 1.1 });         // a new big picture needs a clean board
       }
       for (var oi = 0; oi < ops.length && !full; oi++) {
         var a0 = ops[oi];
         if (!a0 || typeof a0 !== 'object') continue;
         var a = Object.assign({}, a0), op = str(a.op, 14);
         if (op === 'erase') {
-          var ts = a.target === 'all' || !a.target ? 'all' : [].concat(a.target).filter(function (t) { return typeof t === 'string' && ids[t]; });
+          var ts = a.target === 'all' || !a.target ? 'all' : (a.target === 'marks' ? Object.keys(marksUp) : [].concat(a.target).filter(function (t) { return typeof t === 'string' && ids[t]; }));
           if (ts === 'all') { wipeAll(); S.wiped = true; }
-          else ts.forEach(function (t) { delete alive[t]; });
-          if (ts === 'all' || ts.length) S.acts.push({ type: 'erase', targets: ts, natural: ts === 'all' ? 1.1 : .8 });
+          else ts.forEach(function (t) {
+            delete alive[t]; delete marksUp[t];
+            if (ids[t] && ids[t].page) { occ.b = { cells: [], big: false }; Z.a = Za0.slice(); delete cursors.a; }     // the page itself was taken down
+          });
+          if (ts === 'all' || ts.length) S.acts.push({ type: 'erase', targets: ts, natural: ts === 'all' ? (auto_ ? .9 : 1.1) : (ts.every(function (t) { return ids[t] && ids[t].kind === 'mark'; }) ? .2 : .8) });
           continue;
         }
         if (op === 'wait' || op === 'pause') { S.acts.push({ type: 'wait', natural: num(a.s, 1, .2, 6) }); continue; }
         if (op === 'point') {
-          var tb = targetBox(a); if (tb) S.acts.push({ type: 'point', box: tb, natural: a.label ? 2.6 : 2.2, label: str(a.label, 40) });
+          var tb = targetBox(a); if (tb) S.acts.push({ type: 'point', box: tb, natural: auto_ ? (a.label ? 1.9 : 1.5) : (a.label ? 2.6 : 2.2), label: str(a.label, 40) });
           else if (typeof a.target === 'string') S.dropped.push('point: ' + a.target + ' is no longer on the board');
           continue;
         }
         var fn = KB.own(BUILD, op) ? BUILD[op] : null; if (!fn) { warnings.push('unknown op ' + op); continue; }
+        if (auto_ && op === 'image' && !a.crop) {            // the same page is already up: keep it, do not draw it again
+          var up = pageIds().filter(function (id) { return ids[id].img && ids[id].img.key === str(a.image, 8); });
+          if (up.length) { if (a.id && !ids[a.id]) ids[a.id] = ids[up[0]]; continue; }
+        }
+        if (auto_ && op !== 'mark' && op !== 'image' && !TEXTY[op] && pageIds().length && !(a.box || a.at) && zoneName(a) !== 'bottom' && zoneName(a) !== 'title') {
+          S.dropped.push(op + ': the student\'s page fills the picture area, so it was not drawn. Write notes in zone "a", or erase the page first');
+          continue;
+        }
         if (auto_ && op !== 'mark') {
           if (!place(a, beat)) {                                  // the picture column is full
             if (!again && !S.acts.some(function (x) { return x.type === 'draw'; })) {
@@ -616,7 +640,7 @@
         } else {
           contain(res.el);
           res.el.zone = zoneName(a) || 'a'; res.el.slot = TEXTY[op] ? '' : beat.slot; res.el.label = str(a.t != null ? a.t : (a.m != null ? a.m : (a.name || a.image || op)), 40);
-          if (!res.noBox) alive[res.el.id] = true;
+          if (!res.noBox) alive[res.el.id] = true; else if (res.el.kind === 'mark') marksUp[res.el.id] = true;
           S.acts.push({ type: 'draw', el: res.el, natural: Math.max(.3, res.el.dur) });
         }
       }
@@ -657,7 +681,8 @@
       }).filter(Boolean),
       text_lines_left: Math.max(0, Math.floor((za[3] - (cursors.a || 0)) / lineH)),
       picture_slots_free: freeSlots(),
-      picture_slots_total: GRID.cols * GRID.rows
+      picture_slots_total: GRID.cols * GRID.rows,
+      page: pageIds().map(function (id) { return ids[id].img.key; })
     };
     return model;
   };

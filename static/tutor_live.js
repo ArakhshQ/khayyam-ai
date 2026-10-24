@@ -11,6 +11,7 @@
   'use strict';
   var CPS = 13;                       // spoken characters per second (Dari), used only to line drawings up with speech
   var LEAD = 16;                      // a drawing starts about this many characters (a little over a second) before the words that explain it end
+  var CUE_LEAD = 5;                   // a cue tied to its words starts a few characters (a moment) before them: the pointer needs time to fly
   var HOLD_MAX = 4000;                // a drawing called before any speech waits at most this long (ms) for the next words
 
   function KB_clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -118,7 +119,7 @@
     r.begin = Math.max(Date.now(), this.spEnd);
     this.resps.push(r); if (this.resps.length > 8) this.resps.shift();
     var held = this.queue.filter(function (q) { return q.hold; });          // drawings that were waiting for words: draw along with these
-    held.forEach(function (q) { q.hold = false; q.at = r.begin; r.items.push(q); });
+    held.forEach(function (q, i) { q.hold = false; q.at = r.begin + i * 1200; r.items.push(q); });
     if (held.length) this.pump();
   };
   // real start of the audio of the oldest response not yet heard: correct our estimate (and the drawings tied to it)
@@ -160,27 +161,7 @@
     var self = this, it = c.item, args = {};
     try { args = JSON.parse(it.arguments || '{}'); } catch (err) { return Promise.resolve({ call_id: it.call_id, output: { ok: false, error: 'invalid JSON arguments' } }); }
     var id = this.o.classId;
-    if (it.name === 'board') {
-      return post('/api/class/' + id + '/draw', { ops: args.ops, clear: args.clear === true }).then(function (d) {
-        if (!d.ok) return { call_id: it.call_id, output: { ok: false, error: d.error || 'could not draw' } };
-        var r = c.resp, q = { from: d.from, beat: d.beat, at: Date.now(), hold: false };
-        if (r && r.begin) { q.at = Math.max(Date.now(), r.begin + (Math.max(0, c.atChars - LEAD) / CPS) * 1000); r.items.push(q); }
-        else { q.hold = true; q.at = Date.now() + KB_clamp(self.spEnd - Date.now(), 1500, HOLD_MAX); }   // nothing said yet: wait for the words this drawing goes with
-        self.queue.push(q);
-        self.pump();
-        var out = { ok: true };
-        var pv = null;
-        try { pv = self.o.preview ? self.o.preview(d.from, d.beat) : null; } catch (err) { pv = null; }
-        if (pv) {
-          out.board = pv.board; out.text_lines_left = pv.text_lines_left; out.picture_slots_free = pv.picture_slots_free;
-          if (pv.wiped) out.wiped = 'The whole board was wiped before this was drawn (it was full). Everything drawn earlier is gone; only the items in "board" remain.';
-          if (pv.wiped_pictures) out.wiped_pictures = 'The picture area was full and was wiped before this was drawn. The text is still there.';
-          if (pv.dropped && pv.dropped.length) out.not_drawn = pv.dropped;
-          if (pv.text_lines_left <= 1 || (pv.picture_slots_free && !pv.picture_slots_free.length)) out.advice = 'The board is nearly full. Before you write or draw anything more, call board with clear:true (with the next thing in the same call).';
-        } else out.on_board = d.on_board;
-        return { call_id: it.call_id, output: out };
-      }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'connection problem, try once more' } }; });
-    }
+    if (it.name === 'board') return this.drawCues(c, args);
     if (it.name === 'look') {
       return post('/api/class/' + id + '/look', { image: args.image, find: args.find }).then(function (d) {
         delete d.__status; return { call_id: it.call_id, output: d };
@@ -210,6 +191,80 @@
       return Promise.resolve({ call_id: it.call_id, output: { ok: true } });
     }
     return Promise.resolve({ call_id: it.call_id, output: { ok: false, error: 'unknown tool' } });
+  };
+
+  /* ───────── the cue sheet ─────────
+     The teacher says a few sentences, then calls "board" once with a list of cues. A cue may carry "when": the words it was said with.
+     Each cue is drawn when the speech reaches those words (found in the transcript of this very response), so the board follows the
+     voice like a teacher's hand, with no beat per drawing. A cue without "when" goes where the call was made. */
+  function norm(s) { return String(s || '').replace(/[\s‌‍‎‏ً-ٰٟ«»"'.,!?؟،؛:;()\-–—…]/g, ''); }
+  function groupCues(ops, maxGroups) {
+    var groups = [];
+    (Array.isArray(ops) ? ops : []).forEach(function (op) {
+      if (!op || typeof op !== 'object') return;
+      var w = typeof op.when === 'string' ? op.when.trim() : '', o = Object.assign({}, op); delete o.when;
+      if (w || !groups.length) groups.push({ when: w, ops: [o] }); else groups[groups.length - 1].ops.push(o);
+    });
+    return groups.slice(0, maxGroups || 8);
+  }
+  // where in this response's speech (in characters) a cue belongs
+  function cueChars(r, when, from, k, n, calledAt) {
+    var text = norm(r.text), w = norm(when);
+    if (w && text) {
+      var i = text.indexOf(w, from.i);
+      if (i < 0) i = text.indexOf(w);
+      if (i < 0 && w.length > 8) { w = w.slice(0, Math.ceil(w.length / 2)); i = text.indexOf(w, from.i); if (i < 0) i = text.indexOf(w); }
+      if (i >= 0) { from.i = i; return { chars: Math.round(i * r.chars / Math.max(1, text.length)), lead: CUE_LEAD }; }
+    }
+    if (when) return { chars: Math.round(r.chars * k / Math.max(1, n)), lead: CUE_LEAD };          // words not found: spread evenly
+    return { chars: calledAt, lead: LEAD };                                                          // no words given: where the call was made
+  }
+
+  P.drawCues = function (c, args) {
+    var self = this, it = c.item, id = this.o.classId, r = c.resp;
+    var groups = groupCues(args.ops, 8);
+    if (!groups.length) groups = [{ when: '', ops: [] }];
+    var from = { i: 0 }, errors = [], dropped = [], pv = null, kept = false, wiped = false, wipedP = false, queued = 0, held = 0;
+    var spoke = !!(r && r.begin);
+    var chain = Promise.resolve();
+    groups.forEach(function (g, k) {
+      chain = chain.then(function () {
+        return post('/api/class/' + id + '/draw', { ops: g.ops, clear: k === 0 && args.clear === true }).then(function (d) {
+          if (!d.ok) { errors.push(d.error || 'could not draw'); return; }
+          if (d.from == null) { kept = true; return; }
+          var q = { from: d.from, beat: d.beat, at: Date.now(), hold: false };
+          if (spoke) {
+            var pos = cueChars(r, g.when, from, k, groups.length, c.atChars);
+            q.at = Math.max(Date.now(), r.begin + (Math.max(0, pos.chars - pos.lead) / CPS) * 1000); r.items.push(q);
+          } else { q.hold = true; q.at = Date.now() + KB_clamp(self.spEnd - Date.now(), 1500, HOLD_MAX) + k * 900; held++; }   // nothing said yet: wait for the words this goes with
+          self.queue.push(q); queued++;
+          var p1 = null;
+          try { p1 = self.o.preview ? self.o.preview(d.from, d.beat) : null; } catch (err) { p1 = null; }
+          if (p1) {
+            pv = p1; wiped = wiped || p1.wiped; wipedP = wipedP || p1.wiped_pictures;
+            (p1.dropped || []).forEach(function (x) { dropped.push(x); });
+          }
+          self.pump();
+        });
+      }).catch(function () { errors.push('connection problem, try once more'); });
+    });
+    return chain.then(function () {
+      var out = { ok: queued > 0 || kept };
+      if (!out.ok) { out.error = errors[0] || 'nothing was drawn'; return { call_id: it.call_id, output: out }; }
+      if (kept) out.page_kept = 'The page is already on the board and stays there. Do not show it again; just point at it.';
+      if (pv) {
+        out.board = pv.board; out.text_lines_left = pv.text_lines_left; out.picture_slots_free = pv.picture_slots_free;
+        if (pv.page && pv.page.length) out.page_on_board = pv.page;
+        if (wiped) out.wiped = 'The whole board was wiped before this was drawn (it was full). Everything drawn earlier is gone; only the items in "board" remain.';
+        if (wipedP) out.wiped_pictures = 'The picture area was full and was wiped before this was drawn. The text is still there.';
+        if (pv.text_lines_left <= 1 && !(pv.page && pv.page.length)) out.advice = 'The board is nearly full. Before you write more, call board with clear:true (with the next thing in the same call).';
+        else if (pv.text_lines_left <= 1) out.advice = 'The notes area is nearly full. Before you write more notes, call board with clear:true (the page stays).';
+      }
+      if (dropped.length) out.not_drawn = dropped;
+      if (errors.length) out.not_drawn = (out.not_drawn || []).concat(errors);
+      if (!spoke) out.hint = 'You drew without speaking first. Say what you are showing, in words, and give each cue a "when" with the words it goes with.';
+      return { call_id: it.call_id, output: out };
+    });
   };
 
   P.finishSoon = function (ms) {

@@ -444,6 +444,8 @@ def _clean_op(raw, mapping, known):
         tg = g('target')
         if op == 'erase' and (tg in (None, 'all')):
             out['target'] = 'all'
+        elif op == 'erase' and tg == 'marks':              # wipe the circles, ticks and arrows only; the page and the notes stay
+            out['target'] = 'marks'
         else:
             lst = tg if isinstance(tg, list) else [tg]
             if tg is None and op in ('mark', 'point') and isinstance(g('image'), str):     # "that picture" instead of an element id
@@ -548,42 +550,91 @@ def clean_beat(raw, prefix='b', known_ids=(), images=None, image_of=None):
     return beat, set(mapping['own'].values())
 
 
-def live_ids(beats):
-    """Ids that are still on the board after the last clear (or erase-all) in `beats`."""
-    ids = set()
+def _keeps_page(op):
+    """A whole page or photo shown big stays on the board when the notes are cleared."""
+    return op.get('op') == 'image' and op.get('big') is True and not op.get('crop')
+
+
+def _replay(beats):
+    """Replay the saved beats the way the board does.  -> (ids still on the board, {element id: picture key}, [(id or None, description)]).
+    `clear` wipes the notes and marks but keeps the big page or photo; a new big picture, or erase "all", wipes everything."""
+    ids, imgs, descs, keep = set(), {}, [], set()
+
+    def wipe(keep_pages):
+        k = keep if keep_pages else set()
+        ids.intersection_update(k)
+        for i in [i for i in imgs if i not in k]:
+            del imgs[i]
+        descs[:] = [d for d in descs if d[0] is not None and d[0] in k]
+        if not keep_pages:
+            keep.clear()
+
     for b in beats:
-        if b.get('clear'):
-            ids = set()
-        for op in b.get('do', []):
-            if op.get('op') == 'erase':
+        ops = b.get('do', [])
+        if any(_keeps_page(o) for o in ops):
+            wipe(False)
+        elif b.get('clear'):
+            wipe(True)
+        for op in ops:
+            k = op.get('op')
+            if k == 'erase':
                 tg = op.get('target')
                 if tg == 'all':
-                    ids = set()
+                    wipe(False)
+                elif tg == 'marks':
+                    pass                                            # marks carry no ids on the server; nothing to forget
                 else:
                     for t in (tg if isinstance(tg, list) else [tg]):
                         ids.discard(t)
-            elif op.get('id'):
+                        imgs.pop(t, None)
+                        keep.discard(t)
+                        descs[:] = [d for d in descs if d[0] != t]
+                continue
+            if k in ('wait', 'point', 'mark'):
+                if k == 'mark' and op.get('id'):
+                    ids.add(op['id'])
+                continue
+            if op.get('id'):
                 ids.add(op['id'])
-    return ids
+            if k == 'image' and op.get('id'):
+                imgs[op['id']] = op.get('image')
+                if _keeps_page(op):
+                    keep.add(op['id'])
+            d = describe_op(op)
+            if d:
+                descs.append((op.get('id'), d))
+    return ids, imgs, descs
+
+
+def live_ids(beats):
+    """Ids that are still on the board now."""
+    return _replay(beats)[0]
 
 
 def live_image_map(beats):
-    """{element id: picture key} for the pictures still on the board after the last clear."""
-    m = {}
-    for b in beats:
-        if b.get('clear'):
-            m = {}
-        for op in b.get('do', []):
-            if op.get('op') == 'erase':
-                tg = op.get('target')
-                if tg == 'all':
-                    m = {}
-                else:
-                    for t in (tg if isinstance(tg, list) else [tg]):
-                        m.pop(t, None)
-            elif op.get('op') == 'image' and op.get('id'):
-                m[op['id']] = op.get('image')
-    return m
+    """{element id: picture key} for the pictures still on the board."""
+    return _replay(beats)[1]
+
+
+def keep_open_pictures(ops, image_of):
+    """The student's page is already on the board: drop a repeated "show the whole page" op instead of wiping and redrawing it,
+    and point the ops that used its new id at the page that is already there.  -> (ops, [dropped picture keys])"""
+    open_by_key = {}
+    for eid, key in (image_of or {}).items():
+        open_by_key[key] = eid
+    out, dropped, rename = [], [], {}
+    for o in ops:
+        if (isinstance(o, dict) and o.get('op') == 'image' and not o.get('crop') and isinstance(o.get('image'), str)
+                and o['image'] in open_by_key):
+            if isinstance(o.get('id'), str):
+                rename[o['id']] = open_by_key[o['image']]
+            dropped.append(o['image'])
+            continue
+        out.append(o)
+    if rename:
+        out = [dict(o, target=rename.get(o.get('target'), o.get('target'))) if isinstance(o, dict) and isinstance(o.get('target'), str) and o.get('target') in rename else o
+               for o in out]
+    return out, dropped
 
 
 def describe_op(op):
@@ -619,15 +670,4 @@ def _describe(op):
 
 def board_digest(beats, limit=14):
     """A short description of what is on the board now, for the model."""
-    on = []
-    for b in beats:
-        if b.get('clear'):
-            on = []
-        for op in b.get('do', []):
-            if op.get('op') in ('erase', 'wait', 'point', 'mark'):
-                if op.get('op') == 'erase' and op.get('target') == 'all':
-                    on = []
-                continue
-            on.append(describe_op(op))
-    on = [x for x in on if x]
-    return on[-limit:]
+    return [d for _i, d in _replay(beats)[2]][-limit:]
