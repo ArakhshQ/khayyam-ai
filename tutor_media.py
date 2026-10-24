@@ -231,3 +231,45 @@ def regions_for_prompt(meta, limit=16):
     if meta.get('text'):
         lines.append('text in it: ' + meta['text'][:700])
     return '\n'.join(lines)
+
+
+# ───────── the student's handwriting on the board ─────────
+INK_SYSTEM = r"""You read what a student wrote BY HAND (finger, stylus or mouse) on a classroom board. The picture shows only the student's strokes, dark on white. The writing may be Dari/Persian (Afghan), Pashto, English, digits, or mathematics, and may be messy.
+Return one JSON object only:
+{"text": "exactly what is written, line by line, separated by \n, in the language it is written in; for mathematics write it in plain linear form with the usual signs (+ - × ÷ = / ^ √ and fractions as a/b)",
+ "kind": "text|number|math|drawing|mixed",
+ "confidence": 0.0-1.0,
+ "note": "one short English phrase only if something is unclear (which part, what it could be), else empty"}
+Rules: copy what is there; never complete, correct or solve it. Digits may be Persian (۰-۹) or Latin: keep the style the student used. If a part is unreadable write «؟» for it. If it is a drawing (shape, diagram, graph, arrow) say kind "drawing" and describe it in "text" in one short English sentence."""
+
+
+def parse_ink(reply):
+    if not isinstance(reply, str):
+        return None
+    m = re.search(r'\{.*\}', reply, re.S)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(0))
+    except ValueError:
+        return None
+    if not isinstance(d, dict):
+        return None
+    try:
+        conf = float(d.get('confidence'))
+    except (TypeError, ValueError):
+        conf = 0.5
+    kind = d.get('kind') if d.get('kind') in ('text', 'number', 'math', 'drawing', 'mixed') else 'text'
+    return {'text': _s(d.get('text'), 600), 'kind': kind, 'confidence': max(0.0, min(1.0, conf)), 'note': _s(d.get('note'), 120)}
+
+
+def image_from_data_url(u, limit=1500000):
+    """'data:image/jpeg;base64,...' -> jpeg bytes, or None."""
+    import base64
+    if not isinstance(u, str) or not u.startswith('data:image/jpeg;base64,') or len(u) > limit * 1.4:
+        return None
+    try:
+        raw = base64.b64decode(u.split(',', 1)[1], validate=False)
+    except Exception:
+        return None
+    return raw if raw[:3] == b'\xff\xd8\xff' and len(raw) <= limit else None

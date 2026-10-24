@@ -312,6 +312,22 @@
     if (this.responding) this.needReply = true; else this.send({ type: 'response.create' });
     return true;
   };
+  // something the student did on the board (marked, wrote, typed): the teacher gets a note and pictures.
+  // respond=false: it only becomes part of what the teacher knows (a marked part waits for the student's question)
+  P.sendBoardNote = function (note, images, respond, label) {
+    if (!this.active) return false;
+    var content = [{ type: 'input_text', text: note }];
+    (images || []).forEach(function (u) { if (u) content.push({ type: 'input_image', image_url: u }); });
+    this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: content } });
+    this.transcript.push({ role: 'user', text: label || '[تخته]' });
+    if (respond) { this.stopSpeaking(); if (this.responding) this.needReply = true; else this.send({ type: 'response.create' }); }
+    return true;
+  };
+  // the student marked something and then said nothing: the teacher asks which part they mean
+  P.nudge = function () {
+    if (!this.active || this.responding || this.userSpeaking) return false;
+    this.send({ type: 'response.create' }); return true;
+  };
   P.sendText = function (text) {
     if (!this.active) return false;
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + text }] } });

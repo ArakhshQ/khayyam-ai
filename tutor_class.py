@@ -145,6 +145,14 @@ PICTURES AND DOCUMENT PAGES THE STUDENT BRINGS (like a teacher with the student'
 - Read text in the picture exactly as written. If a part is unclear, say so and ask. Never claim to see what is not there.
 - For a document with several pages, show the page you are on; when you move on, send the next page's image op.
 
+THE STUDENT POINTS, WRITES AND TYPES ON THE BOARD (like a student who walks up to the board)
+- The student has a gold pointer, a pen and a keyboard on the board. You are told what they did in messages that begin with [انتخاب شاگرد] (selected / pointed at something), [نوشتهٔ شاگرد روی تخته] (wrote by hand) or [نوشتهٔ تایپی شاگرد] (typed on the board). Treat them as part of what the student says. Such a message comes with a picture of the board (what they marked is outlined in yellow, what they wrote is in light blue) and with exact data: the text lines, formula or picture parts under their marker, with ids.
+- SELECTION: the student marks something and usually asks about it («این را بیشتر توضیح بدهید»). Believe the data: it is exactly what is under their marker. Answer about THAT part only. Start by pointing at it with a cue (point with "target":<id>, or the picture's "region"/"area"), say what it is in your own words in one sentence, then explain it more simply with a picture or a small example, and ask if it is clear. If they marked something and said nothing yet, say «بله، این قسمت؛ چه چیزش را می‌خواهید؟» and wait. Never explain things they did not mark.
+- If they ask you to change what is on the board (a wrong number, a typo), erase that id and write the corrected one in the same cue, saying what changed.
+- WRITING BY HAND: the message gives my reading of the handwriting with a confidence. If the confidence is low or it matters (a number, a step of a solution), repeat what you read («این را نوشتید: …؟») before you judge it. Then react as a teacher: right or wrong, kindly, with a tick or a pink circle on their writing (mark with "area" or the id near it), one sentence why, and a hint before the full answer.
+- TYPED: the message holds the exact words. Same as above.
+- YOUR TURN: when you want the student to write on the board (an answer, a step, a drawing), say clearly what to write, then call board with {"op":"yourturn","label":"1-4 Dari words"} (a dashed box appears where they write, and the pen opens for them). Then STOP and wait for their writing; do not continue the lesson and do not write the answer yourself. Use this often for practice: after you show one example, give a similar one for them to try.
+
 WHEN THE STUDENT MAKES A MISTAKE
 - Notice it right away, in what they say or type. Be gentle and quick: say what is not right in one sentence, and at the same moment show it on the board: first make sure there is room (see above), then write their answer short, mark it (circle or cross, target the id of their line) and write the correct step in green next to it. Do the whole check on one clean page. Prefer a hint before the full answer, then let them try again. When they are right, say so warmly and briefly, and mark it with a tick.
 - If the student's answer is only partly right, say which part is right.
@@ -406,7 +414,8 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
     def public_material(m):
         meta = m['meta']
         return {'key': m['key'], 'id': m['media'], 'url': '/media/' + m['media'], 'title': m['title'], 'page': m['page'], 'pages': m['pages'],
-                'w': m['w'], 'h': m['h'], 'looked': bool(meta.get('looked'))}
+                'w': m['w'], 'h': m['h'], 'looked': bool(meta.get('looked')),
+                'regions': [{k: r.get(k, '') for k in ('id', 'label', 'text', 'box')} for r in (meta.get('regions') or [])[:TM.MAX_REGIONS + 6]]}
 
     def materials_text(mats):
         if not mats:
@@ -1032,9 +1041,35 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         media_store.update_meta(db, m['media'], owner_key(), meta)
         return jsonify(ok=True, **look_view(m, meta))
 
+    @app.route('/api/class/<int:cid>/read_ink', methods=['POST'])
+    @limiter.limit('60 per hour')
+    @login_required
+    def class_read_ink(cid):
+        """The student wrote on the board by hand: read it (a vision model), so the teacher gets the words, not only a picture."""
+        if not owned(cid):
+            return jsonify(ok=False, error='class not found'), 404
+        p = request.get_json(silent=True) or {}
+        raw = TM.image_from_data_url(p.get('image'))
+        if not raw:
+            return jsonify(ok=False, error='bad picture')
+        try:
+            import base64
+            reply, _sw, _reset, model = metered('tutor', TM.INK_SYSTEM, [{'role': 'user', 'content': 'Read the handwriting.'}], current_user.id, tier_of(current_user),
+                                                temperature=.1, image_b64=base64.b64encode(raw).decode('ascii'), image_type='image/jpeg',
+                                                max_output=700, level='standard', json_mode=True, intent_label='class/ink')
+        except Exception:
+            app.logger.exception('class_read_ink failed')
+            return jsonify(ok=False, error='could not read the writing now')
+        if reply is None:
+            return jsonify(ok=False, error='busy or allowance used up' if model == 'limited' else 'could not read the writing now')
+        d = TM.parse_ink(reply)
+        if not d:
+            return jsonify(ok=False, error='could not read the writing')
+        return jsonify(ok=True, **d)
+
     def look_view(m, meta):
         return {'image': m['key'], 'kind': meta.get('kind', ''), 'summary': meta.get('summary', ''), 'text': (meta.get('text') or '')[:900],
-                'regions': [{k: r.get(k, '') for k in ('id', 'label', 'what', 'text')} for r in (meta.get('regions') or [])],
+                'regions': [{k: r.get(k, '') for k in ('id', 'label', 'what', 'text', 'box')} for r in (meta.get('regions') or [])],
                 'note': 'point at a region with {"op":"point","target":<the id you gave the image op>,"region":"r2"} and circle it with {"op":"mark","style":"circle",...same keys}'}
 
     def voice_context(data):

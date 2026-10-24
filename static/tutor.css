@@ -50,6 +50,7 @@
 .kb-wrap { position: relative; isolation: isolate; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .35), 0 28px 44px -26px rgba(10, 30, 24, .75); }
 .kb-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .kb-wrap .kb-fx { pointer-events: none; }
+.kb-wrap .kb-stu { pointer-events: none; touch-action: auto; }
 /* wooden frame, tray, chalk and eraser */
 .kb-wrap::before {
   content: ''; position: absolute; inset: -15px; z-index: -1; border-radius: 7px;
@@ -212,3 +213,23 @@
 @keyframes stSpin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) { .status-stack { top: 64px; } .status { font-size: 13.5px; padding: 9px 15px; } }
 @media (prefers-reduced-motion: reduce) { .status { transition: opacity .2s; transform: none; } .status.busy .st-ic { animation-duration: 2s; } }
+
+
+/* ───────── the student's tools on the board ───────── */
+.stu-tools { position: absolute; z-index: 30; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: row; align-items: center; gap: 4px; width: max-content; padding: 4px 6px; border-radius: 16px; background: rgba(12, 38, 31, .88); border: 1px solid rgba(216, 178, 90, .35); box-shadow: 0 14px 30px -14px rgba(0, 0, 0, .6); backdrop-filter: blur(6px); }
+.stu-tools[hidden] { display: none; }
+.stu-btn { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 11px 5px 9px; border: 0; border-radius: 11px; background: transparent; color: #f6f0e0; font: 600 13.5px/1 inherit; cursor: pointer; transition: background .18s, color .18s, transform .15s; }
+.stu-btn svg { width: 20px; height: 20px; flex: none; }
+.stu-btn:hover { background: rgba(255, 255, 255, .1); }
+.stu-btn.on { background: #f4d86e; color: #10241d; }
+.stu-btn:active { transform: scale(.96); }
+.stu-undo { justify-content: center; padding: 6px; }
+.stu-undo span { display: none; }
+.stu-send { min-height: 40px; padding: 6px 14px; border: 0; border-radius: 11px; background: #7fe0a8; color: #0e3a28; font: 700 13.5px/1 inherit; cursor: pointer; animation: stuPulse 1.6s ease-in-out infinite; }
+.stu-send[hidden] { display: none; }
+@keyframes stuPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(127, 224, 168, .55); } 50% { box-shadow: 0 0 0 9px rgba(127, 224, 168, 0); } }
+.kb-typing { z-index: 40; box-sizing: border-box; padding: 4px 8px; border: 2px dashed #9fd8ff; border-radius: 8px; background: rgba(8, 28, 22, .78); color: #bfe6ff; font-family: Vazirmatn, system-ui, sans-serif; font-weight: 600; line-height: 1.5; resize: none; outline: none; overflow: hidden; }
+@media (max-width: 760px) {
+  .stu-tools { bottom: 6px; width: max-content; flex-wrap: wrap; justify-content: center; max-width: calc(100% - 16px); gap: 3px; padding: 4px; }
+  .stu-btn { min-height: 38px; padding: 6px 9px; font-size: 12.5px; } .stu-btn svg { width: 18px; height: 18px; }
+}

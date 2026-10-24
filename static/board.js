@@ -23,7 +23,7 @@
     this.wrap = document.createElement('div'); this.wrap.className = 'kb-wrap';
     this.cv = {}; this.cx = {};
     var self = this;
-    ['bg', 'ink', 'anim', 'fx'].forEach(function (n) {
+    ['bg', 'ink', 'anim', 'fx', 'stu'].forEach(function (n) {
       var c = document.createElement('canvas'); c.className = 'kb-' + n; self.wrap.appendChild(c); self.cv[n] = c; self.cx[n] = c.getContext('2d');
     });
     var tray = document.createElement('div'); tray.className = 'kb-tray';
@@ -36,6 +36,7 @@
     this.chooseProfile();
     this.sizeCanvases();
     this.paintBg();
+    if (this.studentWire) this.studentWire();
   }
   KB.Board = Board;
   var P = Board.prototype;
@@ -65,7 +66,7 @@
     this.pxW = Math.round(wpx * this.dpr); this.pxH = Math.round(hpx * this.dpr);
     this.S = this.pxW / W;
     var self = this;
-    ['bg', 'ink', 'anim', 'fx'].forEach(function (n) { self.cv[n].width = self.pxW; self.cv[n].height = self.pxH; });
+    ['bg', 'ink', 'anim', 'fx', 'stu'].forEach(function (n) { self.cv[n].width = self.pxW; self.cv[n].height = self.pxH; });
   };
   P.onResize = function () {
     var self = this;
@@ -452,6 +453,7 @@
     this.world.forEach(function (e) { e.sts = null; e.el.items.forEach(function (it) { it._r = null; }); self.finishEl(e); });
     this.drawAnims();
     if (this.ptr) this.drawFx(0);
+    if (this.studentDraw) this.studentDraw();
   };
 
   // state at the start of scene i: every earlier scene is applied instantly
@@ -500,8 +502,10 @@
     return { id: a.id, anim: a.anim, a: a.a, f: a.f, size: a.size, dur: a.dur, loop: a.loop, color: a.color, iconStrokes: a.iconStrokes, shape: a.shape, from: a.from, to: a.to, bodies: a.bodies, t0: instant ? this.clock - a.dur - 1 : this.clock };
   };
   P.startScene = function () {
-    this.run = this.model.scenes[this.sceneIdx].acts.map(function () { return { state: 0 }; });
+    var sc0 = this.model.scenes[this.sceneIdx];
+    this.run = sc0.acts.map(function () { return { state: 0 }; });
     this.sceneEnded = false;
+    if (sc0.turn && this.live) this.emit('turn', sc0.turn);
   };
   P.play = function () {
     if (!this.model) return;
@@ -614,6 +618,7 @@
   };
   P.finishErase = function (a, r) {
     var self = this;
+    if (this.studentClear) { var ids_ = this.model.ids; if (a.targets === 'all' || a.targets.filter(function (t) { return (ids_[t] || {}).kind !== 'mark'; }).length >= 2) this.studentClear(); }     // the teacher wiped the page: the student's writing on it goes too
     if (a.targets === 'all') { this.world = []; this.anims = []; this.ptr = null; }
     else { this.world = this.world.filter(function (e) { return a.targets.indexOf(e.el.id) < 0; }); this.anims = this.anims.filter(function (e) { return a.targets.indexOf(e.id) < 0; }); }
     var ink = this.cx.ink; ink.setTransform(1, 0, 0, 1, 0, 0); ink.clearRect(0, 0, this.pxW, this.pxH);

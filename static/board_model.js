@@ -453,6 +453,29 @@
       return { el: el };
     }
 
+    /* ----- the student's turn: a dashed box where the student is asked to write ----- */
+    function buildYourTurn(a) {
+      var zn = KB.own(Z, a.zone) ? a.zone : 'a', el = mkEl(a, 'yourturn', 'y'), box = resolveBox({ zone: zn }, 'a'), sd = el.seed;
+      var y = box[1] + (cursors[zn] || 0), avail = box[1] + box[3] - y, h = Math.min(avail, P.wide ? 190 : 170);
+      if (h < 80) {
+        if ((cursors[zn] || 0) > 0) { delete ids[el.id]; return { overflow: true, el: null }; }
+        h = Math.max(60, avail);
+      }
+      var x = box[0] + 6, w = box[2] - 12, o = { color: KB.color('blue'), w: 2.8, speed: 520 };
+      var pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]], dash = 24, gap = 14;
+      for (var i = 0; i < 4; i++) {
+        var p0 = pts[i], p1 = pts[i + 1], len = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]), n = Math.max(1, Math.floor(len / (dash + gap)));
+        var segs = [];
+        for (var k = 0; k < n; k++) { var u0 = k * (dash + gap) / len, u1 = Math.min(1, (k * (dash + gap) + dash) / len); segs.push(KB.line(p0[0] + (p1[0] - p0[0]) * u0, p0[1] + (p1[1] - p0[1]) * u0, p0[0] + (p1[0] - p0[0]) * u1, p0[1] + (p1[1] - p0[1]) * u1, sd + i * 9 + k, .3)); }
+        strokesOf(el, segs, o);
+      }
+      var lab = str(a.label, 60) || 'اینجا بنویسید', sz = 27 * P.ts, lw = KB.measure(lab, sz, 'body', 500), r = RTL_RE.test(lab);
+      el.items.push({ t: 'x', mode: 'text', lines: [{ s: lab, x: r ? x + w - lw - 12 : x + 12, y: y + 8, w: lw, rtl: r }], size: sz, lh: sz * 1.7, fam: 'body', weight: 500, color: KB.color('blue'), t0: el.dur, d: .8, cat: lab.length });
+      el.dur += .8; el.bbox = [x, y, w, h]; el.turnLabel = lab; el.turnBox = true;
+      cursors[zn] = (cursors[zn] || 0) + h + 14;
+      return { el: el };
+    }
+
     /* ----- animations (drawn live on their own layer) ----- */
     function buildAnim(a) {
       a = Object.assign({}, a);
@@ -503,13 +526,13 @@
     /* ───────── scenes ───────── */
     function speechSecs(s) { return Math.max(1.8, str(s, 1200).length / SPEECH_CPS); }
     var BUILD = { text: buildText, math: buildMath, line: buildShape, arrow: buildShape, rect: buildShape, circle: buildShape, ellipse: buildShape, poly: buildShape, path: buildShape, icon: buildShape,
-                  pie: buildPie, bars: buildBars, numberline: buildNumberline, graph: buildGraph, table: buildTable, dots: buildDots, mark: buildMark, anim: buildAnim, image: buildImage };
+                  yourturn: buildYourTurn, pie: buildPie, bars: buildBars, numberline: buildNumberline, graph: buildGraph, table: buildTable, dots: buildDots, mark: buildMark, anim: buildAnim, image: buildImage };
     var scenes = Array.isArray(lesson.scenes) ? lesson.scenes.slice(0, 800) : [];
 
     /* ----- automatic layout (live class): text stacks in column "a", pictures go into slots of column "b" ----- */
     var ALIAS = { left: 'b', right: 'a', first: 'a', second: 'b' };
     var GRID = P.wide ? { cols: 2, rows: 2 } : { cols: 3, rows: 2 };
-    var TEXTY = { text: 1, math: 1 };
+    var TEXTY = { text: 1, math: 1, yourturn: 1 };
     var BIGOP = { graph: 1, table: 1, bars: 1 };
     var BIGANIM = { orbit: 1, swing: 1, move: 1, wave: 1 };
     function zoneName(a) { var z = KB.own(Z, a.zone) ? (ALIAS[a.zone] || a.zone) : null; return z; }
@@ -642,6 +665,7 @@
           res.el.zone = zoneName(a) || 'a'; res.el.slot = TEXTY[op] ? '' : beat.slot; res.el.label = str(a.t != null ? a.t : (a.m != null ? a.m : (a.name || a.image || op)), 40);
           if (!res.noBox) alive[res.el.id] = true; else if (res.el.kind === 'mark') marksUp[res.el.id] = true;
           S.acts.push({ type: 'draw', el: res.el, natural: Math.max(.3, res.el.dur) });
+          if (res.el.turnBox) S.turn = { id: res.el.id, box: res.el.bbox.slice(), label: res.el.turnLabel };
         }
       }
       if (full && again) {

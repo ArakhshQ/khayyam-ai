@@ -50,6 +50,7 @@ KEYS = {
     'point': ('target', 'region', 'spot', 'area', 'label', 'image'),
     'image': ('image', 'crop'),
     'erase': ('target',),
+    'yourturn': ('label',),
     'wait': ('s',),
     'anim': ('kind', 'icon', 'shape', 'dur', 'loop', 'size', 'from', 'to', 'bodies', 'x', 'from_y', 'to_y',
              'angle', 'period', 'fontSize', 'amp', 'cycles', 'hop', 'len', 'spin', 'turns', 'fade', 'digits'),
@@ -482,6 +483,11 @@ def _clean_op(raw, mapping, known):
             out['label'] = _str(g('label'), 40)
         if op == 'mark':
             out['style'] = g('style') if g('style') in MARK_STYLES else 'underline'
+    elif op == 'yourturn':
+        out['label'] = _str(g('label'), 60)
+        if 'id' not in out:
+            out['id'] = mapping['prefix'] + 'turn'
+            mapping['own']['turn'] = out['id']
     elif op == 'wait':
         out['s'] = _num(g('s'), .2, 6, 1)
     elif op == 'anim':
@@ -649,6 +655,8 @@ def _describe(op):
         return 'نوشته: ' + op.get('t', '')
     if k == 'math':
         return 'فرمول: ' + op.get('m', '')
+    if k == 'yourturn':
+        return 'جای نوشتن شاگرد: ' + op.get('label', '')
     if k == 'pie':
         return 'دایره %s/%s' % (op.get('fill'), op.get('parts'))
     if k == 'bars':

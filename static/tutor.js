@@ -214,6 +214,7 @@
     board = new KB.Board($('board-stage')); window.__board = board;
     board.on('say', onSay).on('scene', onScene).on('time', onTime).on('state', onState).on('end', onEnd)
       .on('ask', onAsk).on('timeline', buildScrub).on('sceneEnd', onSceneEnd);
+    wireStudent(board);
     return board;
   }
   function stepCount() { return board && board.model ? board.model.scenes.length : 0; }
@@ -406,6 +407,7 @@
     liveAll = (d.beats || []).slice();
     ensureBoard().live = true; board.askDone = {}; board.atEnd = false; board.waitingAsk = -1; board.stack = []; board.holdAtEnd = false;
     if (!o.keepPlace) { $('transcript').textContent = ''; $('caption').textContent = ''; }
+    api('/api/class/' + d.id + '/materials').then(function (r) { if (r && r.ok) feedRegions(r.items); }).catch(function () {});
     return board.load(lesson).then(function () {
       board.live = true; buildScrub();
       if (o.fresh) { board.gotoScene(0, true); }
@@ -535,7 +537,7 @@
   };
   window.newClass = function () {
     if (live) { try { live.stop(); } catch (e) {} live = null; $('voice-record-btn').classList.remove('live', 'muted'); }
-    delete $('classroom').dataset.live;
+    showStuTools(false); delete $('classroom').dataset.live;
     if (board) { board.pause(); board.destroy(); board = null; window.__board = null; }
     if (cls && posPending >= 0) { api('/api/class/' + cls.id + '/save', { pos: posPending }); posPending = -1; }
     cls = null; sampleOn = false; stopAt = -1; closing = false; inflight = false; busy = false; handUp = false; spoken = {};
@@ -573,12 +575,13 @@
         if (d.started || (cls.outline && cls.outline.length > 1)) leaveLobby();
         renderPath();
       },
-      onUserText: function (t) { addMessage('user', t); },
+      onUserText: function (t) { stuSpoke(); addMessage('user', t); },
       onAiText: function (t) { addMessage('ai', t); },          // the conversation is the only text; the board has no captions
       onState: function (st) {
         var b = $('voice-record-btn');
         b.classList.toggle('live', st !== 'idle');
         b.classList.toggle('talking', st === 'listening');
+        if (st === 'listening' || st === 'speaking') stuSpoke(true);
         if (st === 'thinking') Stat.busy('think', 'استاد فکر می‌کند…', 900, 40000);
         else if (st !== 'connected') { Stat.clear('think'); if (st === 'speaking') Stat.clear('wait'); }
       },
@@ -613,6 +616,7 @@
     return live.start().then(function () {
       setPrep(false, '', '', true);
       Stat.ok('voice', 'به استاد وصل شدید ✓', 2600);
+      showStuTools(true);
       Stat.busy('wait', 'استاد می‌آید…', 0, 30000);
       $('board-empty').hidden = !cls.lobby; $('board-controls').hidden = !!cls.lobby; $('lesson-title').textContent = cls.lobby ? 'گفتگو با استاد' : cls.title;
       $('classroom').dataset.live = '1';
@@ -623,7 +627,7 @@
       if (global_console()) console.warn('live voice failed', err);
       var sess = live; live = null; try { sess.stop(); } catch (e) {}
       $('voice-record-btn').classList.remove('live', 'muted');
-      setPrep(false, '', '', true); setWaiting(false);
+      setPrep(false, '', '', true); setWaiting(false); showStuTools(false);
       var denied = err && /Permission|NotAllowed|denied/i.test(String(err.name || err.message || err));
       Stat.fail('voice', denied ? 'میکروفون اجازه نگرفت. اجازه بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.', 7000);
       addMessage('ai', denied ? 'برای صنف صوتی به میکروفون نیاز است. اجازهٔ میکروفون را بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.',
@@ -670,7 +674,7 @@
   function finishLive() {
     if (!live || !cls || closing) return;
     closing = true;
-    var id = cls.id, tr = live.stop(); live = null;
+    var id = cls.id, tr = live.stop(); live = null; showStuTools(false);
     Stat.clear('think'); Stat.clear('wait'); Stat.busy('save', 'صنف ذخیره می‌شود…', 0, 90000);
     $('voice-record-btn').classList.remove('live', 'muted', 'talking'); delete $('classroom').dataset.live;
     typing();
@@ -764,12 +768,12 @@
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (up) {
         if (!r.ok || !up.ok || !(up.items || []).length) throw new Error(up.error || 'بارگذاری ممکن نشد.');
-        items = up.items; addPictureMessage(items, pdf);
+        items = up.items; addPictureMessage(items, pdf); feedRegions(items);
       });
     }).then(function () {
       Stat.busy('pic', pdf ? 'استاد صفحه‌ها را می‌خواند…' : 'استاد تصویر را بررسی می‌کند…', 0, 90000);
       var tm = new Promise(function (res) { setTimeout(function () { res(null); }, 30000); });
-      return Promise.race([api('/api/class/' + d.id + '/look', { image: items[0].key }), tm]).then(function (lk) { if (lk && lk.ok) info = lk; }).catch(function () {});
+      return Promise.race([api('/api/class/' + d.id + '/look', { image: items[0].key }), tm]).then(function (lk) { if (lk && lk.ok) { info = lk; feedRegions(null, lk); } }).catch(function () {});
     }).then(function () {
       return (pdf ? fetch(items[0].url, { credentials: 'same-origin' }).then(function (r) { return r.blob(); }) : Promise.resolve(file))
         .then(function (b) { return toJpeg(b, 1280, .82); }).then(blobUrl).then(function (u) { small = u; }).catch(function () { small = null; });
@@ -808,6 +812,101 @@
     ['dragleave', 'drop'].forEach(function (n) { room.addEventListener(n, function () { room.classList.remove('dropping'); }); });
     room.addEventListener('drop', function (e) { if (!hasFiles(e)) return; e.preventDefault(); var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) sendFile(f); });
     ta.addEventListener('paste', function (e) { var fs = e.clipboardData && e.clipboardData.files; if (fs && fs.length) { e.preventDefault(); sendFile(fs[0]); } });
+  })();
+
+
+  /* ───────── the student on the board: pointing, writing, typing ───────── */
+  var stuTimer = 0;
+  function showStuTools(on) {
+    var bar = $('stu-tools'); if (!bar) return;
+    bar.hidden = !on;
+    if (!on) { clearTimeout(stuTimer); $('stu-send').hidden = true; Stat.clear('ask'); Stat.clear('turn'); if (board && board.setTool) { board.setTool(null); board.studentClear(); } }
+  }
+  function stuSpoke(quiet) { clearTimeout(stuTimer); Stat.clear('ask'); }       // the student (or the teacher) is talking: the "say what you want" hint is over
+  function descText(d) {
+    var L = [];
+    if (d.lines && d.lines.length) { L.push('Text lines under it (element id: text):'); d.lines.slice(0, 8).forEach(function (l) { L.push('  ' + l.id + ': «' + l.s + '»'); }); }
+    if (d.formulas && d.formulas.length) { L.push('Formulas under it:'); d.formulas.slice(0, 4).forEach(function (f) { L.push('  ' + f.id + ': ' + f.m); }); }
+    (d.pictures || []).forEach(function (p) {
+      L.push('Picture ' + p.key + ' (its element id ' + p.id + '): it covers this area of the picture [' + p.area.join(', ') + '] (thousandths: left, top, width, height)' +
+        (p.regions.length ? '; named parts under it: ' + p.regions.map(function (r) { return r.id + ' (' + r.label + (r.text ? ': «' + String(r.text).slice(0, 80) + '»' : '') + ')'; }).join(', ')
+          : '; no named part is there, so point with "area" or call look with find'));
+    });
+    if (d.things && d.things.length) L.push('Other things there: ' + d.things.slice(0, 5).map(function (x) { return x.id + ' (' + x.kind + (x.label ? ' ' + x.label : '') + ')'; }).join(', '));
+    if (!L.length) L.push('Nothing you drew is under it (empty board).');
+    return L.join('\n');
+  }
+  function padRect(r, pad) { return [Math.max(0, r[0] - pad), Math.max(0, r[1] - pad), r[2] + 2 * pad, r[3] + 2 * pad]; }
+  function thumbMessage(text, dataUrl) {
+    var img = document.createElement('img'); img.className = 'chat-thumb'; img.src = dataUrl; img.alt = text;
+    addMessage('user', text, img);
+  }
+  function onStuSelect(info) {
+    if (!live || !live.active) { toast('اول به استاد وصل شوید.'); return; }
+    var whole = board.snapshot({ targetW: 1000 }), crop = board.snapshot({ rect: padRect(info.rect, 36), targetW: 640 });
+    var note = '[انتخاب شاگرد] The student pointed at a part of the board with their gold pointer (outlined in yellow in the first picture; the second picture is a close-up of it).\n' + descText(info.desc) +
+      '\nThis is exactly what they mean. Answer about THIS part only: first point at it with a cue (point with "target" = the element id, or the picture "region"/"area"), say in a sentence what it is, then explain it more simply. If they have not asked anything yet, say you see it and ask which part troubles them, then wait.';
+    live.sendBoardNote(note, [whole, crop], false, '[انتخاب شاگرد روی تخته]');
+    thumbMessage('این قسمت را نشان دادم.', crop);
+    Stat.ok('sel', 'این قسمت را به استاد نشان دادید ✓', 1800);
+    Stat.busy('ask', 'حالا بگویید چه می‌خواهید دربارهٔ آن بدانید…', 0, 14000);
+    clearTimeout(stuTimer);
+    stuTimer = setTimeout(function () { Stat.clear('ask'); if (live) live.nudge(); }, 8500);          // marked it and said nothing: the teacher asks which part
+  }
+  // the named parts (with their boxes) of the student's pictures, so the board can tell which part a marker covers
+  function feedRegions(items, info) {
+    if (!board || !board.setPicInfo) return;
+    (items || []).forEach(function (m) { if (m && m.key && m.regions && m.regions.length) board.setPicInfo(m.key, m.regions); });
+    if (info && info.image && info.regions) board.setPicInfo(info.image, info.regions);
+  }
+  function onStuInk() { var b = $('stu-send'); if (live && live.active) b.hidden = false; }
+  function sendInk() {
+    if (!live || !live.active || !board) return;
+    var t = board.takeInk(); if (!t) { $('stu-send').hidden = true; return; }
+    $('stu-send').hidden = true; Stat.clear('turn'); stuSpoke();
+    thumbMessage('روی تخته نوشتم.', t.crop);
+    Stat.busy('ink', 'استاد نوشتهٔ شما را می‌خواند…', 0, 40000);
+    var id = cls && cls.id;
+    var tm = new Promise(function (res) { setTimeout(function () { res(null); }, 25000); });
+    Promise.race([api('/api/class/' + id + '/read_ink', { image: t.crop }), tm]).catch(function () { return null; }).then(function (d) {
+      var rd = d && d.ok ? d : null, L = [];
+      L.push('[نوشتهٔ شاگرد روی تخته] The student wrote this BY HAND on the board (light-blue chalk).');
+      if (rd && rd.text) L.push('My reading of it: «' + rd.text + '» (kind: ' + rd.kind + ', confidence ' + rd.confidence.toFixed(2) + (rd.note ? '; unclear: ' + rd.note : '') + ').');
+      else L.push('The reading tool could not read it; read it yourself from the first picture and say what you read.');
+      L.push('Where it is: ' + descText(t.desc));
+      L.push('The first picture is their writing alone (dark on white), the second is the whole board. React like their teacher: say back what you read if it is uncertain or matters, then judge it kindly (a tick or a pink circle on it, one sentence why, a hint before the full answer).');
+      if (!live || !live.sendBoardNote(L.join('\n'), [t.crop, t.board], true, '[نوشتهٔ شاگرد روی تخته] ' + (rd && rd.text ? rd.text : ''))) { Stat.fail('ink', 'هنوز به استاد وصل نیستید.'); return; }
+      Stat.ok('ink', 'نوشته به استاد رسید ✓', 2000); Stat.busy('think', 'استاد نوشتهٔ شما را می‌بیند…', 0, 40000);
+    });
+  }
+  function onStuTyped(info) {
+    if (!live || !live.active) { toast('اول به استاد وصل شوید.'); return; }
+    stuSpoke(); Stat.clear('turn');
+    var note = '[نوشتهٔ تایپی شاگرد] The student typed this on the board (light-blue text): «' + info.text + '».\nWhere it is: ' + descText(info.desc) +
+      '\nReact like their teacher: judge it kindly (a tick or a pink circle on it, one sentence why, a hint before the full answer), or answer it if it is a question.';
+    live.sendBoardNote(note, [board.snapshot({ rect: padRect(info.rect, 60), targetW: 700 }), board.snapshot({ targetW: 1000 })], true, '[نوشتهٔ تایپی روی تخته] ' + info.text);
+    addMessage('user', info.text);
+    Stat.ok('typed', 'نوشته به استاد رسید ✓', 1800); Stat.busy('think', 'استاد نوشتهٔ شما را می‌بیند…', 0, 40000);
+  }
+  function wireStudent(b) {
+    var bar = $('stu-tools');
+    b.on('select', onStuSelect).on('ink', onStuInk).on('typed', onStuTyped).on('tool', function (name) {
+      [].forEach.call(bar.querySelectorAll('.stu-btn[data-tool]'), function (x) { x.classList.toggle('on', x.dataset.tool === name); });
+      if (name === 'point') Stat.info('با موس یا انگشت روی تخته نشان بدهید یا دور چیزی خط بکشید؛ بعد بگویید چه می‌خواهید.', 5200);
+      else if (name === 'pen') Stat.info('با انگشت یا قلم بنویسید؛ وقتی تمام شد «فرستادن نوشته» را بزنید.', 5200);
+      else if (name === 'type') Stat.info('روی تخته بزنید، بنویسید و Enter بزنید.', 4500);
+    }).on('turn', function (turn) {
+      if (!live || !live.active) return;
+      showStuTools(true);
+      if (!b.stu || b.stu.tool !== 'pen') b.setTool('pen');
+      Stat.busy('turn', 'نوبت شماست: ' + (turn.label || 'روی تخته بنویسید') + ' — بعد «فرستادن نوشته» را بزنید.', 0, 240000);
+    });
+  }
+  (function stuInit() {
+    var bar = $('stu-tools'); if (!bar) return;
+    [].forEach.call(bar.querySelectorAll('.stu-btn[data-tool]'), function (x) { x.addEventListener('click', function () { if (board) board.setTool(x.dataset.tool); }); });
+    $('stu-undo').addEventListener('click', function () { if (board && board.studentUndo()) { if (!board.unsent().length) $('stu-send').hidden = true; } });
+    $('stu-send').addEventListener('click', sendInk);
   })();
 
   /* ───────── init ───────── */
