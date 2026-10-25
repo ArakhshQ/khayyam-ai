@@ -106,7 +106,17 @@
     if (!this.receipt || !this.usage.responses) return;
     var secs = this.startedAt ? Math.round((Date.now() - this.startedAt) / 1000) : 0;
     var talk = Math.round((this.talkMs + (this.talkAt ? Date.now() - this.talkAt : 0)) / 1000);
-    try { fetch('/api/voice/usage', { method: 'POST', credentials: 'same-origin', keepalive: !!final, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receipt: this.receipt, usage: this.usage, seconds: secs, talk_seconds: talk }) }).catch(function () {}); } catch (e) {}
+    var self = this;
+    try {
+      fetch('/api/voice/usage', { method: 'POST', credentials: 'same-origin', keepalive: !!final, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receipt: this.receipt, usage: this.usage, seconds: secs, talk_seconds: talk }) })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          // The month's voice budget may run out before the day's time does: bring the deadline forward (never push it back).
+          if (!d || final || self.closed || typeof d.cap_seconds !== 'number') return;
+          var at = Date.now() + d.cap_seconds * 1000;
+          if (!self.deadline || at < self.deadline) self.deadline = at;
+        }).catch(function () {});
+    } catch (e) {}
   };
 
   P.tick = function () {

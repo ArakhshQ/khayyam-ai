@@ -20,16 +20,32 @@ from sqlalchemy import text, inspect
 
 VOICE_PLANS = {
     'free': {'price': 0, 'daily': 180, 'monthly': 1800},
-    'basic': {'price': 12, 'daily': 300, 'monthly': 5400},
-    'pro': {'price': 25, 'daily': 600, 'monthly': 14400},
-    'premium': {'price': 49, 'daily': 1200, 'monthly': 27000},
-    'tutor_pro': {'price': 69, 'daily': 1800, 'monthly': 45000},
+    'basic': {'price': 15, 'daily': 300, 'monthly': 5400},
+    'pro': {'price': 30, 'daily': 600, 'monthly': 14400},
+    'premium': {'price': 60, 'daily': 1200, 'monthly': 27000},
+    'tutor_pro': {'price': 90, 'daily': 1800, 'monthly': 45000},
 }
+# The real voice ceiling: USD of live voice, dictation and read-aloud per calendar month (UTC), measured
+# from what OpenAI reports (voice_usage). The seconds above stay as a second, stricter guard.
+# Override one plan with VOICE_USD_CAPS_JSON, e.g. {"basic": 5}.
+VOICE_USD_CAPS = {'free': 1.0, 'basic': 4.0, 'pro': 10.0, 'premium': 15.0, 'tutor_pro': 25.0}
+
+
+def voice_usd_cap(plan):
+    import json
+    cap = VOICE_USD_CAPS.get(plan, VOICE_USD_CAPS['free'])
+    try:
+        extra = json.loads(os.getenv('VOICE_USD_CAPS_JSON', '') or '{}')
+        if isinstance(extra, dict) and plan in extra:
+            cap = float(extra[plan])
+    except (ValueError, TypeError):
+        pass
+    return cap
 # Separate monthly API cost ceilings in USD, NOT token counts; adjust only with evidence.
 USD_CAPS = {'free': {'chat': 1.50, 'tutor': .70},
             'basic': {'chat': 3.0, 'tutor': 1.50},
             'pro': {'chat': 5.0, 'tutor': 2.0},
-            'premium': {'chat': 19.0, 'tutor': 5.0},
+            'premium': {'chat': 10.0, 'tutor': 5.0},
             'tutor_pro': {'chat': 1.50, 'tutor': 23.0}}
 # USD per million billed tokens. Override by env on price changes.
 TOKEN_RATES = {
@@ -309,15 +325,19 @@ def tier_summary(db, uid, feature, options):
 # Counts per calendar month, plus a USD ceiling for all tools together. PROVISIONAL numbers: they
 # are meant to be tuned from real usage (admin log) and the plan prices. Override without a code
 # change with the TOOL_PLANS_JSON environment variable, e.g. {"basic": {"image": 40}}.
+# 'image' is the total number of pictures (standard 1K and HD 2K together); 'image_hd' is how many of
+# those may be 2K. The USD ceiling covers everything, so HD pictures can never push the cost past it.
 TOOL_PLANS = {
-    'free':    {'image': 3,   'search': 10,  'doc': 3,   'usd': .25},
-    'basic':   {'image': 30,  'search': 60,  'doc': 40,  'usd': 1.60},
-    'pro':     {'image': 80,  'search': 150, 'doc': 120, 'usd': 4.00},
-    'premium': {'image': 200, 'search': 400, 'doc': 300, 'usd': 9.00},
+    'free':    {'image': 3,   'image_hd': 0,  'search': 4,   'doc': 3,   'usd': .25},
+    'basic':   {'image': 20,  'image_hd': 0,  'search': 25,  'doc': 40,  'usd': 1.60},
+    'pro':     {'image': 50,  'image_hd': 10, 'search': 60,  'doc': 120, 'usd': 4.00},
+    'premium': {'image': 120, 'image_hd': 30, 'search': 130, 'doc': 300, 'usd': 9.00},
 }
 # Estimated provider cost of one use, in micro-USD (1 USD = 1,000,000). Documents are made on our
-# own server, so they cost nothing per use.
-TOOL_COST_MICRO = {'image': 40000, 'search': 12000, 'doc': 0, 'overlay': 0}
+# own server, so they cost nothing per use. Checked against Google's price list on Oct 25 2026:
+# picture 1K $0.0336 / 2K $0.0504 (Nano Banana 2.1); a web search is about $0.014 per Google query
+# (usually two) plus the answer text, so $0.035 covers it with room.
+TOOL_COST_MICRO = {'image': 35000, 'image_hd': 52000, 'search': 35000, 'doc': 0, 'overlay': 0}
 
 
 def tool_plan(plan):
@@ -333,6 +353,28 @@ def tool_plan(plan):
 
 def tool_cost_micro(kind):
     return int(float(os.getenv('TOOL_COST_%s_MICRO' % kind.upper(), TOOL_COST_MICRO.get(kind, 0))))
+
+
+def search_cost_micro(n_queries):
+    """Real cost of one grounded search: the Google fee per query that actually ran, plus the answer text.
+    Never below the flat estimate, so a cheap search cannot make the ceiling too generous."""
+    per_query = int(float(os.getenv('TOOL_SEARCH_QUERY_MICRO', '14000')))
+    text_part = int(float(os.getenv('TOOL_SEARCH_TEXT_MICRO', '7000')))
+    return max(tool_cost_micro('search'), max(1, int(n_queries)) * per_query + text_part)
+
+
+def hd_left(db, uid, plan):
+    """True when this plan may still make a 2K picture this month (read only; the reservation re-checks)."""
+    cfg = tool_plan(plan)
+    if int(cfg.get('image_hd', 0)) <= 0:
+        return False
+    owner = owner_key(uid)
+    month = utc_now().strftime('%Y-%m')
+    rows = db.session.execute(text('''SELECT kind, COUNT(*) FROM api_tool_usage
+        WHERE owner_key=:o AND month_key=:m AND status!='failed' AND kind IN ('image','image_hd') GROUP BY kind'''),
+        {'o': owner, 'm': month}).all()
+    used = {r[0]: int(r[1]) for r in rows}
+    return used.get('image_hd', 0) < int(cfg['image_hd']) and used.get('image', 0) + used.get('image_hd', 0) < int(cfg['image'])
 
 
 def ensure_tool_storage(db):
@@ -362,7 +404,14 @@ def tool_reserve(db, uid, kind, plan, detail=None):
         {'o': owner, 'm': month}).all()
     used = {r[0]: int(r[1]) for r in rows}
     spent = sum(int(r[2]) for r in rows)
-    if kind in cfg and used.get(kind, 0) >= int(cfg[kind]):
+    if kind in ('image', 'image_hd'):
+        if used.get('image', 0) + used.get('image_hd', 0) >= int(cfg['image']):
+            db.session.commit()
+            return None, 'count'
+        if kind == 'image_hd' and used.get('image_hd', 0) >= int(cfg.get('image_hd', 0)):
+            db.session.commit()
+            return None, 'hd'
+    elif kind in cfg and used.get(kind, 0) >= int(cfg[kind]):
         db.session.commit()
         return None, 'count'
     if cost and spent + cost > int(float(cfg.get('usd', 0)) * 1e6):
@@ -376,13 +425,16 @@ def tool_reserve(db, uid, kind, plan, detail=None):
     return rid, None
 
 
-def tool_finalize(db, rid, failed=False):
-    """failed -> refunded (no count, no cost). Otherwise stays charged at the estimate."""
+def tool_finalize(db, rid, failed=False, cost_micro=None):
+    """failed -> refunded (no count, no cost). Otherwise stays charged at the estimate, or at cost_micro
+    when the real cost is known (a search that ran more Google queries than usual)."""
     if not rid:
         return
-    db.session.execute(text("UPDATE api_tool_usage SET status=:s, est_micro=CASE WHEN :f THEN 0 ELSE est_micro END "
+    db.session.execute(text("UPDATE api_tool_usage SET status=:s, est_micro=CASE WHEN :f THEN 0 "
+                            "WHEN :c IS NOT NULL THEN :c ELSE est_micro END "
                             "WHERE request_id=:i AND status='reserved'"),
-                       {'s': 'failed' if failed else 'done', 'f': bool(failed), 'i': rid})
+                       {'s': 'failed' if failed else 'done', 'f': bool(failed),
+                        'c': None if cost_micro is None else int(cost_micro), 'i': rid})
     db.session.commit()
 
 
@@ -394,7 +446,10 @@ def tool_usage(db, uid, plan):
         WHERE owner_key=:o AND month_key=:m AND status!='failed' GROUP BY kind'''), {'o': owner, 'm': month}).all()
     used = {r[0]: int(r[1]) for r in rows}
     cfg = tool_plan(plan)
-    return {k: {'used': used.get(k, 0), 'limit': int(cfg[k])} for k in ('image', 'search', 'doc')}
+    out = {k: {'used': used.get(k, 0), 'limit': int(cfg[k])} for k in ('search', 'doc')}
+    out['image'] = {'used': used.get('image', 0) + used.get('image_hd', 0), 'limit': int(cfg['image'])}
+    out['image_hd'] = {'used': used.get('image_hd', 0), 'limit': int(cfg.get('image_hd', 0))}
+    return out
 
 
 def tool_recent(db, limit=60):

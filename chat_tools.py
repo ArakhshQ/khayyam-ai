@@ -18,7 +18,7 @@ MAX_LAYERS = 6
 # A picture takes 10-40 s and holds a web-server thread the whole time. Cap how many run at once per
 # worker so a burst of picture requests can never starve ordinary chat.
 _SLOTS = threading.BoundedSemaphore(int(os.getenv('TOOL_CONCURRENCY', '3')))
-_SLOT_KINDS = ('image', 'search')
+_SLOT_KINDS = ('image', 'image_hd', 'search')
 
 
 def specs(hints, has_attached_image, has_picture_in_chat=False):
@@ -121,14 +121,15 @@ class Env:
         self.media_ids = []                   # shown to the user, in order
         self.created = []                     # every file stored this turn (incl. hidden clean bases)
         self.sources = []                     # web sources to append
+        self.cost_micro = None                # set by a tool when the real cost is known
 
 
 def _quota_error(reason, kind):
-    names = {'image': 'images', 'search': 'web searches', 'doc': 'documents'}
+    names = {'image': 'images', 'image_hd': 'HD images', 'search': 'web searches', 'doc': 'documents'}
     return {'ok': False, 'error': 'quota',
             'message': 'The monthly allowance for %s on this plan is used up (%s). Tell the user kindly and '
                        'mention they can upgrade their plan or wait for next month.' % (names.get(kind, kind),
-                                                                                       'usage limit' if reason == 'count' else 'budget')}
+                                                                                       'usage limit' if reason in ('count', 'hd') else 'budget')}
 
 
 def _resolve_source(env, source):
@@ -189,6 +190,7 @@ def _guarded_inner(env, kind, detail, work):
     rid, why = metering.tool_reserve(env.db, env.uid, kind, env.plan, detail)
     if not rid:
         return _quota_error(why, kind)
+    env.cost_micro = None
     try:
         result = work()
     except gemini.GeminiError as exc:
@@ -204,7 +206,7 @@ def _guarded_inner(env, kind, detail, work):
         if env.log:
             env.log.exception('tool %s crashed', kind)
         return {'ok': False, 'error': 'failed', 'message': 'Temporarily not possible. Nothing was charged.'}
-    metering.tool_finalize(env.db, rid)
+    metering.tool_finalize(env.db, rid, cost_micro=env.cost_micro)
     return result
 
 
@@ -219,13 +221,19 @@ def t_generate_image(env, a):
     full = prompt + '\n\n' + (dari_text.composition_hint(layers) if layers else
                               'Do not draw any letters or words in the picture unless the description needs a sign.')
 
+    # HD (2K) only when asked AND the plan still has HD pictures this month; otherwise a normal picture.
+    hd = a.get('quality') == 'high' and metering.hd_left(env.db, env.uid, env.plan)
+
     def work():
-        mime, raw = gemini.generate_image(full, (), a.get('aspect_ratio') or '1:1',
-                                          '2K' if a.get('quality') == 'high' else '1K')
+        mime, raw = gemini.generate_image(full, (), a.get('aspect_ratio') or '1:1', '2K' if hd else '1K')
         mid = _finish_image(env, raw, mime, prompt, layers, 'generated')
-        return {'ok': True, 'media_id': mid, 'text_drawn_by_khayyam': bool(layers),
-                'note': 'The picture is shown to the user automatically below your message.'}
-    return _guarded(env, 'image', prompt[:100], work)
+        res = {'ok': True, 'media_id': mid, 'text_drawn_by_khayyam': bool(layers),
+               'note': 'The picture is shown to the user automatically below your message.'}
+        if a.get('quality') == 'high' and not hd:
+            res['note'] += (' It was made in standard quality because HD pictures are not part of this '
+                            "plan (or this month's HD pictures are used up). Mention it briefly, only if relevant.")
+        return res
+    return _guarded(env, 'image_hd' if hd else 'image', prompt[:100], work)
 
 
 def t_edit_image(env, a):
@@ -293,6 +301,7 @@ def t_web_search(env, a):
 
     def work():
         res = gemini.web_search(q)
+        env.cost_micro = metering.search_cost_micro(len(res.get('queries') or []))
         for s in res['sources']:
             if re.match(r'^https?://', s['url']) and s['url'] not in [x['url'] for x in env.sources]:
                 env.sources.append(s)

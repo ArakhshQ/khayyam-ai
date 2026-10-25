@@ -32,7 +32,7 @@ import poetry_search
 import media as media_store
 import chat_tools
 import dari_text
-from metering import (VOICE_PLANS, ensure_storage as ensure_api_meter, reserve as reserve_api,
+from metering import (VOICE_PLANS, voice_usd_cap, ensure_storage as ensure_api_meter, reserve as reserve_api,
     finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
     tutor_plan as active_tutor_plan, tutor_tier as active_tutor_tier,
     voice_tier as active_voice_tier, usd_micro, recent_requests,
@@ -189,7 +189,7 @@ PLAN_CONFIG = {
         {'model': 'openai/gpt-oss-20b', 'tier': 3, 'limit': 35000, 'reset': 'monthly'},
     ],
     'premium': [
-        {'model': 'gpt-5.4',                                   'tier': 1, 'limit': 2000000, 'reset': 'monthly'},
+        {'model': 'gpt-5.4',                                   'tier': 1, 'limit': 1000000, 'reset': 'monthly'},
         {'model': 'gpt-5.4-mini',                              'tier': 2, 'limit': 500000,  'reset': 'monthly'},
         {'model': 'gpt-5.4-nano',                              'tier': 3, 'limit': 300000,  'reset': 'monthly'},
         {'model': 'openai/gpt-oss-20b', 'tier': 4, 'limit': 50000, 'reset': 'monthly'},
@@ -198,10 +198,10 @@ PLAN_CONFIG = {
 
 PLAN_NAMES = {
     'free':    'رایگان',
-    'basic':   'ابتدایی — $12',
-    'pro':     'حرفه‌ای — $25',
-    'premium': 'پریمیوم — $49',
-    'tutor_pro': 'استاد حرفه‌ای — $69',
+    'basic':   'ابتدایی — $15',
+    'pro':     'حرفه‌ای — $30',
+    'premium': 'پریمیوم — $60',
+    'tutor_pro': 'استاد حرفه‌ای — $90',
 }
 
 with app.app_context():
@@ -1617,7 +1617,7 @@ def admin_ai_log():
     return jsonify(recent_requests(db, 80))
 
 
-PLAN_PRICE_USD = {'free': 0, 'basic': 12, 'pro': 25, 'premium': 49, 'tutor_pro': 69}
+PLAN_PRICE_USD = {'free': 0, 'basic': 15, 'pro': 30, 'premium': 60, 'tutor_pro': 90}
 
 
 @app.route('/api/admin/costs')
@@ -3769,7 +3769,16 @@ def _voice_snapshot_locked(uid,now):
     profile=VOICE_PLANS[active_voice_tier(db.session.get(User,uid))]
     daily=max(0,profile['daily']-used_day)
     monthly=max(0,profile['monthly']-used_month)
+    tier=active_voice_tier(db.session.get(User,uid))
+    usd_cap=voice_usd_cap(tier)
+    try:
+        usd_used=voice_cost_for_user(db,uid)[1]/1e6
+    except Exception:
+        usd_used=0.0          # cost table unreadable: fall back to the seconds limits alone, never lock a student out
+    usd_left=max(0.0,usd_cap-usd_used)
+    if usd_left<=0: monthly=0         # the dollar ceiling for the month is reached
     return {'plan':active_voice_tier(db.session.get(User,uid)),
+      'usd_cap':usd_cap,'usd_used':round(usd_used,4),'usd_left':round(usd_left,4),
       'limit_seconds':profile['daily'],'monthly_limit_seconds':profile['monthly'],
       'used_seconds':used_day,'monthly_used_seconds':used_month,
       'daily_remaining_seconds':daily,'monthly_remaining_seconds':monthly,
@@ -3891,7 +3900,23 @@ def voice_usage_report():
             return jsonify(error="Voice session not found"), 404
         micro = record_voice_usage(db, sid, current_user.id, row[0], "live", receipt.get("model") or VOICE_MODEL, usage=u,
                                    seconds=data.get("seconds"), talk_seconds=data.get("talk_seconds"), mode=receipt.get("mode"))
-        return jsonify(ok=True, usd=round(micro / 1e6, 4))
+        out = {"ok": True, "usd": round(micro / 1e6, 4)}
+        try:
+            # How long can this session still run before the month's voice dollars are used up?
+            # The cost per minute grows as a class gets longer, so the average so far is padded by 50%.
+            cap = voice_usd_cap(active_voice_tier(current_user))
+            month = voice_cost_for_user(db, current_user.id)[1]
+            left = max(0, int(cap * 1e6) - month)
+            st = db.session.execute(sql_text("SELECT started_at FROM voice_quota_sessions WHERE session_id=:s"), {"s": sid}).scalar()
+            st = datetime.fromisoformat(st) if isinstance(st, str) else st
+            elapsed = max(1, int((_voice_now() - st).total_seconds())) if st else 0
+            if left <= 0:
+                out["cap_seconds"] = 0
+            elif micro > 0 and elapsed >= 30:
+                out["cap_seconds"] = int(left / (1.5 * micro / elapsed))
+        except Exception:
+            app.logger.exception("voice cap estimate failed")
+        return jsonify(**out)
     except Exception:
         db.session.rollback(); app.logger.exception("voice usage report failed")
         return jsonify(error="Could not record usage"), 503
