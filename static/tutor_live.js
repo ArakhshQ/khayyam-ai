@@ -200,7 +200,7 @@
       if (this.needReply && !this.userSpeaking) { this.needReply = false; this.send({ type: 'response.create' }); }
       return;
     }
-    var WORK = { look: 'look', find_poem: 'poem', start_class: 'start' };
+    var WORK = { look: 'look', find_poem: 'poem', start_class: 'start', web_search: 'search', make_picture: 'picture' };
     var jobs = calls.map(function (c) {
       var w = WORK[c.item.name], p = self.runCall(c, cur);
       if (w && self.o.onWork) { self.o.onWork(w, true); var off = function () { self.o.onWork(w, false); }; p.then(off, off); }
@@ -225,6 +225,16 @@
       return post('/api/class/' + id + '/look', { image: args.image, find: args.find }).then(function (d) {
         delete d.__status; return { call_id: it.call_id, output: d };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not look now, try once more' } }; });
+    }
+    if (it.name === 'web_search') {
+      return post('/api/class/' + id + '/search', { query: args.query }).then(function (d) {
+        delete d.__status; return { call_id: it.call_id, output: d };
+      }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'search failed, teach without it' } }; });
+    }
+    if (it.name === 'make_picture') {
+      return post('/api/class/' + id + '/make_picture', { prompt: args.prompt, aspect_ratio: args.aspect_ratio }).then(function (d) {
+        delete d.__status; delete d.item; return { call_id: it.call_id, output: d };
+      }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not make the picture, draw it on the board instead' } }; });
     }
     if (it.name === 'start_class') {
       return post('/api/class/' + id + '/progress', { step: 0, note: 'شروع صنف', outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {

@@ -127,9 +127,10 @@ class Env:
 def _quota_error(reason, kind):
     names = {'image': 'images', 'image_hd': 'HD images', 'search': 'web searches', 'doc': 'documents'}
     return {'ok': False, 'error': 'quota',
-            'message': 'The monthly allowance for %s on this plan is used up (%s). Tell the user kindly and '
+            'message': ('The service has reached its limit for today. Tell the user kindly to try again tomorrow.' if reason == 'breaker' else
+                        'The monthly allowance for %s on this plan is used up (%s). Tell the user kindly and '
                        'mention they can upgrade their plan or wait for next month.' % (names.get(kind, kind),
-                                                                                       'usage limit' if reason in ('count', 'hd') else 'budget')}
+                                                                                       'usage limit' if reason in ('count', 'hd') else 'budget'))}
 
 
 def _resolve_source(env, source):

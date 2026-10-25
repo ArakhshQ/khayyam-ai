@@ -31,8 +31,10 @@ import router as khr
 import poetry_search
 import media as media_store
 import chat_tools
+import metering as metering_mod
 import dari_text
-from metering import (VOICE_PLANS, voice_usd_cap, ensure_storage as ensure_api_meter, reserve as reserve_api,
+from metering import (VOICE_PLANS, voice_usd_cap, voice_usd_daily_cap, SESSION_MAX_SECONDS, settle_live_floor, breaker_open,
+    global_spend_today_micro, tool_tier, ensure_storage as ensure_api_meter, reserve as reserve_api,
     finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
     tutor_plan as active_tutor_plan, tutor_tier as active_tutor_tier,
     voice_tier as active_voice_tier, usd_micro, recent_requests,
@@ -1656,7 +1658,13 @@ def admin_costs():
     rows.sort(key=lambda r: -r['total'])
     guest = pack('guests', guests) if guests else None
     day_totals = {d: round(sum(r['day_total'].get(d, 0) for r in rows) + (guest['day_total'].get(d, 0) if guest else 0), 4) for d in dates}
-    return jsonify(dates=dates, users=rows, guests=guest, day_totals=day_totals, grand_total=round(sum(day_totals.values()), 4))
+    try:
+        g_today = round(global_spend_today_micro(db, fresh=True) / 1e6, 4)
+    except Exception:
+        db.session.rollback(); g_today = None
+    limit = float(os.getenv('GLOBAL_DAILY_USD_LIMIT', metering_mod.GLOBAL_DAILY_USD_LIMIT))
+    return jsonify(dates=dates, users=rows, guests=guest, day_totals=day_totals, grand_total=round(sum(day_totals.values()), 4),
+                   global_today=g_today, global_limit=limit, breaker_open=bool(limit > 0 and (g_today is None or g_today >= limit)))
 
 
 @app.route('/api/admin/voice-log')
@@ -2113,7 +2121,7 @@ def _chat_prepare(allow_tools=False):
     tools, tool_env = [], None
     if user_id and image_b64 and canned is None:
         # keep the picture for this chat, so a later "write X on it" still finds it
-        tool_env = chat_tools.Env(db, user_id, plan, conv.id if conv else None,
+        tool_env = chat_tools.Env(db, user_id, _tools_plan(user_id, plan), conv.id if conv else None,
                                   (image_type, base64.b64decode(image_b64)), app.logger)
         try:
             small, small_mime = dari_text.shrink_image(tool_env.attached[1])
@@ -2135,7 +2143,7 @@ def _chat_prepare(allow_tools=False):
             if tools:
                 if tool_env is None:
                     attached = (image_type, base64.b64decode(image_b64)) if image_b64 else None
-                    tool_env = chat_tools.Env(db, user_id, plan, conv.id if conv else None, attached, app.logger)
+                    tool_env = chat_tools.Env(db, user_id, _tools_plan(user_id, plan), conv.id if conv else None, attached, app.logger)
                 system_prompt += '\n\n' + khr.TOOLS_BLOCK
                 note = chat_tools.context_note(tool_env)
                 if note:
@@ -2146,6 +2154,16 @@ def _chat_prepare(allow_tools=False):
             'image_b64': image_b64, 'image_type': image_type, 'intent': intent, 'canned': canned,
             'system_prompt': system_prompt, 'poem_ctx': poem_ctx, 'tools': tools, 'tool_env': tool_env,
             'lang_new': getattr(g, 'chat_lang_new', None)}
+
+
+def _tools_plan(user_id, plan):
+    """The TOOL_PLANS row of this user (Tutor Pro counts as Pro for pictures, searches and files)."""
+    try:
+        u = db.session.get(User, user_id) if user_id else None
+        return tool_tier(u) if u else plan
+    except Exception:
+        db.session.rollback()
+        return plan
 
 
 # ── CONVERSATION SUMMARY (the AI's running memory of a chat) ──────────────────────────────────
@@ -2603,7 +2621,7 @@ def media_file(mid):
 @login_required
 def tool_usage_api():
     from metering import tool_usage
-    return jsonify(tool_usage(db, current_user.id, active_chat_plan(current_user)))
+    return jsonify(tool_usage(db, current_user.id, tool_tier(current_user)))
 
 
 @app.route('/api/admin/tool-log')
@@ -3770,15 +3788,21 @@ def _voice_snapshot_locked(uid,now):
     daily=max(0,profile['daily']-used_day)
     monthly=max(0,profile['monthly']-used_month)
     tier=active_voice_tier(db.session.get(User,uid))
-    usd_cap=voice_usd_cap(tier)
+    usd_cap=voice_usd_cap(tier); day_cap=voice_usd_daily_cap(tier)
+    cost_ok=True
     try:
-        usd_used=voice_cost_for_user(db,uid)[1]/1e6
+        used_today_m,used_month_m=voice_cost_for_user(db,uid)
+        usd_used=used_month_m/1e6; usd_today=used_today_m/1e6
     except Exception:
-        usd_used=0.0          # cost table unreadable: fall back to the seconds limits alone, never lock a student out
+        # FAIL CLOSED: if the money counter cannot be read we cannot know what is safe, so no new paid voice.
+        app.logger.exception('voice cost lookup failed: refusing new voice until it works again')
+        db.session.rollback(); cost_ok=False; usd_used=usd_cap; usd_today=day_cap or 0.0
     usd_left=max(0.0,usd_cap-usd_used)
-    if usd_left<=0: monthly=0         # the dollar ceiling for the month is reached
+    day_left=None if day_cap is None else max(0.0,day_cap-usd_today)
+    if usd_left<=0 or (day_left is not None and day_left<=0): monthly=0         # a dollar ceiling is reached
     return {'plan':active_voice_tier(db.session.get(User,uid)),
       'usd_cap':usd_cap,'usd_used':round(usd_used,4),'usd_left':round(usd_left,4),
+      'usd_day_cap':day_cap,'usd_day_left':None if day_left is None else round(day_left,4),'cost_check_ok':cost_ok,
       'limit_seconds':profile['daily'],'monthly_limit_seconds':profile['monthly'],
       'used_seconds':used_day,'monthly_used_seconds':used_month,
       'daily_remaining_seconds':daily,'monthly_remaining_seconds':monthly,
@@ -3809,8 +3833,7 @@ def _close_stale_live_sessions(uid,now):
             WHERE session_id=:sid AND ended_at IS NULL'''),{'now':now,'c':charged,'sid':row['session_id']})
         closed=True
         try:
-            if not db.session.execute(sql_text('SELECT 1 FROM voice_usage WHERE session_id=:s'),{'s':row['session_id']}).first():
-                record_voice_usage(db,row['session_id'],uid,now.date().isoformat(),'live',os.getenv('REALTIME_MODEL_CLASS','gpt-realtime-2.1'),seconds=charged,estimated=True)
+            settle_live_floor(db,row['session_id'],uid,now.date().isoformat(),os.getenv('REALTIME_MODEL_CLASS','gpt-realtime-2.1-mini'),elapsed)
         except Exception:
             db.session.rollback()
     return closed,fresh
@@ -3820,6 +3843,8 @@ def _reserve_voice_seconds(uid,seconds,kind='live'):
     try:
         now=_voice_now();quota=_voice_snapshot_locked(uid,now)
         seconds=int(seconds)
+        if breaker_open(db):
+            db.session.rollback(); return None,quota
         if kind=='live':
             closed,fresh=_close_stale_live_sessions(uid,now)
             if fresh:
@@ -3849,7 +3874,7 @@ def voice_diag():
         "this_account_allowed": bool(os.getenv("LIVE_VOICE_TEST_USER_ID", "").strip()) and str(current_user.id) == os.getenv("LIVE_VOICE_TEST_USER_ID", "").strip(),
         "email_verified": bool(current_user.email_verified),
         "openai_key_set": bool(os.getenv("OPENAI_API_KEY")),
-        "model": os.getenv("REALTIME_MODEL_CLASS", "gpt-realtime-2.1"),
+        "model": os.getenv("REALTIME_MODEL_CLASS", "gpt-realtime-2.1-mini"),
         "class_voice_ready": bool(app.config.get("CLASS_VOICE")),
     }
     try:
@@ -3876,6 +3901,11 @@ def voice_quota_status():
         return jsonify(error="Voice allowance temporarily unavailable"), 503
 
 
+def _int_or0(v):
+    try: return max(0, int(float(v)))
+    except (TypeError, ValueError): return 0
+
+
 @app.route("/api/voice/usage", methods=["POST"])
 @limiter.limit("600 per hour")
 @login_required
@@ -3894,22 +3924,24 @@ def voice_usage_report():
     u = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     try:
         _ensure_voice_quota_storage()
-        row = db.session.execute(sql_text("SELECT usage_day FROM voice_quota_sessions WHERE session_id=:s AND user_id=:u"),
+        row = db.session.execute(sql_text("SELECT usage_day, started_at FROM voice_quota_sessions WHERE session_id=:s AND user_id=:u"),
                                  {"s": sid, "u": current_user.id}).first()
         if not row:
             return jsonify(error="Voice session not found"), 404
+        st = row[1]; st = datetime.fromisoformat(st) if isinstance(st, str) else st
+        elapsed = max(1, int((_voice_now() - st).total_seconds())) if st else 1      # the SERVER's clock, never the browser's
         micro = record_voice_usage(db, sid, current_user.id, row[0], "live", receipt.get("model") or VOICE_MODEL, usage=u,
-                                   seconds=data.get("seconds"), talk_seconds=data.get("talk_seconds"), mode=receipt.get("mode"))
+                                   seconds=elapsed, talk_seconds=min(_int_or0(data.get("talk_seconds")), elapsed), mode=receipt.get("mode"))
         out = {"ok": True, "usd": round(micro / 1e6, 4)}
         try:
-            # How long can this session still run before the month's voice dollars are used up?
+            # How long can this session still run before a dollar cap (the day's or the month's) is used up?
             # The cost per minute grows as a class gets longer, so the average so far is padded by 50%.
-            cap = voice_usd_cap(active_voice_tier(current_user))
-            month = voice_cost_for_user(db, current_user.id)[1]
-            left = max(0, int(cap * 1e6) - month)
-            st = db.session.execute(sql_text("SELECT started_at FROM voice_quota_sessions WHERE session_id=:s"), {"s": sid}).scalar()
-            st = datetime.fromisoformat(st) if isinstance(st, str) else st
-            elapsed = max(1, int((_voice_now() - st).total_seconds())) if st else 0
+            tier = active_voice_tier(current_user)
+            today_m, month_m = voice_cost_for_user(db, current_user.id)
+            left = max(0, int(voice_usd_cap(tier) * 1e6) - month_m)
+            dcap = voice_usd_daily_cap(tier)
+            if dcap is not None:
+                left = min(left, max(0, int(dcap * 1e6) - today_m))
             if left <= 0:
                 out["cap_seconds"] = 0
             elif micro > 0 and elapsed >= 30:
@@ -3950,9 +3982,8 @@ def voice_quota_finish():
                 WHERE session_id=:sid AND ended_at IS NULL"""),
                 {"now":now,"charged":charged,"sid":sid})
             db.session.commit()
-            try:    # the real token counts come from the browser; if none arrive, keep a time-based estimate so the cost is never missing
-                record_voice_usage(db, sid, current_user.id, row["usage_day"], "live", receipt.get("model") or VOICE_MODEL,
-                                   seconds=charged, mode=receipt.get("mode"), estimated=True)
+            try:    # the real token counts come from the browser; never trust them below the floor, and if none arrive keep a conservative estimate
+                settle_live_floor(db, sid, current_user.id, row["usage_day"], receipt.get("model") or VOICE_MODEL, elapsed, mode=receipt.get("mode"))
             except Exception:
                 db.session.rollback(); app.logger.exception("voice cost estimate failed")
         db.session.commit()
@@ -3995,9 +4026,16 @@ def create_live_voice_session():
         quota = _voice_quota_snapshot(current_user.id)
     except Exception:
         return jsonify(error="Voice allowance temporarily unavailable"), 503
+    if not quota.get("cost_check_ok", True):
+        return jsonify(error="Voice is paused for a moment (cost check unavailable). Try again shortly."), 503
+    if breaker_open(db):
+        app.logger.error("GLOBAL DAILY SPEND LIMIT REACHED: new voice sessions are refused until 00:00 UTC")
+        return jsonify(error="Voice is paused for today. Try again after 00:00 UTC."), 503
     if quota["remaining_seconds"] <= 0:
-        return jsonify(error="Daily voice allowance exhausted. Try again after 00:00 UTC.",
-                       quota=quota), 429
+        why = "Voice allowance for this month is used up." if quota.get("usd_left", 1) <= 0 else \
+              ("Today's voice allowance is used up. Try again after 00:00 UTC." if (quota.get("usd_day_left") is not None and quota["usd_day_left"] <= 0)
+               else "Daily voice allowance exhausted. Try again after 00:00 UTC.")
+        return jsonify(error=why, quota=quota), 429
 
     import urllib.request
     import urllib.error
@@ -4005,7 +4043,7 @@ def create_live_voice_session():
         "expires_after": {"anchor": "created_at", "seconds": 30},
         "session": {
             "type": "realtime",
-            "model": os.getenv("REALTIME_MODEL_CLASS", "gpt-realtime-2.1") if mode == "class" else VOICE_MODEL,
+            "model": os.getenv("REALTIME_MODEL_CLASS", "gpt-realtime-2.1-mini") if mode == "class" else VOICE_MODEL,
             "instructions": instructions,
             "output_modalities": ["audio"],
             "audio": {
@@ -4022,7 +4060,7 @@ def create_live_voice_session():
         }
     }
     if mode == "class":
-        payload["session"]["tools"] = app.config["CLASS_VOICE"]["tools"]
+        payload["session"]["tools"] = (app.config["CLASS_VOICE"].get("tools_fn") or (lambda: app.config["CLASS_VOICE"]["tools"]))()
         payload["session"]["tool_choice"] = "auto"
     user_hash = hashlib.sha256(f"khayyam:{current_user.id}".encode()).hexdigest()
     req = urllib.request.Request(
@@ -4039,7 +4077,7 @@ def create_live_voice_session():
         # Single atomic daily+monthly reservation, shared across all voice features.
         now=_voice_now()
         session_id,quota=_reserve_voice_seconds(current_user.id,
-            min(VOICE_PLANS[active_voice_tier(current_user)]['daily'],
+            min(VOICE_PLANS[active_voice_tier(current_user)]['daily'], SESSION_MAX_SECONDS,
                 quota['remaining_seconds']),kind='live')
         if not session_id:
             return jsonify(error='Voice allowance exhausted or another session active',quota=quota),429
@@ -4057,7 +4095,7 @@ def create_live_voice_session():
                                {'sid':session_id})
             db.session.commit()
             raise
-        remaining=min(VOICE_PLANS[active_voice_tier(current_user)]['daily'],
+        remaining=min(VOICE_PLANS[active_voice_tier(current_user)]['daily'], SESSION_MAX_SECONDS,
                       quota['remaining_seconds'])
         receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").dumps(
             {"uid": current_user.id, "mode": mode, "context": context,

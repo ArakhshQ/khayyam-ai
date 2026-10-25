@@ -19,16 +19,33 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import text, inspect
 
 VOICE_PLANS = {
-    'free': {'price': 0, 'daily': 180, 'monthly': 1800},
-    'basic': {'price': 15, 'daily': 300, 'monthly': 5400},
-    'pro': {'price': 30, 'daily': 600, 'monthly': 14400},
-    'premium': {'price': 60, 'daily': 1200, 'monthly': 27000},
-    'tutor_pro': {'price': 90, 'daily': 1800, 'monthly': 45000},
+    # The dollar caps below decide how much a student can talk. These seconds are only a second, much looser
+    # safety net (in case a cost report ever goes missing): generous, but never unlimited.
+    'free': {'price': 0, 'daily': 900, 'monthly': 5400},
+    'basic': {'price': 15, 'daily': 2400, 'monthly': 21600},
+    'pro': {'price': 30, 'daily': 4500, 'monthly': 45000},
+    'premium': {'price': 60, 'daily': 7200, 'monthly': 72000},
+    'tutor_pro': {'price': 90, 'daily': 10800, 'monthly': 108000},
 }
+SESSION_MAX_SECONDS = int(os.getenv('VOICE_SESSION_MAX_SECONDS', '2400'))      # one live session never runs longer than this
 # The real voice ceiling: USD of live voice, dictation and read-aloud per calendar month (UTC), measured
 # from what OpenAI reports (voice_usage). The seconds above stay as a second, stricter guard.
 # Override one plan with VOICE_USD_CAPS_JSON, e.g. {"basic": 5}.
 VOICE_USD_CAPS = {'free': 1.0, 'basic': 4.0, 'pro': 10.0, 'premium': 15.0, 'tutor_pro': 25.0}
+# Daily dollar caps (UTC day): every plan except Tutor Pro, which only has the monthly cap. None = no daily cap.
+VOICE_USD_DAILY_CAPS = {'free': .25, 'basic': .80, 'pro': 2.0, 'premium': 3.0, 'tutor_pro': None}
+
+
+def voice_usd_daily_cap(plan):
+    import json
+    cap = VOICE_USD_DAILY_CAPS.get(plan, VOICE_USD_DAILY_CAPS['free'])
+    try:
+        extra = json.loads(os.getenv('VOICE_USD_DAILY_CAPS_JSON', '') or '{}')
+        if isinstance(extra, dict) and plan in extra:
+            cap = None if extra[plan] in (None, 0, '0') else float(extra[plan])
+    except (ValueError, TypeError):
+        pass
+    return cap
 
 
 def voice_usd_cap(plan):
@@ -53,6 +70,48 @@ TOKEN_RATES = {
     'gpt-5.4': (2.50, 15.0), 'openai/gpt-oss-20b': (.075, .30),
     'openai/gpt-oss-120b': (.15, .60),
 }
+
+
+# =============================================================================================
+# GLOBAL CIRCUIT BREAKER: whatever goes wrong (a bug, a loop, an attack), the whole service stops spending
+# paid API money for the rest of the UTC day once everyone together has spent this much. It protects the
+# bill, not one user. GLOBAL_DAILY_USD_LIMIT=0 switches it off (do not).
+# =============================================================================================
+GLOBAL_DAILY_USD_LIMIT = float(os.getenv('GLOBAL_DAILY_USD_LIMIT', '100'))
+_BREAKER = {'at': 0.0, 'micro': 0}
+
+
+def global_spend_today_micro(db, fresh=False):
+    """Everything paid for today by all users together (text models, voice, tools). Cached for 20 seconds.
+    Raises when it cannot be computed (callers fail CLOSED)."""
+    import time as _t
+    if not fresh and _t.time() - _BREAKER['at'] < 20:
+        return _BREAKER['micro']
+    now = utc_now(); start = now.replace(hour=0, minute=0, second=0, microsecond=0); day = now.strftime('%Y-%m-%d')
+    total = 0
+    total += int(db.session.execute(text('''SELECT COALESCE(SUM(CASE WHEN status='reserved' THEN reserved_micro
+        ELSE actual_micro END),0) FROM api_usage_requests WHERE created_at>=:s'''), {'s': start}).scalar() or 0)
+    total += int(db.session.execute(text('''SELECT COALESCE(SUM(est_micro),0) FROM api_tool_usage
+        WHERE created_at>=:s AND status!='failed' '''), {'s': start}).scalar() or 0)
+    try:
+        total += int(db.session.execute(text('SELECT COALESCE(SUM(micro),0) FROM voice_usage WHERE usage_day=:d'), {'d': day}).scalar() or 0)
+    except Exception:
+        db.session.rollback()          # voice table not created yet (nothing spent on voice)
+    _BREAKER.update(at=_t.time(), micro=total)
+    return total
+
+
+def breaker_open(db):
+    """True = stop spending. Also True when the total cannot be read (fail closed)."""
+    limit = float(os.getenv('GLOBAL_DAILY_USD_LIMIT', GLOBAL_DAILY_USD_LIMIT))
+    if limit <= 0:
+        return False
+    try:
+        return global_spend_today_micro(db) >= int(limit * 1e6)
+    except Exception:
+        try: db.session.rollback()
+        except Exception: pass
+        return True
 
 
 def utc_now():
@@ -182,6 +241,8 @@ def reserve(db, uid, feature, plan, options, estimated_input, max_output=900,
                      it is NOT charged against the user's token window.
     """
     assert feature in ('chat','tutor')
+    if breaker_open(db):
+        return None, None
     now = utc_now(); owner=owner_key(uid, guest_key); month=now.strftime('%Y-%m')
     estimated_input = max(1, min(int(estimated_input), 40000))
     overhead_tokens = max(0, min(int(overhead_tokens), estimated_input - 1))
@@ -332,7 +393,15 @@ TOOL_PLANS = {
     'basic':   {'image': 20,  'image_hd': 0,  'search': 25,  'doc': 40,  'usd': 1.60},
     'pro':     {'image': 50,  'image_hd': 10, 'search': 60,  'doc': 120, 'usd': 4.00},
     'premium': {'image': 120, 'image_hd': 30, 'search': 130, 'doc': 300, 'usd': 9.00},
+    # Tutor Pro: the same tools as Pro (the tutor can search the web and make pictures too)
+    'tutor_pro': {'image': 50,  'image_hd': 10, 'search': 60,  'doc': 120, 'usd': 4.00},
 }
+
+
+def tool_tier(user):
+    """Which row of TOOL_PLANS a user gets: their chat plan, or the Tutor Pro row when that is better."""
+    cp = chat_plan(user)
+    return 'tutor_pro' if tutor_plan(user) == 'tutor_pro' and cp in ('free', 'basic') else cp
 # Estimated provider cost of one use, in micro-USD (1 USD = 1,000,000). Documents are made on our
 # own server, so they cost nothing per use. Checked against Google's price list on Oct 25 2026:
 # picture 1K $0.0336 / 2K $0.0504 (Nano Banana 2.1); a web search is about $0.014 per Google query
@@ -392,8 +461,10 @@ def ensure_tool_storage(db):
 
 
 def tool_reserve(db, uid, kind, plan, detail=None):
-    """Returns (request_id, None) when allowed, or (None, reason) with reason 'count' | 'usd'.
+    """Returns (request_id, None) when allowed, or (None, reason) with reason 'count' | 'usd' | 'hd' | 'breaker'.
     Documents and text overlays are counted but never blocked by the USD ceiling (they cost nothing)."""
+    if tool_cost_micro(kind) and breaker_open(db):
+        return None, 'breaker'
     owner = owner_key(uid)
     cfg = tool_plan(plan)
     cost = tool_cost_micro(kind)
@@ -475,7 +546,11 @@ TRANSCRIBE_PER_MIN = {'gpt-live-transcribe': .017, 'gpt-transcribe': .0045}
 TTS_PER_MIN = .015
 # Used only when a live session ended without reporting its real token counts (tab crashed, offline):
 # USD per minute connected. A GUESS until the real numbers in the admin page say otherwise.
-FALLBACK_USD_PER_MIN = {'gpt-realtime-2.1': .25, 'gpt-realtime-2.1-mini': .07}
+# Deliberately HIGH: a session that never reports must not look cheap (about the cost of a 10-20 minute class with no cache).
+FALLBACK_USD_PER_MIN = {'gpt-realtime-2.1': .60, 'gpt-realtime-2.1-mini': .20}
+# The least a minute of a live session can honestly cost. A report below this (a broken or tampering browser)
+# is raised to it, using the SERVER's own clock for the session length.
+FLOOR_USD_PER_MIN = {'gpt-realtime-2.1': .06, 'gpt-realtime-2.1-mini': .02}
 
 USAGE_FIELDS = ('in_text', 'in_audio', 'in_image', 'cin_text', 'cin_audio', 'cin_image', 'out_text', 'out_audio', 'responses')
 
@@ -506,6 +581,11 @@ def transcribe_cost_micro(model, seconds):
 
 def fallback_live_micro(model, seconds):
     per_min = float(os.getenv('VOICE_FALLBACK_USD_PER_MIN', FALLBACK_USD_PER_MIN.get(model, .25)))
+    return int(round(max(0, seconds) / 60.0 * per_min * 1e6))
+
+
+def floor_live_micro(model, seconds):
+    per_min = float(os.getenv('VOICE_FLOOR_USD_PER_MIN', FLOOR_USD_PER_MIN.get(model, .06)))
     return int(round(max(0, seconds) / 60.0 * per_min * 1e6))
 
 
@@ -562,6 +642,8 @@ def record_voice_usage(db, sid, uid, day, kind, model, usage=None, seconds=0, ta
         else:
             tr = os.getenv('REALTIME_TRANSCRIBE_MODEL', 'gpt-live-transcribe')
             micro = realtime_cost_micro(model, merged) + transcribe_cost_micro(tr, talk)
+            if kind == 'live':
+                micro = max(micro, floor_live_micro(model, secs))
     p = dict(merged); p.update(sid=sid, uid=uid, day=day, kind=kind, mode=mode, model=model, est=1 if estimated else 0,
                                secs=secs, talk=talk, micro=int(micro), now=now)
     if row:
@@ -575,6 +657,21 @@ def record_voice_usage(db, sid, uid, day, kind, model, usage=None, seconds=0, ta
                     :out_text,:out_audio,:responses,:micro,:now,:now)'''), p)
     db.session.commit()
     return int(micro)
+
+
+def settle_live_floor(db, sid, uid, day, model, seconds, mode=None):
+    """The session is over (finished or found abandoned) after `seconds` by the server's clock: make sure what is
+    recorded is at least the floor, and fill in a conservative estimate if nothing was ever reported."""
+    row = db.session.execute(text('SELECT micro, estimated FROM voice_usage WHERE session_id=:s'), {'s': sid}).first()
+    if not row:
+        return record_voice_usage(db, sid, uid, day, 'live', model, seconds=seconds, mode=mode, estimated=True)
+    floor = floor_live_micro(model, seconds)
+    if int(row[0] or 0) < floor:
+        db.session.execute(text('UPDATE voice_usage SET micro=:m, seconds=CASE WHEN seconds<:s THEN :s ELSE seconds END, updated_at=:n WHERE session_id=:i'),
+                           {'m': floor, 's': int(seconds), 'n': utc_now(), 'i': sid})
+        db.session.commit()
+        return floor
+    return int(row[0] or 0)
 
 
 def voice_cost_for_user(db, uid):

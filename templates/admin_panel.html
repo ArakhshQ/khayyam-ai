@@ -441,6 +441,7 @@
       هزینهٔ صدای زنده از شمارش واقعی توکن‌های مدل ساخته می‌شود؛ جلسه‌ای که گزارش نداد با تخمین زمانی (علامت ~) حساب می‌شود. روی ردیف بزنید تا روزها را ببینید.
     </p>
     <div id="cost-cards" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;"></div>
+    <div id="cost-global" style="margin-bottom:8px;font-size:12px;color:var(--text-dim)"></div>
     <div style="margin-bottom:8px;font-size:12px;color:var(--text-dim)">روزها: <select id="cost-days" onchange="loadCosts()"><option>7</option><option selected>30</option><option>90</option></select></div>
     <div style="overflow-x:auto;"><table class="log-table"><thead><tr>
       <th>کاربر</th><th>پلان</th><th>پرداخت ماهانه $</th><th>امروز $</th><th>دیروز $</th><th>۷ روز $</th><th>جمع $</th>
@@ -719,6 +720,8 @@
     const sum = n => d.dates.slice(0, n).reduce((a, x) => a + (d.day_totals[x] || 0), 0);
     document.getElementById('cost-cards').innerHTML = [['امروز', sum(1)], ['دیروز', d.dates.length > 1 ? d.day_totals[d.dates[1]] : 0], ['۷ روز', sum(7)], [days + ' روز', d.grand_total]]
       .map(([t, v]) => `<div style="background:var(--card,#16322b);border:1px solid #ffffff22;border-radius:12px;padding:10px 16px;min-width:110px"><div style="font-size:11px;color:var(--text-dim)">${t}</div><div style="font-size:20px;font-weight:700">$${Number(v).toFixed(2)}</div></div>`).join('');
+    const gl = document.getElementById('cost-global');
+    if (gl) gl.innerHTML = `هزینهٔ همهٔ کاربران امروز (محدودیت اضطراری روزانه): <b>$${Number(d.global_today || 0).toFixed(2)}</b> از <b>$${Number(d.global_limit).toFixed(0)}</b>` + (d.breaker_open ? ' <b style="color:#ff8a8a">— متوقف شد: هیچ هزینهٔ جدیدی ثبت نمی‌شود تا ساعت ۰۰:۰۰ UTC</b>' : '');
     const all = d.guests ? d.users.concat([Object.assign({id: 'g', name: 'مهمان‌ها', email: '', chat_plan: '-', tutor_plan: '-', price: 0}, d.guests)]) : d.users;
     const body = document.getElementById('cost-body'); body.innerHTML = '';
     all.forEach(u => {

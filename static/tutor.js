@@ -655,7 +655,7 @@
         else if (s === 'connect') Stat.busy('voice', 'در حال برقراری ارتباط صوتی…', 0, 60000);
       },
       onWork: function (kind, on) {
-        var txt = { look: 'استاد تصویر را دقیق نگاه می‌کند…', poem: 'استاد شعر را در مجموعه می‌جوید…', start: 'استاد درس را آماده می‌کند…' }[kind];
+        var txt = { look: 'استاد تصویر را دقیق نگاه می‌کند…', poem: 'استاد شعر را در مجموعه می‌جوید…', start: 'استاد درس را آماده می‌کند…', search: 'استاد در وب جستجو می‌کند…', picture: 'استاد تصویر را آماده می‌کند…' }[kind];
         if (!txt) return;
         if (on) Stat.busy('work-' + kind, txt, 500, 40000); else Stat.clear('work-' + kind);
       },

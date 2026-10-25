@@ -19,7 +19,10 @@ from datetime import datetime, timedelta
 from flask import jsonify, request
 
 import board_check as BC
+import chat_tools
+import gemini
 import media as media_store
+import metering
 import tutor_media as TM
 from database import TutorClass, TutorStudent
 
@@ -232,6 +235,29 @@ VOICE_TOOLS = [
      "description": "Call this after your closing sentence when the student wants to stop for now. The class is saved so it can be resumed later.",
      "parameters": {"type": "object", "properties": {}}},
 ]
+
+# Two more tools, offered only when the picture/search service (Gemini) is set up. Each use is counted against the
+# student's monthly pictures / searches and dollar ceiling, exactly like in the chat.
+VOICE_TOOLS_EXTRA = [
+    {"type": "function", "name": "web_search",
+     "description": "Search the web for something current or that you are not sure of (news, prices, dates, a fact you need to verify). Returns a short factual answer. Say you are looking it up first. Do not use it for things you can teach from knowledge.",
+     "parameters": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "short search query, in the best language for the topic"}}, "required": ["query"]}},
+    {"type": "function", "name": "make_picture",
+     "description": "Make a new picture for the board when a drawing would not be enough (a map, an animal, a scene, a diagram of something real). It becomes one of the class pictures with a key like p3: then show it with the board tool, op image. Takes 10-30 seconds, so say you are preparing it. Never put words or letters in the description.",
+     "parameters": {"type": "object", "properties": {
+         "prompt": {"type": "string", "description": "detailed English description: subject, style, colors, composition. Simple clean educational illustration."},
+         "aspect_ratio": {"type": "string", "enum": ["1:1", "4:3", "3:4", "16:9"], "description": "default 4:3"}}, "required": ["prompt"]}},
+]
+TOOLS_NOTE = ("TWO EXTRA TOOLS: web_search (look something up) and make_picture (create a picture for the board). They are slow and limited, so use them only when they truly help the lesson: "
+              "tell the student in one short sentence what you are doing, then wait for the result. If a tool answers that the allowance is used up, say so kindly and teach without it. "
+              "After make_picture, show the picture with the board tool (op image, the key you get back).")
+
+
+def voice_tools():
+    """The class voice's tool list; the search and picture tools only when they can really work."""
+    return VOICE_TOOLS + (VOICE_TOOLS_EXTRA if gemini.available() else [])
+
 
 WRAP_SYSTEM = r"""You are the note-taking side of "Ustad Khayyam", a Dari-speaking tutor. The student is stopping the class for now. From the class notes, write what is needed to continue next time.
 Return one JSON object only:
@@ -1044,6 +1070,73 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         media_store.update_meta(db, m['media'], owner_key(), meta)
         return jsonify(ok=True, **look_view(m, meta))
 
+    def _tool_env():
+        return chat_tools.Env(db, current_user.id, metering.tool_tier(current_user), None, None, app.logger)
+
+    @app.route('/api/class/<int:cid>/search', methods=['POST'])
+    @limiter.limit('30 per hour')
+    @login_required
+    def class_search(cid):
+        """The teacher looks something up on the web (counted against the student's monthly searches and dollars)."""
+        if not owned(cid):
+            return jsonify(ok=False, error='class not found'), 404
+        q = _short((request.get_json(silent=True) or {}).get('query'), 300)
+        if not q:
+            return jsonify(ok=False, error='give a short search query')
+        try:
+            res = chat_tools.t_web_search(_tool_env(), {'query': q})
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('class_search failed')
+            return jsonify(ok=False, error='search is not possible now, teach without it')
+        if not res.get('ok'):
+            return jsonify(ok=False, error=res.get('message') or 'search is not possible now, teach without it')
+        return jsonify(ok=True, results=res.get('results', ''), sources=res.get('sources', []), note=res.get('note', ''))
+
+    @app.route('/api/class/<int:cid>/make_picture', methods=['POST'])
+    @limiter.limit('15 per hour')
+    @login_required
+    def class_make_picture(cid):
+        """The teacher makes a picture for the board. It is saved as a class picture (p1, p2 ...) like one the student brought."""
+        cls = owned(cid)
+        if not cls:
+            return jsonify(ok=False, error='class not found'), 404
+        p = request.get_json(silent=True) or {}
+        prompt = _short(p.get('prompt'), 700)
+        aspect = p.get('aspect_ratio') if p.get('aspect_ratio') in ('1:1', '4:3', '3:4', '16:9') else '4:3'
+        if not prompt:
+            return jsonify(ok=False, error='describe the picture')
+        if not gemini.available():
+            return jsonify(ok=False, error='picture making is not available now, draw it on the board instead')
+        existing = media_store.list_for(db, owner_key(), -cid, TM.MAX_MATERIALS + 5)
+        if len(existing) + 1 > TM.MAX_MATERIALS:
+            return jsonify(ok=False, error='this class already has many pictures, use one of them')
+        got = {}
+
+        def work():
+            mime, raw = gemini.generate_image(prompt + '\n\nA clean educational illustration. Do not draw any letters or words.', (), aspect, '1K')
+            got['raw'] = raw
+            return {'ok': True}
+        try:
+            res = chat_tools._guarded(_tool_env(), 'image', 'class: ' + prompt[:90], work)
+            if not res.get('ok') or not got.get('raw'):
+                return jsonify(ok=False, error=res.get('message') or 'could not make the picture, draw it on the board instead')
+            jpeg, w, h = TM.prepare_image(got['raw'])
+            seq = max([(e['meta'] or {}).get('seq', 0) for e in existing] + [0]) + 1
+            mid = media_store.save(db, owner_key(), 'image', 'image/jpeg', 'picture', jpeg, conversation_id=-cid,
+                                   meta={'role': 'material', 'title': prompt[:60], 'w': w, 'h': h, 'seq': seq, 'made': True})
+            cls.updated_at = _now()
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('class_make_picture failed')
+            return jsonify(ok=False, error='could not make the picture, draw it on the board instead')
+        item = next((public_material(m) for m in materials(cid) if m['media'] == mid), None)
+        if not item:
+            return jsonify(ok=False, error='the picture was not saved, draw it on the board instead')
+        return jsonify(ok=True, key=item['key'], w=item['w'], h=item['h'], item=item,
+                       note='The picture is ready as ' + item['key'] + '. Show it now with the board tool, op image, key ' + item['key'] + '.')
+
     @app.route('/api/class/<int:cid>/read_ink', methods=['POST'])
     @limiter.limit('60 per hour')
     @login_required
@@ -1095,9 +1188,9 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         mt = materials_text(materials(cls.id))
         if mt:
             text += '\n\n' + mt
-        prompt = VOICE_SYSTEM + '\n\n' + OPS_REF + '\n\n' + text + (VOICE_RESUME if resumed else VOICE_NEW)
+        prompt = VOICE_SYSTEM + '\n\n' + OPS_REF + ('\n\n' + TOOLS_NOTE if gemini.available() else '') + '\n\n' + text + (VOICE_RESUME if resumed else VOICE_NEW)
         return {'class_id': cls.id}, prompt
-    app.config['CLASS_VOICE'] = {'context': voice_context, 'tools': VOICE_TOOLS}
+    app.config['CLASS_VOICE'] = {'context': voice_context, 'tools': VOICE_TOOLS, 'tools_fn': voice_tools}
 
     @app.route('/api/class/<int:cid>/resume', methods=['POST'])
     @limiter.limit('10 per minute')
