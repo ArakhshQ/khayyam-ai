@@ -35,7 +35,8 @@ import dari_text
 from metering import (VOICE_PLANS, ensure_storage as ensure_api_meter, reserve as reserve_api,
     finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
     tutor_plan as active_tutor_plan, tutor_tier as active_tutor_tier,
-    voice_tier as active_voice_tier, usd_micro, recent_requests)
+    voice_tier as active_voice_tier, usd_micro, recent_requests,
+    record_voice_usage, voice_cost_for_user, cost_history, voice_recent, transcribe_cost_micro, TTS_PER_MIN)
 
 load_dotenv()
 
@@ -230,8 +231,9 @@ with app.app_context():
         conn.execute(sql_text("UPDATE users SET chat_plan='free' WHERE chat_plan IS NULL"))
         conn.execute(sql_text("UPDATE users SET tutor_plan='free' WHERE tutor_plan IS NULL"))
     ensure_api_meter(db)
-    from metering import ensure_tool_storage
+    from metering import ensure_tool_storage, ensure_voice_usage_storage
     ensure_tool_storage(db)
+    ensure_voice_usage_storage(db)
     media_store.ensure_media_storage(db)
 
     def _sync_table_columns(model):
@@ -1615,6 +1617,58 @@ def admin_ai_log():
     return jsonify(recent_requests(db, 80))
 
 
+PLAN_PRICE_USD = {'free': 0, 'basic': 12, 'pro': 25, 'premium': 49, 'tutor_pro': 69}
+
+
+@app.route('/api/admin/costs')
+@login_required
+@admin_required
+def admin_costs():
+    """Everything that burns money, per user per UTC day (text, tutor text, live voice, dictation/read-aloud, tools)."""
+    days = max(1, min(request.args.get('days', 30, type=int) or 30, 90))
+    hist = cost_history(db, days)
+    today = datetime.now(timezone.utc).date()
+    dates = [(today - timedelta(days=i)).isoformat() for i in range(days)]
+    kinds = ('chat', 'tutor', 'voice_live', 'voice_other', 'tools')
+    ids = [int(k[2:]) for k in hist if k.startswith('u:') and k[2:].isdigit()]
+    users = {u.id: u for u in User.query.filter(User.id.in_(ids)).all()} if ids else {}
+
+    def pack(owner, per_day):
+        usd = {d: {k: round(v / 1e6, 4) for k, v in per_day.get(d, {}).items()} for d in dates if d in per_day}
+        tot = {d: round(sum(v.values()), 4) for d, v in usd.items()}
+        k30 = {k: round(sum(per_day.get(d, {}).get(k, 0) for d in dates) / 1e6, 4) for k in kinds}
+        last = lambda n: round(sum(tot.get(d, 0) for d in dates[:n]), 4)
+        return {'daily': usd, 'day_total': tot, 'today': last(1), 'yesterday': round(tot.get(dates[1], 0), 4) if len(dates) > 1 else 0,
+                'd7': last(7), 'total': round(sum(tot.values()), 4), 'kinds': k30}
+    rows, guests = [], {}
+    for owner, per_day in hist.items():
+        if owner.startswith('u:') and owner[2:].isdigit():
+            u = users.get(int(owner[2:]))
+            row = pack(owner, per_day)
+            cp, tp = active_chat_plan(u) if u else '?', active_tutor_plan(u) if u else '?'
+            row.update(id=int(owner[2:]), name=(u.username if u else '(deleted)'), email=(u.email if u else ''), chat_plan=cp, tutor_plan=tp,
+                       price=PLAN_PRICE_USD.get(cp, 0) + (PLAN_PRICE_USD['tutor_pro'] if tp == 'tutor_pro' else 0))
+            rows.append(row)
+        else:
+            for d, v in per_day.items():
+                g = guests.setdefault(d, {})
+                for k, n in v.items(): g[k] = g.get(k, 0) + n
+    rows.sort(key=lambda r: -r['total'])
+    guest = pack('guests', guests) if guests else None
+    day_totals = {d: round(sum(r['day_total'].get(d, 0) for r in rows) + (guest['day_total'].get(d, 0) if guest else 0), 4) for d in dates}
+    return jsonify(dates=dates, users=rows, guests=guest, day_totals=day_totals, grand_total=round(sum(day_totals.values()), 4))
+
+
+@app.route('/api/admin/voice-log')
+@login_required
+@admin_required
+def admin_voice_log():
+    names = {u.id: u.username for u in User.query.limit(2000).all()}
+    rows = voice_recent(db, 60)
+    for r in rows: r['user'] = names.get(r['user_id'], r['user_id'])
+    return jsonify(rows)
+
+
 @app.route('/forgot-password')
 def forgot_password_page():
     return render_template('forgot_password.html')
@@ -1806,6 +1860,12 @@ def transcribe_audio():
                 "or Persian. Preserve the spoken language; do not translate it into English. Return only the words spoken."
             ),
         )
+        try:
+            stt_model = os.getenv("STT_MODEL", "gpt-transcribe")
+            record_voice_usage(db, sid, current_user.id, _voice_now().date().isoformat(), "dictation", stt_model, seconds=seconds,
+                               micro=transcribe_cost_micro(stt_model, seconds))
+        except Exception:
+            db.session.rollback(); app.logger.exception("dictation cost not recorded")
         transcript = (getattr(transcription, "text", "") or "").strip()
         if not transcript:
             return jsonify({"error": "گفتاری تشخیص داده نشد. نزدیک‌تر به میکروفون صحبت کنید و دوباره امتحان کنید."}), 422
@@ -1867,6 +1927,11 @@ def text_to_speech():
                           'teacher style and moderate pace; no extra words.'),response_format='mp3')
         audio=speech.read()
         if not audio: raise RuntimeError('Empty speech response')
+        try:
+            record_voice_usage(db, sid, current_user.id, _voice_now().date().isoformat(), 'listen', os.getenv('TTS_MODEL','gpt-4o-mini-tts'),
+                               seconds=seconds, micro=int(round(seconds/60.0*float(os.getenv('PRICE_TTS_PER_MIN',TTS_PER_MIN))*1e6)))
+        except Exception:
+            db.session.rollback(); app.logger.exception('tts cost not recorded')
         return send_file(BytesIO(audio),mimetype='audio/mpeg',as_attachment=False,
                          download_name='khayyam-reply.mp3',max_age=0)
     except Exception:
@@ -3730,9 +3795,15 @@ def _close_stale_live_sessions(uid,now):
         st=row['started_at']; st=datetime.fromisoformat(st) if isinstance(st,str) else st
         elapsed=max(0,int((now-st).total_seconds()))
         if elapsed<15: fresh=True; continue          # started seconds ago: a real race, not a leftover
+        charged=min(int(row['reserved_seconds']),elapsed+5)
         db.session.execute(sql_text('''UPDATE voice_quota_sessions SET ended_at=:now,charged_seconds=:c
-            WHERE session_id=:sid AND ended_at IS NULL'''),{'now':now,'c':min(int(row['reserved_seconds']),elapsed+5),'sid':row['session_id']})
+            WHERE session_id=:sid AND ended_at IS NULL'''),{'now':now,'c':charged,'sid':row['session_id']})
         closed=True
+        try:
+            if not db.session.execute(sql_text('SELECT 1 FROM voice_usage WHERE session_id=:s'),{'s':row['session_id']}).first():
+                record_voice_usage(db,row['session_id'],uid,now.date().isoformat(),'live',os.getenv('REALTIME_MODEL_CLASS','gpt-realtime-2.1'),seconds=charged,estimated=True)
+        except Exception:
+            db.session.rollback()
     return closed,fresh
 
 def _reserve_voice_seconds(uid,seconds,kind='live'):
@@ -3775,6 +3846,8 @@ def voice_diag():
     try:
         q = _voice_quota_snapshot(current_user.id)
         out["remaining_seconds"] = q["remaining_seconds"]; out["plan"] = q["plan"]
+        t, m = voice_cost_for_user(db, current_user.id)
+        out["voice_cost_today_usd"] = round(t / 1e6, 4); out["voice_cost_month_usd"] = round(m / 1e6, 4)
         out["open_sessions"] = db.session.execute(sql_text("SELECT COUNT(*) FROM voice_quota_sessions WHERE user_id=:u AND ended_at IS NULL"), {"u": current_user.id}).scalar()
     except Exception as exc:
         out["quota_error"] = type(exc).__name__
@@ -3792,6 +3865,36 @@ def voice_quota_status():
     except Exception:
         app.logger.exception("Voice quota status failed")
         return jsonify(error="Voice allowance temporarily unavailable"), 503
+
+
+@app.route("/api/voice/usage", methods=["POST"])
+@limiter.limit("600 per hour")
+@login_required
+def voice_usage_report():
+    """The browser reports the realtime model's own token counts for this session (cumulative totals, safe to repeat)."""
+    data = request.get_json(silent=True) or {}
+    try:
+        receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").loads(str(data.get("receipt") or ""))
+        if receipt.get("uid") != current_user.id:
+            return jsonify(error="Invalid voice session"), 403
+        sid = str(receipt.get("sid") or "")
+        if not re.fullmatch(r"[0-9a-f-]{36}", sid):
+            return jsonify(error="Unsupported voice session"), 403
+    except (BadSignature, ValueError, TypeError, AttributeError):
+        return jsonify(error="Invalid voice session"), 403
+    u = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    try:
+        _ensure_voice_quota_storage()
+        row = db.session.execute(sql_text("SELECT usage_day FROM voice_quota_sessions WHERE session_id=:s AND user_id=:u"),
+                                 {"s": sid, "u": current_user.id}).first()
+        if not row:
+            return jsonify(error="Voice session not found"), 404
+        micro = record_voice_usage(db, sid, current_user.id, row[0], "live", receipt.get("model") or VOICE_MODEL, usage=u,
+                                   seconds=data.get("seconds"), talk_seconds=data.get("talk_seconds"), mode=receipt.get("mode"))
+        return jsonify(ok=True, usd=round(micro / 1e6, 4))
+    except Exception:
+        db.session.rollback(); app.logger.exception("voice usage report failed")
+        return jsonify(error="Could not record usage"), 503
 
 
 @app.route("/api/voice/finish", methods=["POST"])
@@ -3821,6 +3924,12 @@ def voice_quota_finish():
                 SET ended_at=:now, charged_seconds=:charged
                 WHERE session_id=:sid AND ended_at IS NULL"""),
                 {"now":now,"charged":charged,"sid":sid})
+            db.session.commit()
+            try:    # the real token counts come from the browser; if none arrive, keep a time-based estimate so the cost is never missing
+                record_voice_usage(db, sid, current_user.id, row["usage_day"], "live", receipt.get("model") or VOICE_MODEL,
+                                   seconds=charged, mode=receipt.get("mode"), estimated=True)
+            except Exception:
+                db.session.rollback(); app.logger.exception("voice cost estimate failed")
         db.session.commit()
         return jsonify(ok=True)
     except (BadSignature, ValueError, TypeError, AttributeError):
@@ -3927,7 +4036,7 @@ def create_live_voice_session():
                       quota['remaining_seconds'])
         receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").dumps(
             {"uid": current_user.id, "mode": mode, "context": context,
-             "sid": session_id, "issued": int(time.time())})
+             "sid": session_id, "issued": int(time.time()), "model": payload["session"]["model"]})
         return jsonify(value=result["value"], expires_at=result.get("expires_at"),
                        receipt=receipt, mode=mode, allowance_seconds=remaining,
                        warning_seconds=VOICE_WARNING_SECONDS,

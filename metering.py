@@ -403,3 +403,166 @@ def tool_recent(db, limit=60):
     return [{'at': r['created_at'].isoformat() if hasattr(r['created_at'], 'isoformat') else str(r['created_at']),
              'owner': r['owner_key'], 'kind': r['kind'], 'status': r['status'],
              'usd': round(int(r['est_micro'] or 0) / 1e6, 5), 'detail': r['detail']} for r in rows]
+
+# =============================================================================================
+# VOICE COSTS (live realtime sessions, dictation, read-aloud)
+# =============================================================================================
+# USD per 1M tokens, from OpenAI's pricing page (checked Oct 25 2026): (input, cached input, output).
+# Override one number without a code change: PRICE_RT_<MODEL>_<MODALITY>_<IN|CACHED|OUT>, e.g.
+# PRICE_RT_GPT_REALTIME_2_1_AUDIO_IN=32
+REALTIME_RATES = {
+    'gpt-realtime-2.1':      {'text': (4.00, .40, 24.00), 'audio': (32.00, .40, 64.00), 'image': (5.00, .50, 0.0)},
+    'gpt-realtime-2.1-mini': {'text': (.60, .06, 2.40),   'audio': (10.00, .30, 20.00), 'image': (.80, .08, 0.0)},
+}
+# USD per minute of audio sent to the speech-to-text model.
+TRANSCRIBE_PER_MIN = {'gpt-live-transcribe': .017, 'gpt-transcribe': .0045}
+# Read-aloud (gpt-4o-mini-tts): $0.60 / 1M text tokens + $12 / 1M audio tokens, about $0.015 per minute of speech.
+TTS_PER_MIN = .015
+# Used only when a live session ended without reporting its real token counts (tab crashed, offline):
+# USD per minute connected. A GUESS until the real numbers in the admin page say otherwise.
+FALLBACK_USD_PER_MIN = {'gpt-realtime-2.1': .25, 'gpt-realtime-2.1-mini': .07}
+
+USAGE_FIELDS = ('in_text', 'in_audio', 'in_image', 'cin_text', 'cin_audio', 'cin_image', 'out_text', 'out_audio', 'responses')
+
+
+def _rt_rate(model, modality, slot):
+    base = REALTIME_RATES.get(model) or REALTIME_RATES['gpt-realtime-2.1']
+    key = 'PRICE_RT_%s_%s_%s' % (''.join(x if x.isalnum() else '_' for x in model).upper(), modality.upper(), ('IN', 'CACHED', 'OUT')[slot])
+    try:
+        return float(os.getenv(key, base[modality][slot]))
+    except ValueError:
+        return base[modality][slot]
+
+
+def realtime_cost_micro(model, u):
+    """micro-USD of a realtime session from its token counts (1 USD per 1M tokens = 1 micro-USD per token)."""
+    total = 0.0
+    for m in ('text', 'audio', 'image'):
+        inp = max(0, int(u.get('in_' + m, 0) or 0)); cached = min(inp, max(0, int(u.get('cin_' + m, 0) or 0)))
+        out = max(0, int(u.get('out_' + m, 0) or 0))
+        total += (inp - cached) * _rt_rate(model, m, 0) + cached * _rt_rate(model, m, 1) + out * _rt_rate(model, m, 2)
+    return int(round(total))
+
+
+def transcribe_cost_micro(model, seconds):
+    per_min = float(os.getenv('PRICE_TRANSCRIBE_' + ''.join(x if x.isalnum() else '_' for x in model).upper() + '_PER_MIN', TRANSCRIBE_PER_MIN.get(model, .017)))
+    return int(round(max(0, seconds) / 60.0 * per_min * 1e6))
+
+
+def fallback_live_micro(model, seconds):
+    per_min = float(os.getenv('VOICE_FALLBACK_USD_PER_MIN', FALLBACK_USD_PER_MIN.get(model, .25)))
+    return int(round(max(0, seconds) / 60.0 * per_min * 1e6))
+
+
+def ensure_voice_usage_storage(db):
+    with db.engine.begin() as conn:
+        conn.execute(text('''CREATE TABLE IF NOT EXISTS voice_usage (
+            session_id VARCHAR(36) PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            usage_day VARCHAR(10) NOT NULL,
+            kind VARCHAR(12) NOT NULL,
+            mode VARCHAR(12),
+            model VARCHAR(60) NOT NULL,
+            estimated INTEGER NOT NULL DEFAULT 0,
+            seconds INTEGER NOT NULL DEFAULT 0,
+            talk_seconds INTEGER NOT NULL DEFAULT 0,
+            in_text BIGINT NOT NULL DEFAULT 0, in_audio BIGINT NOT NULL DEFAULT 0, in_image BIGINT NOT NULL DEFAULT 0,
+            cin_text BIGINT NOT NULL DEFAULT 0, cin_audio BIGINT NOT NULL DEFAULT 0, cin_image BIGINT NOT NULL DEFAULT 0,
+            out_text BIGINT NOT NULL DEFAULT 0, out_audio BIGINT NOT NULL DEFAULT 0,
+            responses INTEGER NOT NULL DEFAULT 0,
+            micro INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)'''))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS ix_voice_usage_user_day ON voice_usage (user_id, usage_day)'))
+
+
+def _clamp_int(v, hi=2_000_000_000):
+    try:
+        return max(0, min(int(float(v)), hi))
+    except (TypeError, ValueError):
+        return 0
+
+
+def record_voice_usage(db, sid, uid, day, kind, model, usage=None, seconds=0, talk_seconds=0, mode=None,
+                       estimated=False, micro=None):
+    """Insert or update the cost of one voice session. `usage` holds CUMULATIVE totals, so a repeated or
+    reordered report can never double count: every counter only ever grows (max of old and new).
+    A real report replaces an estimate. micro: fixed cost for dictation / read-aloud."""
+    now = utc_now()
+    row = db.session.execute(text('SELECT * FROM voice_usage WHERE session_id=:s'), {'s': sid}).mappings().first()
+    new = {f: _clamp_int((usage or {}).get(f, 0)) for f in USAGE_FIELDS}
+    secs = _clamp_int(seconds, 86400); talk = _clamp_int(talk_seconds, 86400)
+    if row:
+        if row['estimated'] == 0 and estimated:      # a real report is already there: never overwrite it with a guess
+            return int(row['micro'])
+        merged = new if (row['estimated'] and not estimated) else {f: max(int(row[f] or 0), new[f]) for f in USAGE_FIELDS}
+        secs = max(int(row['seconds'] or 0), secs)
+        talk = max(int(row['talk_seconds'] or 0), talk)
+        model = row['model'] or model
+    else:
+        merged = new
+    if micro is None:
+        if estimated:
+            micro = fallback_live_micro(model, secs)
+        else:
+            tr = os.getenv('REALTIME_TRANSCRIBE_MODEL', 'gpt-live-transcribe')
+            micro = realtime_cost_micro(model, merged) + transcribe_cost_micro(tr, talk)
+    p = dict(merged); p.update(sid=sid, uid=uid, day=day, kind=kind, mode=mode, model=model, est=1 if estimated else 0,
+                               secs=secs, talk=talk, micro=int(micro), now=now)
+    if row:
+        db.session.execute(text('''UPDATE voice_usage SET estimated=:est, seconds=:secs, talk_seconds=:talk,
+            in_text=:in_text, in_audio=:in_audio, in_image=:in_image, cin_text=:cin_text, cin_audio=:cin_audio, cin_image=:cin_image,
+            out_text=:out_text, out_audio=:out_audio, responses=:responses, micro=:micro, updated_at=:now WHERE session_id=:sid'''), p)
+    else:
+        db.session.execute(text('''INSERT INTO voice_usage (session_id,user_id,usage_day,kind,mode,model,estimated,seconds,talk_seconds,
+            in_text,in_audio,in_image,cin_text,cin_audio,cin_image,out_text,out_audio,responses,micro,created_at,updated_at)
+            VALUES (:sid,:uid,:day,:kind,:mode,:model,:est,:secs,:talk,:in_text,:in_audio,:in_image,:cin_text,:cin_audio,:cin_image,
+                    :out_text,:out_audio,:responses,:micro,:now,:now)'''), p)
+    db.session.commit()
+    return int(micro)
+
+
+def voice_cost_for_user(db, uid):
+    """(today_micro, month_micro) of voice, for one user."""
+    day = utc_now().strftime('%Y-%m-%d')
+    r = db.session.execute(text('''SELECT COALESCE(SUM(CASE WHEN usage_day=:d THEN micro ELSE 0 END),0),
+        COALESCE(SUM(micro),0) FROM voice_usage WHERE user_id=:u AND usage_day LIKE :m'''),
+        {'u': uid, 'd': day, 'm': day[:7] + '%'}).first()
+    return int(r[0] or 0), int(r[1] or 0)
+
+
+def cost_history(db, days=30):
+    """Everything that burns money, per owner per UTC day, in micro-USD.
+    -> {owner_key: {'YYYY-MM-DD': {'chat': n, 'tutor': n, 'voice_live': n, 'voice_other': n, 'tools': n}}}
+    Text comes from api_usage_requests, tools from api_tool_usage, voice from voice_usage."""
+    days = max(1, min(int(days), 120))
+    since = (utc_now() - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    out = {}
+
+    def add(owner, day, key, micro):
+        micro = int(micro or 0)
+        if not micro: return
+        d = out.setdefault(owner, {}).setdefault(str(day)[:10], {'chat': 0, 'tutor': 0, 'voice_live': 0, 'voice_other': 0, 'tools': 0})
+        d[key] += micro
+    for o, d, f, m in db.session.execute(text('''SELECT owner_key, date(created_at), feature, COALESCE(SUM(actual_micro),0)
+            FROM api_usage_requests WHERE created_at>=:s AND status IN ('done','uncertain') GROUP BY owner_key, date(created_at), feature'''), {'s': since}).all():
+        add(o, d, 'tutor' if f == 'tutor' else 'chat', m)
+    for o, d, m in db.session.execute(text('''SELECT owner_key, date(created_at), COALESCE(SUM(est_micro),0)
+            FROM api_tool_usage WHERE created_at>=:s AND status!='failed' GROUP BY owner_key, date(created_at)'''), {'s': since}).all():
+        add(o, d, 'tools', m)
+    for u, d, k, m in db.session.execute(text('''SELECT user_id, usage_day, kind, COALESCE(SUM(micro),0)
+            FROM voice_usage WHERE usage_day>=:s GROUP BY user_id, usage_day, kind'''), {'s': since.strftime('%Y-%m-%d')}).all():
+        add('u:%s' % u, d, 'voice_live' if k == 'live' else 'voice_other', m)
+    return out
+
+
+def voice_recent(db, limit=40):
+    rows = db.session.execute(text('''SELECT created_at, user_id, kind, mode, model, estimated, seconds, talk_seconds, in_text, in_audio, in_image,
+        cin_text, cin_audio, cin_image, out_text, out_audio, responses, micro FROM voice_usage ORDER BY created_at DESC LIMIT :n'''), {'n': int(limit)}).mappings().all()
+    out = []
+    for r in rows:
+        d = dict(r); d['at'] = d.pop('created_at').isoformat() if hasattr(r['created_at'], 'isoformat') else str(r['created_at'])
+        d['usd'] = round(int(d.pop('micro') or 0) / 1e6, 4)
+        d['per_min'] = round(d['usd'] / (d['seconds'] / 60.0), 3) if d['seconds'] >= 30 else None
+        out.append(d)
+    return out

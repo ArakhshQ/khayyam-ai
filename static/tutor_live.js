@@ -26,6 +26,7 @@
     this.pc = null; this.dc = null; this.mic = null; this.audio = null;
     this.receipt = null; this.deadline = 0; this.warned = false; this.timer = 0;
     this.active = false; this.responding = false; this.userSpeaking = false; this.needReply = false; this.ending = false; this.closed = false;
+    this.usage = { in_text: 0, in_audio: 0, in_image: 0, cin_text: 0, cin_audio: 0, cin_image: 0, out_text: 0, out_audio: 0, responses: 0 }; this.talkMs = 0; this.talkAt = 0; this.startedAt = 0; this.usageT = 0;
     this.cur = null; this.queue = []; this.resps = []; this.spEnd = 0; this.pumpT = 0; this.transcript = []; this.muted = false; this.endT = 0;
   }
   var P = Session.prototype;
@@ -78,13 +79,34 @@
         return r.text();
       }).then(function (sdp) { return pc.setRemoteDescription({ type: 'answer', sdp: sdp }); }).then(function () { return opened; });
     }).then(function () {
-      self.active = true; o.onState('connected');
+      self.active = true; self.startedAt = Date.now(); o.onState('connected');
       self.needReply = false;
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
       if (o.firstPicture) self.putPicture(o.firstPicture);
       if (o.resumed) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[ادامهٔ صنف] The student is back and presses continue. This is the same class as before, not a new one: greet them and carry on from what is in your notes and on the board. Do not ask what they want to learn.' }] } });
       self.send({ type: 'response.create' });          // the teacher speaks first
     });
+  };
+
+  // what the realtime model says it used (tokens by kind): we add it up and tell the server, which prices it
+  P.noteUsage = function (u) {
+    if (!u) return;
+    var U = this.usage, d = u.input_token_details || {}, c = d.cached_tokens_details || {}, o = u.output_token_details || {};
+    function n(x) { return Number(x) > 0 ? Number(x) : 0; }
+    U.in_text += n(d.text_tokens); U.in_audio += n(d.audio_tokens); U.in_image += n(d.image_tokens);
+    if (c.text_tokens != null || c.audio_tokens != null || c.image_tokens != null) { U.cin_text += n(c.text_tokens); U.cin_audio += n(c.audio_tokens); U.cin_image += n(c.image_tokens); }
+    else U.cin_text += n(d.cached_tokens);                       // no breakdown given: count the cached part as text (cached text and audio are priced alike)
+    U.out_text += n(o.text_tokens); U.out_audio += n(o.audio_tokens); U.responses += 1;
+    if (!d.text_tokens && !d.audio_tokens && !d.image_tokens && u.input_tokens) U.in_text += n(u.input_tokens);
+    if (!o.text_tokens && !o.audio_tokens && u.output_tokens) U.out_audio += n(u.output_tokens);
+    var self = this;
+    if (!this.usageT) this.usageT = setTimeout(function () { self.usageT = 0; self.sendUsage(false); }, 20000);     // at most one report per 20 s
+  };
+  P.sendUsage = function (final) {
+    if (!this.receipt || !this.usage.responses) return;
+    var secs = this.startedAt ? Math.round((Date.now() - this.startedAt) / 1000) : 0;
+    var talk = Math.round((this.talkMs + (this.talkAt ? Date.now() - this.talkAt : 0)) / 1000);
+    try { fetch('/api/voice/usage', { method: 'POST', credentials: 'same-origin', keepalive: !!final, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receipt: this.receipt, usage: this.usage, seconds: secs, talk_seconds: talk }) }).catch(function () {}); } catch (e) {}
   };
 
   P.tick = function () {
@@ -115,11 +137,12 @@
     } else if (t === 'response.done') {
       this.responding = false;
       var cur = this.cur; this.cur = null;
+      this.noteUsage(e.response && e.response.usage);
       this.afterResponse(cur, e.response);
     } else if (t === 'input_audio_buffer.speech_started') {
-      this.userSpeaking = true; this.flush(); this.o.onState('listening');
+      this.userSpeaking = true; this.talkAt = Date.now(); this.flush(); this.o.onState('listening');
     } else if (t === 'input_audio_buffer.speech_stopped') {
-      this.userSpeaking = false; this.o.onState('thinking');
+      this.userSpeaking = false; if (this.talkAt) { this.talkMs += Date.now() - this.talkAt; this.talkAt = 0; } this.o.onState('thinking');
     } else if (t === 'conversation.item.input_audio_transcription.completed') {
       var tx = (e.transcript || '').trim();
       if (tx) { this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); }
@@ -364,6 +387,8 @@
   /* ───────── closing ───────── */
   P.stop = function () {
     this.closed = true; this.flush();
+    if (this.usageT) { clearTimeout(this.usageT); this.usageT = 0; }
+    if (!this.reported) { this.reported = true; this.sendUsage(true); }
     clearInterval(this.timer); clearTimeout(this.endT); clearTimeout(this.pumpT);
     try { if (this.dc) this.dc.close(); } catch (e) {}
     try { if (this.pc) this.pc.close(); } catch (e) {}
