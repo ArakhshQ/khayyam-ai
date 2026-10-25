@@ -119,7 +119,23 @@
     } catch (e) {}
   };
 
+  /* A gentle break offer after about 15 minutes of one session (and again at 30): a note only the teacher sees. The teacher
+     finishes the idea it is on, then warmly suggests a rest; the class waits where it is. The student can always say "go on". */
+  var BREAKS = (global.TUTOR_BREAK_MS && global.TUTOR_BREAK_MS.length) ? global.TUTOR_BREAK_MS : [15 * 60000, 30 * 60000];
+  var BREAK_NOTE = '[SESSION NOTE for the teacher only, not said by the student. Never read it out or mention it.] The student has been in this class for about %MIN% minutes. ' +
+    'At the NEXT natural stopping point (finish the idea or step you are on first, never cut one off) praise what they did, give a one-sentence recap, and warmly suggest a short break: say it is a good moment to rest the mind, ' +
+    'and that the class will wait exactly here and continue from this very spot. If they agree, say one short warm closing sentence and call end_class. ' +
+    'If they want to go on, just continue happily and do not bring the break up again for at least ten minutes.';
+  P.breakNote = function (minutes) {
+    if (!this.active || this.closed || this.ending) return false;
+    this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: BREAK_NOTE.replace('%MIN%', String(minutes)) }] } });
+    return true;
+  };
   P.tick = function () {
+    if (this.startedAt && this.active && !this.closed) {
+      var ran = Date.now() - this.startedAt, k = this.breaksSent || 0;
+      if (k < BREAKS.length && ran >= BREAKS[k]) { this.breaksSent = k + 1; this.breakNote(Math.round(BREAKS[k] / 60000)); }
+    }
     if (!this.deadline) return;
     var left = Math.max(0, Math.ceil((this.deadline - Date.now()) / 1000));
     if (!this.warned && left <= this.warnAt && left > 0) { this.warned = true; this.o.onQuota('warn', Math.ceil(left / 60)); }
@@ -255,6 +271,7 @@
     }
     if (it.name === 'end_class') {
       this.ending = true;
+      if (args.next_title) this.nextClass = { title: String(args.next_title).slice(0, 120), request: String(args.next_request || args.next_title).slice(0, 400) };
       var wait = Math.max(0, this.spEnd - Date.now());
       this.finishSoon(wait + 5000);                    // normally ended earlier by the end of the speech
       return Promise.resolve({ call_id: it.call_id, output: { ok: true } });

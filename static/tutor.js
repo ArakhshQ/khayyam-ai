@@ -752,7 +752,7 @@
   function finishLive() {
     if (!live || !cls || closing) return;
     closing = true;
-    var id = cls.id, tr = live.stop(); live = null; resetStu(); afterLive = [];
+    var id = cls.id, nx = live.nextClass || null, tr = live.stop(); live = null; resetStu(); afterLive = [];
     Stat.clear('think'); Stat.clear('wait'); Stat.busy('save', 'صنف ذخیره می‌شود…', 0, 90000);
     $('voice-record-btn').classList.remove('live', 'muted', 'talking'); delete $('classroom').dataset.live;
     typing();
@@ -764,7 +764,8 @@
       pendingVoice = false;
       if (d.deleted) { addMessage('ai', 'هر وقت خواستید دوباره بیایید و بگویید چه می‌خواهید بیاموزید.', linkRow('شروع تازه', function () { newClass(); })); cls = null; loadSaved(); return; }
       if (cls) cls.status = 'paused';
-      addMessage('ai', 'صنف ذخیره شد. هر وقت خواستید از همین‌جا ادامه می‌دهیم.' + (d.summary ? '\n\n' + d.summary : ''), linkRow('صنف تازه', function () { newClass(); }));
+      var links = nx ? linkRow('ادامه با صنف تازه: ' + nx.title, function () { startLiveClass(nx.request); }) : linkRow('صنف تازه', function () { newClass(); });
+      addMessage('ai', 'صنف ذخیره شد. هر وقت خواستید از همین‌جا ادامه می‌دهیم.' + (d.summary ? '\n\n' + d.summary : ''), links);
       loadSaved();
     }).catch(function () { untyping(); closing = false; pendingVoice = false; setWaiting(false); Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); });
   }

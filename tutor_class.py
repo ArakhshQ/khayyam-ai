@@ -13,6 +13,7 @@ module keeps the class coherent and saved:
 Every beat is cleaned and its arithmetic re-checked by board_check.py before anyone sees it.
 """
 import json
+import os
 import re
 from datetime import datetime, timedelta
 
@@ -193,6 +194,23 @@ VOICE_RESUME = ("\n\nTHIS CLASS IS BEING RESUMED, it is the SAME class, not a ne
                 "then ask one short warm-up question about the most recent idea and wait for the answer. Then continue the plan. "
                 "Never ask what they want to learn: they are here to continue the class named in CLASS TITLE.")
 
+# A class that many sessions have made very long gets harder to keep clear (the board fills up, old steps fade). The tutor
+# steers toward a NEW class, as a step up, never as a complaint. Thresholds are in board calls (beats); about 3 beats = 1 minute of live class.
+CLASS_SOFT_BEATS = int(os.getenv('CLASS_SOFT_BEATS', '300'))
+CLASS_FIRM_BEATS = int(os.getenv('CLASS_FIRM_BEATS', '420'))
+VOICE_LONG_SOFT = ("\n\nTHIS CLASS HAS BECOME LONG over many sessions. Never say that, and never mention length, memory, workload, limits or tiredness. Without hurrying, bring the topic you are on to a good finish "
+                   "during this session, celebrate how far the student has come, and then offer, as an exciting step forward like moving up a level, a NEW class on the next part or the next level (give it a concrete Dari title, for example «قسمت دوم: ...»). "
+                   "If the student likes the idea, say one short warm closing sentence and call end_class with next_title and next_request. If they prefer to stay, carry on normally; you may offer again later in the session.")
+VOICE_LONG_FIRM = ("\n\nTHIS CLASS HAS BECOME VERY LONG over many sessions. Never say that, and never mention length, memory, workload, limits or tiredness. "
+                   "Do the following in this session, at a natural point within the next few minutes: finish the idea you are on, celebrate how far the student has come, and offer, as an exciting step forward like moving up a level, "
+                   "a NEW class on the next part or the next level (a concrete Dari title, for example «قسمت دوم: ...»). If they agree, say one short warm closing sentence and call end_class with next_title and next_request. "
+                   "If they insist on staying, continue happily and offer once more before the session ends.")
+
+
+def long_class_note(n_beats):
+    return VOICE_LONG_FIRM if n_beats >= CLASS_FIRM_BEATS else (VOICE_LONG_SOFT if n_beats >= CLASS_SOFT_BEATS else '')
+
+
 VOICE_TOOLS = [
     {"type": "function", "name": "board",
      "description": "Your chalkboard hand. Call it ONCE after each stretch of speech, with the cue sheet for what you just said: ops is a list of 2-6 board operations exactly as in OPERATIONS (and the picture operations image / point / mark with a region). "
@@ -232,8 +250,11 @@ VOICE_TOOLS = [
          "subject": {"type": "string", "enum": ["math", "science", "english", "social", "dari", "computer", "other"]}},
          "required": ["note"]}},
     {"type": "function", "name": "end_class",
-     "description": "Call this after your closing sentence when the student wants to stop for now. The class is saved so it can be resumed later.",
-     "parameters": {"type": "object", "properties": {}}},
+     "description": "Call this after your closing sentence when the student wants to stop for now. The class is saved so it can be resumed later. "
+                    "When the student has just agreed to move on to a NEW class (a next level or next part), also give next_title and next_request so they can start it with one tap.",
+     "parameters": {"type": "object", "properties": {
+         "next_title": {"type": "string", "description": "only when moving on to a new class: its short Dari title"},
+         "next_request": {"type": "string", "description": "only then: one sentence in Dari saying what the new class should teach"}}}},
 ]
 
 # Two more tools, offered only when the picture/search service (Gemini) is set up. Each use is counted against the
@@ -1188,7 +1209,7 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         mt = materials_text(materials(cls.id))
         if mt:
             text += '\n\n' + mt
-        prompt = VOICE_SYSTEM + '\n\n' + OPS_REF + ('\n\n' + TOOLS_NOTE if gemini.available() else '') + '\n\n' + text + (VOICE_RESUME if resumed else VOICE_NEW)
+        prompt = VOICE_SYSTEM + '\n\n' + OPS_REF + ('\n\n' + TOOLS_NOTE if gemini.available() else '') + '\n\n' + text + (VOICE_RESUME if resumed else VOICE_NEW) + long_class_note(len(beats))
         return {'class_id': cls.id}, prompt
     app.config['CLASS_VOICE'] = {'context': voice_context, 'tools': VOICE_TOOLS, 'tools_fn': voice_tools}
 
