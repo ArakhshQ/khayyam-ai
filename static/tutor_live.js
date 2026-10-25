@@ -38,7 +38,20 @@
     return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (mic) {
       self.mic = mic;
       if (o.onStage) o.onStage('session');
-      return post('/api/voice/session', { mode: 'class', class_id: o.classId });
+      // the previous session must be finished on the server first, or it still counts as "another session active"
+      var prev = Promise.resolve(global.TutorLive && global.TutorLive.pendingFinish).catch(function () {});
+      return prev.then(function () {
+        var tries = 0;
+        function go() {
+          return post('/api/voice/session', { mode: 'class', class_id: o.classId }).then(function (r) {
+            if (r.__status === 429 && /another session/i.test(String(r.error || '')) && tries++ < 4) {
+              return new Promise(function (res) { setTimeout(res, 1500); }).then(go);
+            }
+            return r;
+          });
+        }
+        return go();
+      });
     }).then(function (s) {
       if (s.__status !== 200 || !s.value || !s.receipt) throw new Error(s.error || ('session ' + s.__status));
       self.receipt = s.receipt; self.deadline = Number(s.allowance_deadline || 0) * 1000; self.warnAt = Number(s.warning_seconds || 120);
@@ -359,7 +372,7 @@
     this.active = false;
     var receipt = this.receipt;
     if (receipt) {
-      try { fetch('/api/voice/finish', { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receipt: receipt }) }); } catch (e) {}
+      try { global.TutorLive.pendingFinish = fetch('/api/voice/finish', { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receipt: receipt }) }).catch(function () {}); } catch (e) {}
     }
     return this.transcript.slice(-40);
   };

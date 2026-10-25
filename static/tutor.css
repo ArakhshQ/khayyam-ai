@@ -185,7 +185,7 @@
 #voice-record-btn.muted { background: rgba(194, 87, 75, .14); color: #b8453a; animation: none; }
 
 /* live voice class: no captions under the board; the conversation holds the words */
-#classroom[data-live] .caption, #classroom[data-live] #caption { display: none !important; }
+#classroom[data-live] .caption, #classroom[data-live] #caption, #classroom[data-voiceui] .caption, #classroom[data-voiceui] #caption { display: none !important; }
 
 
 /* pictures and pages the student sends */

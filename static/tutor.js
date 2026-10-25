@@ -88,6 +88,7 @@
   };
   window.voiceSoon = function () {
     if (live) { var m = !live.muted; live.setMuted(m); $('voice-record-btn').classList.toggle('muted', m); toast(m ? 'میکروفون خاموش شد.' : 'میکروفون روشن شد.'); return; }
+    if (liveWanted && closing) { pendingVoice = true; Stat.info('صنف در حال ذخیره است؛ بعد از آن به استاد وصل می‌شوم…', 4000); return; }
     if (liveWanted && !busy && !closing) { if (cls && cls.id && cls.d) { resumeVoiceNow(); return; } startLiveClass(''); return; }
     toast('گفتگوی صوتی هنوز برای حساب شما باز نشده است.');
   };
@@ -478,7 +479,7 @@
     if (cls.lobby && !liveAll.length) { Stat.busy('voice', 'در حال اتصال به استاد…', 0, 60000); connectLive(cls.d, false).then(function () { loadSaved(); }); return; }
     resumeLive(cls.d);
   }
-  var afterLive = [];
+  var afterLive = [], pendingVoice = false;
   // run something that needs the teacher's ear; if the voice is off, bring it back first and do it as soon as it is on
   function withLive(fn) {
     if (live && live.active) { fn(); return; }
@@ -742,13 +743,15 @@
     typing();
     api('/api/class/' + id + '/pause', { pos: Math.max(0, stepCount() - 1), transcript: tr }).then(function (d) {
       untyping(); closing = false; setWaiting(false);
-      if (d.__status !== 200) { Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); return; }
+      if (d.__status !== 200) { Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); pendingVoice = false; return; }
       Stat.ok('save', 'صنف ذخیره شد ✓', 2600);
+      if (pendingVoice && cls && !d.deleted) { pendingVoice = false; setTimeout(resumeVoiceNow, 300); }
+      pendingVoice = false;
       if (d.deleted) { addMessage('ai', 'هر وقت خواستید دوباره بیایید و بگویید چه می‌خواهید بیاموزید.', linkRow('شروع تازه', function () { newClass(); })); cls = null; loadSaved(); return; }
       if (cls) cls.status = 'paused';
       addMessage('ai', 'صنف ذخیره شد. هر وقت خواستید از همین‌جا ادامه می‌دهیم.' + (d.summary ? '\n\n' + d.summary : ''), linkRow('صنف تازه', function () { newClass(); }));
       loadSaved();
-    }).catch(function () { untyping(); closing = false; setWaiting(false); Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); });
+    }).catch(function () { untyping(); closing = false; pendingVoice = false; setWaiting(false); Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); });
   }
 
   /* ───────── pictures and document pages ───────── */
@@ -988,6 +991,7 @@
   input.addEventListener('input', function () { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; });
   input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); } });
 
+  if (liveWanted) $('classroom').dataset.voiceui = '1';
   applySidebar(); showStart(); renderPath(); renderSaved();
   if (isMobile()) showPane('chat');
 
