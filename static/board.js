@@ -439,12 +439,24 @@
     });
   };
   P.rebuild = function (keepPlace) {
-    var idx = keepPlace ? this.sceneIdx : 0, was = this.playing;
+    var idx = keepPlace ? this.sceneIdx : 0, was = this.playing, ended = keepPlace && !!this.sceneEnded;
     this.sizeCanvases(); this.paintBg();
     this.model = KB.buildModel(this.lesson, this.profile);
     this.pause();
     this.gotoScene(Math.min(idx, Math.max(0, this.model.scenes.length - 1)), false);
+    if (ended && !was) this.completeScene();          // a scene that was finished stays finished when the screen is resized (nothing vanishes)
     if (was) this.play();
+  };
+  // draw everything of the current scene at once
+  P.completeScene = function () {
+    var sc = this.model && this.model.scenes[this.sceneIdx]; if (!sc || !this.run) return;
+    for (var j = 0; j < sc.acts.length; j++) {
+      var rr = this.run[j]; if (!rr) continue;
+      if (rr.state === 0) this.beginAct(sc.acts[j], rr);
+      if (rr.state === 1) { if (sc.acts[j].type === 'draw') this.finishEl(rr.entry); else if (sc.acts[j].type === 'erase') this.finishErase(sc.acts[j], rr); }
+      rr.state = 2;
+    }
+    this.st = sc.dur; this.sceneEnded = true; this.pen = null;
   };
   P.redrawAll = function () {
     var ctxs = this.cx;

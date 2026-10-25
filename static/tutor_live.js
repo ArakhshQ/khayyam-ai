@@ -69,6 +69,7 @@
       self.needReply = false;
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
       if (o.firstPicture) self.putPicture(o.firstPicture);
+      if (o.resumed) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[ادامهٔ صنف] The student is back and presses continue. This is the same class as before, not a new one: greet them and carry on from what is in your notes and on the board. Do not ask what they want to learn.' }] } });
       self.send({ type: 'response.create' });          // the teacher speaks first
     });
   };

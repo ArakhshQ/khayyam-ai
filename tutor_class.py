@@ -184,8 +184,11 @@ VOICE_NEW = ("\n\nTHIS IS A NEW SESSION. There is no class yet. Speak first, rig
              "Do not write on the board and do not call any tool until the student asks for something specific. When they ask to learn a topic: call \"start_class\" first, "
              "then write the class title on the board and do the PRE-CHECK (see PREREQUISITES): name the 2-4 specific words or skills the topic stands on, "
              "write them on the board, and ask which ones they already know. Wait for their answer before teaching.")
-VOICE_RESUME = ("\n\nTHIS CLASS IS BEING RESUMED. The board already shows what was drawn before. Greet the student warmly, remind them in two sentences "
-                "what you did last time, then ask one short warm-up question about the most recent idea and wait for the answer. Then continue the plan.")
+VOICE_RESUME = ("\n\nTHIS CLASS IS BEING RESUMED, it is the SAME class, not a new one. You remember it: everything above (CLASS TITLE, OUTLINE, LAST TIME, WHAT HAS BEEN COVERED, "
+                "LAST THINGS YOU SAID, ON THE BOARD NOW) is what really happened. The board already shows what was drawn before; do not wipe it and do not call start_class again. "
+                "Greet the student warmly in one short sentence, remind them in two sentences what you did last time and where the board stands, "
+                "then ask one short warm-up question about the most recent idea and wait for the answer. Then continue the plan. "
+                "Never ask what they want to learn: they are here to continue the class named in CLASS TITLE.")
 
 VOICE_TOOLS = [
     {"type": "function", "name": "board",

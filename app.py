@@ -1734,7 +1734,8 @@ def _live_voice_allowed():
         return False
 
 @app.route("/tutor")
-def tutor_page():
+@app.route("/tutor/<int:class_id>")
+def tutor_page(class_id=None):
     return render_template("tutor.html", live_voice=_live_voice_allowed())
 
 @app.route("/tutor/classic")
@@ -3793,7 +3794,7 @@ def voice_quota_finish():
 
 
 @app.route("/api/voice/session", methods=["POST"])
-@limiter.limit("10 per hour")
+@limiter.limit("40 per hour")
 @login_required
 def create_live_voice_session():
     if not current_user.email_verified:

@@ -88,7 +88,7 @@
   };
   window.voiceSoon = function () {
     if (live) { var m = !live.muted; live.setMuted(m); $('voice-record-btn').classList.toggle('muted', m); toast(m ? 'میکروفون خاموش شد.' : 'میکروفون روشن شد.'); return; }
-    if (liveWanted && !busy && !closing) { if (cls && !cls.voiceClass && cls.id) { toast('برای ادامه با صدا، صنف را باز کنید و «ادامهٔ صنف» را بزنید.'); return; } startLiveClass(''); return; }
+    if (liveWanted && !busy && !closing) { if (cls && cls.id && cls.d) { resumeVoiceNow(); return; } startLiveClass(''); return; }
     toast('گفتگوی صوتی هنوز برای حساب شما باز نشده است.');
   };
 
@@ -394,15 +394,50 @@
       openClass(d, { fresh: true }); loadSaved();
     }).catch(function () { busy = false; $('send-btn').disabled = false; untyping(); setPrep(false); addMessage('ai', 'ارتباط برقرار نشد. اینترنت را بررسی کنید.'); });
   }
+  // the address bar always says which class is open: /tutor/12
+  function setUrl(id, replace) {
+    try {
+      var want = id ? '/tutor/' + id : '/tutor';
+      if (location.pathname === want) return;
+      if (replace) history.replaceState({ c: id || 0 }, '', want); else history.pushState({ c: id || 0 }, '', want);
+    } catch (e) {}
+  }
+  window.addEventListener('popstate', function () {
+    var m = location.pathname.match(/^\/tutor\/(\d+)\/?$/);
+    if (m) { if (!cls || cls.id !== +m[1]) openSaved(+m[1]); } else if (cls) newClass();
+  });
+  // stop the voice of the class we are leaving, quietly, and keep what was said
+  function leaveLive() {
+    if (!live || !cls) return;
+    var id = cls.id, tr = live.stop(); live = null; closing = false;
+    $('voice-record-btn').classList.remove('live', 'muted', 'talking'); delete $('classroom').dataset.live;
+    resetStu(); afterLive = [];
+    Stat.clear('think'); Stat.clear('wait'); Stat.clear('voice');
+    try { fetch('/api/class/' + id + '/pause', { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pos: Math.max(0, stepCount() - 1), transcript: tr }) }); } catch (e) {}
+  }
+  // show the board with every beat finished: an empty last scene after the real ones (the same slot the next live drawing replaces)
+  function showAsLeft() {
+    var n = liveAll.length;
+    board.setTimeline(n, [{ say: '', do: [] }]); board.gotoScene(n, false);
+  }
   function openClass(d, o) {
     o = o || {};
-    cls = { id: d.id, title: d.title, outline: d.outline || [], step: d.step || 0, status: d.status, done: d.status === 'done', limited: false,
+    if (!o.keepPlace) {                       // a different class (or a fresh one): a clean board, never a mix of two
+      if (live && cls && cls.id !== d.id) leaveLive();
+      if (board) { try { board.pause(); board.destroy(); } catch (e) {} board = null; window.__board = null; }
+      ['turn', 'ask', 'sel', 'ink', 'typed', 'think', 'wait'].forEach(function (k) { Stat.clear(k); });
+      afterLive = [];
+    }
+    cls = { id: d.id, d: d, title: d.title, outline: d.outline || [], step: d.step || 0, status: d.status, done: d.status === 'done', limited: false,
             lobby: liveWanted && !(d.outline || []).length && !(d.count > 0) };
+    if (o.keepPlace) cls.voiceClass = !!(live && live.active);
     sampleOn = false; spoken = {}; stopAt = -1; closing = false; failures = 0; inflight = false;
     placeholder('سؤال یا جوابتان را بنویسید…');
     $('board-empty').hidden = true; $('board-controls').hidden = false; $('lesson-title').textContent = d.title;
     $('btn-stop').hidden = false;
     renderPath(); renderSaved();
+    if (!o.keepPlace) setUrl(d.id);
+    if (liveWanted) { var bar = $('stu-tools'); if (bar) bar.hidden = false; }          // the writing tools are there as soon as a class is open
     var lesson = { v: 1, digits: 'fa', title: d.title, scenes: d.beats || [], auto: liveWanted };
     liveAll = (d.beats || []).slice();
     ensureBoard().live = true; board.askDone = {}; board.atEnd = false; board.waitingAsk = -1; board.stack = []; board.holdAtEnd = false;
@@ -411,27 +446,54 @@
     return board.load(lesson).then(function () {
       board.live = true; buildScrub();
       if (o.fresh) { board.gotoScene(0, true); }
+      else if (liveWanted && liveAll.length) { showAsLeft(); setWaiting(false); }       // the whole board exactly as it was left
       else { board.gotoScene(Math.min(d.pos || 0, stepCount() - 1), false); setWaiting(false); }
       sidebarOpen = false; applySidebar();
       showPane('board');
     });
   }
+  var openToken = 0;
   function openSaved(id) {
-    if (busy) return;
+    if (closing) return;
+    if (busy) busy = false;                   // a stuck "busy" must never block opening a class
+    if (cls && cls.id === id && !live && board) { showPane('board'); if (isMobile()) { sidebarOpen = false; applySidebar(); } return; }
+    if (live && cls && cls.id !== id) leaveLive();
     if (board) board.pause();
+    var tok = ++openToken;
     Stat.busy('open', 'در حال باز کردن صنف…', 400, 30000);
     api('/api/class/' + id).then(function (d) {
+      if (tok !== openToken) return;          // the student already clicked another class
       Stat.clear('open');
-      if (d.__status !== 200) { Stat.fail('open', 'باز کردن صنف ممکن نشد.'); return; }
+      if (d.__status !== 200) { Stat.fail('open', 'باز کردن صنف ممکن نشد.'); setUrl(cls ? cls.id : 0, true); return; }
       $('messages').textContent = '';
       addMessage('ai', 'خوش آمدید. ' + (d.summary ? d.summary : 'از همان‌جا که مانده بودیم ادامه می‌دهیم.'),
-        linkRow('ادامهٔ صنف', function (a) { a.parentNode.remove(); resumeClass(d); }));
+        linkRow(liveWanted ? 'ادامهٔ صنف با صدا' : 'ادامهٔ صنف', function (a) { a.parentNode.remove(); if (cls && cls.id === d.id) resumeClass(); else openSaved(d.id); }));
       openClass(d, {}).then(function () { showPane('chat'); if (!isMobile()) showPane('board'); });
-    });
+    }).catch(function () { if (tok === openToken) Stat.fail('open', 'باز کردن صنف ممکن نشد.'); });
+  }
+  // bring the voice back to the class that is open (never starts a different class)
+  function resumeVoiceNow() {
+    if (live || closing || !cls || !cls.id || !cls.d) return;
+    if (busy) busy = false;
+    if (cls.lobby && !liveAll.length) { Stat.busy('voice', 'در حال اتصال به استاد…', 0, 60000); connectLive(cls.d, false).then(function () { loadSaved(); }); return; }
+    resumeLive(cls.d);
+  }
+  var afterLive = [];
+  // run something that needs the teacher's ear; if the voice is off, bring it back first and do it as soon as it is on
+  function withLive(fn) {
+    if (live && live.active) { fn(); return; }
+    if (!cls || !cls.id) { toast('اول یک صنف را باز کنید.'); return; }
+    afterLive.push(fn);
+    if (!live && !closing) { Stat.info('استاد وصل می‌شود تا این را ببیند…', 2600); resumeVoiceNow(); }
+  }
+  function flushAfterLive() {
+    var f = afterLive; afterLive = [];
+    setTimeout(function () { f.forEach(function (fn) { if (live && live.active) { try { fn(); } catch (e) {} } }); }, 1400);
   }
   function resumeClass(d) {
-    if (busy) return;
-    if (liveWanted) { resumeLive(d); return; }
+    if (busy) busy = false;
+    if (liveWanted) { resumeVoiceNow(); return; }
+    d = d || (cls && cls.d); if (!d) return;
     busy = true; typing(); setWaiting(true, 'استاد مرور را آماده می‌کند…'); showPane('board');
     var tries = 0;
     (function go() {
@@ -547,6 +609,7 @@
     $('board-empty').hidden = false; $('board-controls').hidden = true; $('caption').textContent = ''; $('caption').classList.remove('waiting');
     $('lesson-title').textContent = 'صنف درس'; placeholder('بگویید چه می‌خواهید بیاموزید…');
     $('scrub').textContent = '';
+    afterLive = []; setUrl(0);
     showStart(); showPane('chat'); if (!isMobile()) showPane('board');
     if (isMobile()) { sidebarOpen = false; applySidebar(); }
   };
@@ -616,7 +679,7 @@
     return live.start().then(function () {
       setPrep(false, '', '', true);
       Stat.ok('voice', 'به استاد وصل شدید ✓', 2600);
-      showStuTools(true);
+      showStuTools(true); flushAfterLive();
       Stat.busy('wait', 'استاد می‌آید…', 0, 30000);
       $('board-empty').hidden = !cls.lobby; $('board-controls').hidden = !!cls.lobby; $('lesson-title').textContent = cls.lobby ? 'گفتگو با استاد' : cls.title;
       $('classroom').dataset.live = '1';
@@ -627,7 +690,7 @@
       if (global_console()) console.warn('live voice failed', err);
       var sess = live; live = null; try { sess.stop(); } catch (e) {}
       $('voice-record-btn').classList.remove('live', 'muted');
-      setPrep(false, '', '', true); setWaiting(false); showStuTools(false);
+      setPrep(false, '', '', true); setWaiting(false); resetStu(); afterLive = [];
       var denied = err && /Permission|NotAllowed|denied/i.test(String(err.name || err.message || err));
       Stat.fail('voice', denied ? 'میکروفون اجازه نگرفت. اجازه بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.', 7000);
       addMessage('ai', denied ? 'برای صنف صوتی به میکروفون نیاز است. اجازهٔ میکروفون را بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.',
@@ -665,8 +728,7 @@
   }
   function resumeLive(d) {
     if (busy) return;
-    var n = stepCount();
-    if (n) { board.setTimeline(n, [{ say: '', do: [] }]); board.gotoScene(n, false); }   // the board as it was left
+    if (liveAll.length) showAsLeft();   // the board as it was left
     cls.status = 'active'; cls.done = false;
     Stat.busy('voice', 'در حال برگرداندن صنف…', 0, 60000);
     connectLive(d, true).then(function () { loadSaved(); });
@@ -674,7 +736,7 @@
   function finishLive() {
     if (!live || !cls || closing) return;
     closing = true;
-    var id = cls.id, tr = live.stop(); live = null; showStuTools(false);
+    var id = cls.id, tr = live.stop(); live = null; resetStu(); afterLive = [];
     Stat.clear('think'); Stat.clear('wait'); Stat.busy('save', 'صنف ذخیره می‌شود…', 0, 90000);
     $('voice-record-btn').classList.remove('live', 'muted', 'talking'); delete $('classroom').dataset.live;
     typing();
@@ -820,7 +882,13 @@
   function showStuTools(on) {
     var bar = $('stu-tools'); if (!bar) return;
     bar.hidden = !on;
-    if (!on) { clearTimeout(stuTimer); $('stu-send').hidden = true; Stat.clear('ask'); Stat.clear('turn'); if (board && board.setTool) { board.setTool(null); board.studentClear(); } }
+    if (!on) resetStu();
+  }
+  // forget the temporary marks and popups (the toolbar itself stays while a class is open)
+  function resetStu() {
+    clearTimeout(stuTimer); var sb = $('stu-send'); if (sb) sb.hidden = true; Stat.clear('ask'); Stat.clear('turn');
+    if (board && board.setTool) { board.setTool(null); board.studentClear(); }
+    var bar = $('stu-tools'); if (bar && !(cls && cls.id && liveWanted)) bar.hidden = true;
   }
   function stuSpoke(quiet) { clearTimeout(stuTimer); Stat.clear('ask'); }       // the student (or the teacher) is talking: the "say what you want" hint is over
   function descText(d) {
@@ -842,16 +910,17 @@
     addMessage('user', text, img);
   }
   function onStuSelect(info) {
-    if (!live || !live.active) { toast('اول به استاد وصل شوید.'); return; }
     var whole = board.snapshot({ targetW: 1000 }), crop = board.snapshot({ rect: padRect(info.rect, 36), targetW: 640 });
     var note = '[انتخاب شاگرد] The student pointed at a part of the board with their gold pointer (outlined in yellow in the first picture; the second picture is a close-up of it).\n' + descText(info.desc) +
       '\nThis is exactly what they mean. Answer about THIS part only: first point at it with a cue (point with "target" = the element id, or the picture "region"/"area"), say in a sentence what it is, then explain it more simply. If they have not asked anything yet, say you see it and ask which part troubles them, then wait.';
-    live.sendBoardNote(note, [whole, crop], false, '[انتخاب شاگرد روی تخته]');
     thumbMessage('این قسمت را نشان دادم.', crop);
-    Stat.ok('sel', 'این قسمت را به استاد نشان دادید ✓', 1800);
-    Stat.busy('ask', 'حالا بگویید چه می‌خواهید دربارهٔ آن بدانید…', 0, 14000);
-    clearTimeout(stuTimer);
-    stuTimer = setTimeout(function () { Stat.clear('ask'); if (live) live.nudge(); }, 8500);          // marked it and said nothing: the teacher asks which part
+    withLive(function () {
+      live.sendBoardNote(note, [whole, crop], false, '[انتخاب شاگرد روی تخته]');
+      Stat.ok('sel', 'این قسمت را به استاد نشان دادید ✓', 1800);
+      Stat.busy('ask', 'حالا بگویید چه می‌خواهید دربارهٔ آن بدانید…', 0, 14000);
+      clearTimeout(stuTimer);
+      stuTimer = setTimeout(function () { Stat.clear('ask'); if (live) live.nudge(); }, 8500);          // marked it and said nothing: the teacher asks which part
+    });
   }
   // the named parts (with their boxes) of the student's pictures, so the board can tell which part a marker covers
   function feedRegions(items, info) {
@@ -859,9 +928,9 @@
     (items || []).forEach(function (m) { if (m && m.key && m.regions && m.regions.length) board.setPicInfo(m.key, m.regions); });
     if (info && info.image && info.regions) board.setPicInfo(info.image, info.regions);
   }
-  function onStuInk() { var b = $('stu-send'); if (live && live.active) b.hidden = false; }
+  function onStuInk() { var b = $('stu-send'); if (cls && cls.id) b.hidden = false; }
   function sendInk() {
-    if (!live || !live.active || !board) return;
+    if (!board || !cls) return;
     var t = board.takeInk(); if (!t) { $('stu-send').hidden = true; return; }
     $('stu-send').hidden = true; Stat.clear('turn'); stuSpoke();
     thumbMessage('روی تخته نوشتم.', t.crop);
@@ -875,18 +944,23 @@
       else L.push('The reading tool could not read it; read it yourself from the first picture and say what you read.');
       L.push('Where it is: ' + descText(t.desc));
       L.push('The first picture is their writing alone (dark on white), the second is the whole board. React like their teacher: say back what you read if it is uncertain or matters, then judge it kindly (a tick or a pink circle on it, one sentence why, a hint before the full answer).');
-      if (!live || !live.sendBoardNote(L.join('\n'), [t.crop, t.board], true, '[نوشتهٔ شاگرد روی تخته] ' + (rd && rd.text ? rd.text : ''))) { Stat.fail('ink', 'هنوز به استاد وصل نیستید.'); return; }
-      Stat.ok('ink', 'نوشته به استاد رسید ✓', 2000); Stat.busy('think', 'استاد نوشتهٔ شما را می‌بیند…', 0, 40000);
+      Stat.clear('ink');
+      withLive(function () {
+        live.sendBoardNote(L.join('\n'), [t.crop, t.board], true, '[نوشتهٔ شاگرد روی تخته] ' + (rd && rd.text ? rd.text : ''));
+        Stat.ok('ink', 'نوشته به استاد رسید ✓', 2000); Stat.busy('think', 'استاد نوشتهٔ شما را می‌بیند…', 0, 40000);
+      });
     });
   }
   function onStuTyped(info) {
-    if (!live || !live.active) { toast('اول به استاد وصل شوید.'); return; }
     stuSpoke(); Stat.clear('turn');
     var note = '[نوشتهٔ تایپی شاگرد] The student typed this on the board (light-blue text): «' + info.text + '».\nWhere it is: ' + descText(info.desc) +
       '\nReact like their teacher: judge it kindly (a tick or a pink circle on it, one sentence why, a hint before the full answer), or answer it if it is a question.';
-    live.sendBoardNote(note, [board.snapshot({ rect: padRect(info.rect, 60), targetW: 700 }), board.snapshot({ targetW: 1000 })], true, '[نوشتهٔ تایپی روی تخته] ' + info.text);
+    var imgs = [board.snapshot({ rect: padRect(info.rect, 60), targetW: 700 }), board.snapshot({ targetW: 1000 })];
     addMessage('user', info.text);
-    Stat.ok('typed', 'نوشته به استاد رسید ✓', 1800); Stat.busy('think', 'استاد نوشتهٔ شما را می‌بیند…', 0, 40000);
+    withLive(function () {
+      live.sendBoardNote(note, imgs, true, '[نوشتهٔ تایپی روی تخته] ' + info.text);
+      Stat.ok('typed', 'نوشته به استاد رسید ✓', 1800); Stat.busy('think', 'استاد نوشتهٔ شما را می‌بیند…', 0, 40000);
+    });
   }
   function wireStudent(b) {
     var bar = $('stu-tools');
@@ -924,6 +998,9 @@
     $('nav-username').textContent = d.username;
     $('nav-avatar').textContent = (d.username || '').trim().charAt(0).toUpperCase();
     if (d.is_admin) { var a = document.createElement('a'); a.href = '/admin'; a.className = 'side-btn gold'; a.textContent = 'مدیریت'; menu.appendChild(a); }
-    loadSaved();
+    loadSaved().then(function () {
+      var m = location.pathname.match(/^\/tutor\/(\d+)\/?$/);
+      if (m) openSaved(+m[1]);                // the address says which class: open exactly that one
+    });
   }).catch(function () {});
 })();
