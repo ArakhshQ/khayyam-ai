@@ -3719,18 +3719,35 @@ def _voice_quota_snapshot(uid):
     except Exception:
         db.session.rollback();raise
 
+def _close_stale_live_sessions(uid,now):
+    """A live session that was never closed (tab crash, lost network) is charged its WHOLE reservation, which locks the
+    student out until that time passes. Close it and charge only what it really ran.
+    -> (closed_any, started_seconds_ago_is_fresh)"""
+    rows=db.session.execute(sql_text('''SELECT session_id,started_at,reserved_seconds FROM voice_quota_sessions
+        WHERE user_id=:uid AND ended_at IS NULL'''),{'uid':uid}).mappings().all()
+    fresh=closed=False
+    for row in rows:
+        st=row['started_at']; st=datetime.fromisoformat(st) if isinstance(st,str) else st
+        elapsed=max(0,int((now-st).total_seconds()))
+        if elapsed<15: fresh=True; continue          # started seconds ago: a real race, not a leftover
+        db.session.execute(sql_text('''UPDATE voice_quota_sessions SET ended_at=:now,charged_seconds=:c
+            WHERE session_id=:sid AND ended_at IS NULL'''),{'now':now,'c':min(int(row['reserved_seconds']),elapsed+5),'sid':row['session_id']})
+        closed=True
+    return closed,fresh
+
 def _reserve_voice_seconds(uid,seconds,kind='live'):
     _ensure_voice_quota_storage()
     try:
         now=_voice_now();quota=_voice_snapshot_locked(uid,now)
         seconds=int(seconds)
+        if kind=='live':
+            closed,fresh=_close_stale_live_sessions(uid,now)
+            if fresh:
+                db.session.rollback();return None,quota
+            if closed:
+                quota=_voice_snapshot_locked(uid,now)
         if seconds<1 or seconds>3600 or quota['remaining_seconds']<seconds:
             db.session.rollback(); return None,quota
-        if kind=='live':
-            exists=db.session.execute(sql_text('''SELECT 1 FROM voice_quota_sessions
-                WHERE user_id=:uid AND ended_at IS NULL LIMIT 1'''),{'uid':uid}).first()
-            if exists:
-                db.session.rollback();return None,quota
         sid=str(uuid.uuid4())
         db.session.execute(sql_text('''INSERT INTO voice_quota_sessions
              (session_id,user_id,usage_day,started_at,reserved_seconds,kind,ended_at,charged_seconds)
@@ -3742,6 +3759,28 @@ def _reserve_voice_seconds(uid,seconds,kind='live'):
         db.session.commit(); return sid,quota
     except Exception:
         db.session.rollback();raise
+
+@app.route("/api/voice/diag", methods=["GET"])
+@login_required
+def voice_diag():
+    """Why does the voice not connect? Only yes/no answers about this account, no secrets."""
+    out = {
+        "live_voice_enabled": os.getenv("LIVE_VOICE_ENABLED", "false").lower() == "true",
+        "this_account_allowed": bool(os.getenv("LIVE_VOICE_TEST_USER_ID", "").strip()) and str(current_user.id) == os.getenv("LIVE_VOICE_TEST_USER_ID", "").strip(),
+        "email_verified": bool(current_user.email_verified),
+        "openai_key_set": bool(os.getenv("OPENAI_API_KEY")),
+        "model": os.getenv("REALTIME_MODEL_CLASS", "gpt-realtime-2.1"),
+        "class_voice_ready": bool(app.config.get("CLASS_VOICE")),
+    }
+    try:
+        q = _voice_quota_snapshot(current_user.id)
+        out["remaining_seconds"] = q["remaining_seconds"]; out["plan"] = q["plan"]
+        out["open_sessions"] = db.session.execute(sql_text("SELECT COUNT(*) FROM voice_quota_sessions WHERE user_id=:u AND ended_at IS NULL"), {"u": current_user.id}).scalar()
+    except Exception as exc:
+        out["quota_error"] = type(exc).__name__
+    out["ok"] = all([out["live_voice_enabled"], out["this_account_allowed"], out["email_verified"], out["openai_key_set"], out["class_voice_ready"]]) and out.get("remaining_seconds", 0) > 0
+    return jsonify(out)
+
 
 @app.route("/api/voice/quota", methods=["GET"])
 @login_required
@@ -3816,6 +3855,9 @@ def create_live_voice_session():
 
     # Check quota before requesting a paid Realtime client secret.
     try:
+        _ensure_voice_quota_storage()
+        _close_stale_live_sessions(current_user.id, _voice_now())      # a leftover session must not look like "allowance used up"
+        db.session.commit()
         quota = _voice_quota_snapshot(current_user.id)
     except Exception:
         return jsonify(error="Voice allowance temporarily unavailable"), 503
@@ -3892,11 +3934,17 @@ def create_live_voice_session():
                        monthly_remaining_seconds=quota['monthly_remaining_seconds'],
                        allowance_deadline=int(now.replace(tzinfo=timezone.utc).timestamp())+remaining)
     except urllib.error.HTTPError as exc:
-        app.logger.error("Realtime session creation failed: HTTP %s", exc.code)
-        return jsonify(error="Could not start voice session"), 502
-    except Exception:
+        detail = ''
+        try:
+            body = json.loads(exc.read().decode('utf-8', 'replace'))
+            detail = str((body.get('error') or {}).get('message') or body.get('error') or '')[:200]
+        except Exception:
+            pass
+        app.logger.error("Realtime session creation failed: HTTP %s %s", exc.code, detail)
+        return jsonify(error="Could not start voice session", detail='openai %s: %s' % (exc.code, detail)), 502
+    except Exception as exc:
         app.logger.exception("Realtime session creation failed")
-        return jsonify(error="Voice service temporarily unavailable"), 503
+        return jsonify(error="Voice service temporarily unavailable", detail=type(exc).__name__ + ': ' + str(exc)[:120]), 503
 
 
 @app.route("/api/voice/save", methods=["POST"])

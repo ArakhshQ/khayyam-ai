@@ -671,6 +671,20 @@
       onError: function (msg) { Stat.fail('err', msg, 6000); }
     };
   }
+  // a plain-words reason for a failed voice connection (the technical text is shown under it)
+  function voiceWhy(err) {
+    var m = String((err && err.message) || ''), st = err && err.stage, code = err && err.status;
+    if (st === 'session') {
+      if (code === 429 && /another session/i.test(m)) return 'جلسهٔ صوتی قبلی هنوز بسته نشده است. چند ثانیه صبر کنید و دوباره امتحان کنید.';
+      if (code === 429) return 'سهمیهٔ صوتی امروز تمام شده است.';
+      if (code === 403) return 'این حساب هنوز اجازهٔ گفتگوی صوتی ندارد (ایمیل تأیید نشده یا حساب آزمایشی نیست).';
+      if (code === 401) return 'وارد حساب‌تان نیستید؛ دوباره وارد شوید.';
+      if (code === 502 || code === 503) return 'سرویس صوتی پاسخ نداد. کمی بعد دوباره امتحان کنید.';
+    }
+    if (st === 'webrtc') return 'اتصال به سرور صدا رد شد. اینترنت یا فیلترشکن را بررسی کنید.';
+    if (st === 'channel') return 'اتصال صدا برقرار نشد (کانال باز نشد). اینترنت را بررسی کنید.';
+    return 'اتصال صوتی برقرار نشد.';
+  }
   function connectLive(d, resumed, pic) {
     if (cls) cls.voiceClass = true;
     var h = liveHandlers(); h.classId = d.id; h.resumed = !!resumed; h.firstText = resumed ? '' : (d.request || ''); if (pic) h.firstPicture = pic;
@@ -693,8 +707,9 @@
       $('voice-record-btn').classList.remove('live', 'muted');
       setPrep(false, '', '', true); setWaiting(false); resetStu(); afterLive = [];
       var denied = err && /Permission|NotAllowed|denied/i.test(String(err.name || err.message || err));
-      Stat.fail('voice', denied ? 'میکروفون اجازه نگرفت. اجازه بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.', 7000);
-      addMessage('ai', denied ? 'برای صنف صوتی به میکروفون نیاز است. اجازهٔ میکروفون را بدهید و دوباره امتحان کنید.' : 'اتصال صوتی برقرار نشد.',
+      var why = voiceWhy(err), tech = String((err && (err.message || err.name)) || '').slice(0, 160);
+      Stat.fail('voice', denied ? 'میکروفون اجازه نگرفت. اجازه بدهید و دوباره امتحان کنید.' : why, 9000);
+      addMessage('ai', denied ? 'برای صنف صوتی به میکروفون نیاز است. اجازهٔ میکروفون را بدهید و دوباره امتحان کنید.' : why + (tech ? '\n(' + tech + ')' : ''),
         linkRow('ادامه با نوشتن', function (a) {
           a.parentNode.remove();
           var req = d.request || d.title || '';

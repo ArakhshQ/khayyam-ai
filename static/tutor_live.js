@@ -53,7 +53,7 @@
         return go();
       });
     }).then(function (s) {
-      if (s.__status !== 200 || !s.value || !s.receipt) throw new Error(s.error || ('session ' + s.__status));
+      if (s.__status !== 200 || !s.value || !s.receipt) { var er = new Error('session ' + s.__status + ': ' + (s.detail || s.error || '')); er.stage = 'session'; er.status = s.__status; throw er; }
       self.receipt = s.receipt; self.deadline = Number(s.allowance_deadline || 0) * 1000; self.warnAt = Number(s.warning_seconds || 120);
       self.timer = setInterval(function () { self.tick(); }, 1000);
       var pc = self.pc = new RTCPeerConnection();
@@ -67,14 +67,14 @@
       self.mic.getTracks().forEach(function (t) { pc.addTrack(t, self.mic); });
       var dc = self.dc = pc.createDataChannel('oai-events');
       dc.onmessage = function (e) { try { self.onEvent(JSON.parse(e.data)); } catch (err) { if (global.console) console.warn('realtime event', err); } };
-      var opened = new Promise(function (res) { dc.onopen = res; });
+      var opened = new Promise(function (res, rej) { dc.onopen = res; setTimeout(function () { var e2 = new Error('data channel did not open'); e2.stage = 'channel'; rej(e2); }, 20000); });
       if (o.onStage) o.onStage('connect');
       return pc.createOffer().then(function (offer) {
         return pc.setLocalDescription(offer).then(function () {
           return fetch('https://api.openai.com/v1/realtime/calls', { method: 'POST', headers: { 'Authorization': 'Bearer ' + s.value, 'Content-Type': 'application/sdp' }, body: offer.sdp });
         });
       }).then(function (r) {
-        if (!r.ok) throw new Error('webrtc ' + r.status);
+        if (!r.ok) { var e3 = new Error('webrtc ' + r.status); e3.stage = 'webrtc'; throw e3; }
         return r.text();
       }).then(function (sdp) { return pc.setRemoteDescription({ type: 'answer', sdp: sdp }); }).then(function () { return opened; });
     }).then(function () {
