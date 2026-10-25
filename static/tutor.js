@@ -607,7 +607,7 @@
     clearTimeout(retryTimer); clearTimeout(posTimer);
     $('send-btn').disabled = false; setHand(false); setPrep(false);
     renderPath(); renderSaved();
-    $('board-empty').hidden = false; $('board-controls').hidden = true; $('caption').textContent = ''; $('caption').classList.remove('waiting');
+    hideQuiz(); $('board-empty').hidden = false; $('board-controls').hidden = true; $('caption').textContent = ''; $('caption').classList.remove('waiting');
     $('lesson-title').textContent = 'صنف درس'; placeholder('بگویید چه می‌خواهید بیاموزید…');
     $('scrub').textContent = '';
     afterLive = []; setUrl(0);
@@ -655,10 +655,11 @@
         else if (s === 'connect') Stat.busy('voice', 'در حال برقراری ارتباط صوتی…', 0, 60000);
       },
       onWork: function (kind, on) {
-        var txt = { look: 'استاد تصویر را دقیق نگاه می‌کند…', poem: 'استاد شعر را در مجموعه می‌جوید…', start: 'استاد درس را آماده می‌کند…', search: 'استاد در وب جستجو می‌کند…', picture: 'استاد تصویر را آماده می‌کند…' }[kind];
+        var txt = { look: 'استاد تصویر را دقیق نگاه می‌کند…', poem: 'استاد شعر را در مجموعه می‌جوید…', start: 'استاد درس را آماده می‌کند…', search: 'استاد در وب جستجو می‌کند…', picture: 'استاد تصویر را آماده می‌کند…', expert: 'استاد مسئله را دقیق حل می‌کند…', quiz: 'استاد تمرین را آماده می‌کند…' }[kind];
         if (!txt) return;
         if (on) Stat.busy('work-' + kind, txt, 500, 40000); else Stat.clear('work-' + kind);
       },
+      onQuiz: function (quiz, done) { showQuiz(quiz, done); },
       onNet: function (up) {
         if (!up) Stat.busy('net', 'اتصال ضعیف است؛ دوباره وصل می‌شویم…', 1500, 60000);
         else if (Stat.has('net')) Stat.ok('net', 'اتصال برگشت ✓', 2000); else Stat.clear('net');
@@ -671,6 +672,41 @@
       onError: function (msg) { Stat.fail('err', msg, 6000); }
     };
   }
+  // the quiz card under the board: tap an answer, see right/wrong with the reason, next; the result goes back to the teacher
+  function hideQuiz() { var q = $('quizcard'); if (q) { q.hidden = true; q.textContent = ''; } }
+  function showQuiz(quiz, done) {
+    var box = $('quizcard'); if (!box || !quiz || !quiz.questions || !quiz.questions.length) return;
+    var qs = quiz.questions, i = 0, answers = [], finished = false;
+    function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+    function finish(skipped) {
+      if (finished) return; finished = true; hideQuiz();
+      var res = { answers: answers.slice() };
+      while (res.answers.length < qs.length) res.answers.push(-1);
+      if (!skipped || answers.length) { try { done(res); } catch (err) { /* ignore */ } }
+    }
+    function render() {
+      box.textContent = ''; box.hidden = false;
+      var head = el('div', 'qz-head'); head.appendChild(el('span', '', (quiz.title || 'تمرین') + ' · ' + faNum(i + 1) + ' از ' + faNum(qs.length)));
+      var x = el('button', 'qz-x', 'بستن'); x.type = 'button'; x.onclick = function () { finish(true); }; head.appendChild(x); box.appendChild(head);
+      var q = qs[i]; box.appendChild(el('div', 'qz-q', q.q));
+      var opts = el('div', 'qz-opts'), btns = [];
+      q.options.forEach(function (t, k) {
+        var b = el('button', 'qz-opt', t); b.type = 'button'; btns.push(b);
+        b.onclick = function () {
+          if (answers.length > i) return; answers[i] = k;
+          btns.forEach(function (bb, kk) { bb.disabled = true; if (kk === q.answer) bb.classList.add('right'); else if (kk === k) bb.classList.add('wrong'); });
+          if (q.why) box.appendChild(el('div', 'qz-why', (k === q.answer ? 'درست ✓ ' : 'درست نیست. ') + q.why));
+          var nb = el('button', 'qz-next', i + 1 < qs.length ? 'بعدی' : 'پایان'); nb.type = 'button';
+          nb.onclick = function () { if (i + 1 < qs.length) { i++; render(); } else finish(false); };
+          box.appendChild(nb);
+        };
+        opts.appendChild(b);
+      });
+      box.appendChild(opts);
+    }
+    render();
+  }
+  window.khayyamShowQuiz = showQuiz;
   // a plain-words reason for a failed voice connection (the technical text is shown under it)
   function voiceWhy(err) {
     var m = String((err && err.message) || ''), st = err && err.stage, code = err && err.status;
@@ -754,6 +790,7 @@
     closing = true;
     var id = cls.id, nx = live.nextClass || null, tr = live.stop(); live = null; resetStu(); afterLive = [];
     Stat.clear('think'); Stat.clear('wait'); Stat.busy('save', 'صنف ذخیره می‌شود…', 0, 90000);
+    hideQuiz();
     $('voice-record-btn').classList.remove('live', 'muted', 'talking'); delete $('classroom').dataset.live;
     typing();
     api('/api/class/' + id + '/pause', { pos: Math.max(0, stepCount() - 1), transcript: tr }).then(function (d) {

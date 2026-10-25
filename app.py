@@ -436,10 +436,12 @@ TUTOR_PLAN_CONFIG = {
     ],
     'pro': [
         {'model': 'gpt-5.4-mini', 'limit': 300000,  'reset': 'monthly', 'col': 'tutor_tier1'},
+        {'model': 'gpt-5.4',      'limit': 60000,   'reset': 'monthly', 'col': 'tutor_tier2'},   # small allowance: hard problems only ('complex' level)
     ],
     'premium': [
         {'model': 'gpt-5.4-mini', 'limit': 500000,  'reset': 'monthly', 'col': 'tutor_tier1'},
         {'model': 'gpt-5.4-nano', 'limit': 300000,  'reset': 'monthly', 'col': 'tutor_tier2'},
+        {'model': 'gpt-5.4',      'limit': 150000,  'reset': 'monthly', 'col': 'tutor_tier3'},   # hard problems only ('complex' level)
     ],
     'tutor_pro': [
         {'model': 'gpt-5.4',      'limit': 3000000, 'reset': 'monthly', 'col': 'tutor_tier1'},
@@ -4059,19 +4061,44 @@ def create_live_voice_session():
             }
         }
     }
+    # Background noise: a less trigger-happy voice detector and input noise reduction, so a cough or a TV does not count as the student
+    # speaking. If OpenAI refuses these extra fields (HTTP 400) the session is created again without them, so voice never breaks because of tuning.
+    plain_input = json.loads(json.dumps(payload["session"]["audio"]["input"]))
+    tuned = False
+    if os.getenv("VOICE_NOISE_TUNING", "on").lower() != "off":
+        try:
+            td = payload["session"]["audio"]["input"]["turn_detection"]
+            td["threshold"] = min(.95, max(.2, float(os.getenv("VOICE_VAD_THRESHOLD", "0.6"))))
+            td["silence_duration_ms"] = min(2000, max(200, int(os.getenv("VOICE_VAD_SILENCE_MS", "600"))))
+            td["prefix_padding_ms"] = min(1000, max(0, int(os.getenv("VOICE_VAD_PREFIX_MS", "300"))))
+            nr = os.getenv("REALTIME_NOISE_REDUCTION", "far_field").lower()
+            if nr in ("near_field", "far_field"):
+                payload["session"]["audio"]["input"]["noise_reduction"] = {"type": nr}
+            tuned = True
+        except (TypeError, ValueError):
+            payload["session"]["audio"]["input"] = plain_input
     if mode == "class":
         payload["session"]["tools"] = (app.config["CLASS_VOICE"].get("tools_fn") or (lambda: app.config["CLASS_VOICE"]["tools"]))()
         payload["session"]["tool_choice"] = "auto"
     user_hash = hashlib.sha256(f"khayyam:{current_user.id}".encode()).hexdigest()
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/realtime/client_secrets",
-        data=json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
-                 "OpenAI-Safety-Identifier": user_hash},
-        method="POST")
+    def _secret_request():
+        return urllib.request.Request(
+            "https://api.openai.com/v1/realtime/client_secrets",
+            data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+                     "OpenAI-Safety-Identifier": user_hash},
+            method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            result = json.loads(response.read().decode())
+        try:
+            with urllib.request.urlopen(_secret_request(), timeout=20) as response:
+                result = json.loads(response.read().decode())
+        except urllib.error.HTTPError as first:
+            if first.code != 400 or not tuned:
+                raise
+            app.logger.warning("Realtime refused the noise settings (HTTP 400); retrying without them")
+            payload["session"]["audio"]["input"] = plain_input
+            with urllib.request.urlopen(_secret_request(), timeout=20) as response:
+                result = json.loads(response.read().decode())
         # Persist the session before issuing a receipt; all batches use one conversation.
         _ensure_voice_storage()
         # Single atomic daily+monthly reservation, shared across all voice features.

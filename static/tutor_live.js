@@ -80,7 +80,7 @@
       }).then(function (sdp) { return pc.setRemoteDescription({ type: 'answer', sdp: sdp }); }).then(function () { return opened; });
     }).then(function () {
       self.active = true; self.startedAt = Date.now(); o.onState('connected');
-      self.needReply = false;
+      self.needReply = false; self.classOn = !!o.resumed;
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
       if (o.firstPicture) self.putPicture(o.firstPicture);
       if (o.resumed) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[ادامهٔ صنف] The student is back and presses continue. This is the same class as before, not a new one: greet them and carry on from what is in your notes and on the board. Do not ask what they want to learn.' }] } });
@@ -166,7 +166,7 @@
       this.noteUsage(e.response && e.response.usage);
       this.afterResponse(cur, e.response);
     } else if (t === 'input_audio_buffer.speech_started') {
-      this.userSpeaking = true; this.talkAt = Date.now(); this.flush(); this.o.onState('listening');
+      this.userSpeaking = true; this.nudged = false; this.talkAt = Date.now(); this.flush(); this.o.onState('listening');
     } else if (t === 'input_audio_buffer.speech_stopped') {
       this.userSpeaking = false; if (this.talkAt) { this.talkMs += Date.now() - this.talkAt; this.talkAt = 0; } this.o.onState('thinking');
     } else if (t === 'conversation.item.input_audio_transcription.completed') {
@@ -213,10 +213,12 @@
   P.afterResponse = function (cur, resp) {
     var self = this, calls = cur ? cur.calls : [];
     if (!calls.length) {
-      if (this.needReply && !this.userSpeaking) { this.needReply = false; this.send({ type: 'response.create' }); }
+      if (this.needReply && !this.userSpeaking) { this.needReply = false; this.send({ type: 'response.create' }); return; }
+      if (this.needsBoard(cur)) this.boardNudge();
       return;
     }
-    var WORK = { look: 'look', find_poem: 'poem', start_class: 'start', web_search: 'search', make_picture: 'picture' };
+    if (calls.some(function (c) { return c.item.name === 'board'; })) { this.nudged = false; this.classOn = true; }
+    var WORK = { look: 'look', find_poem: 'poem', start_class: 'start', web_search: 'search', make_picture: 'picture', expert: 'expert', make_quiz: 'quiz' };
     var jobs = calls.map(function (c) {
       var w = WORK[c.item.name], p = self.runCall(c, cur);
       if (w && self.o.onWork) { self.o.onWork(w, true); var off = function () { self.o.onWork(w, false); }; p.then(off, off); }
@@ -227,9 +229,28 @@
         self.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: o.call_id, output: JSON.stringify(o.output) } });
       });
       if (self.ending) return;                         // saying goodbye: nothing more to ask
+      if (outs.length && outs.every(function (o) { return o.quiet; })) return;      // a quiz card is on screen: the teacher waits in silence
       if (self.responding) { self.needReply = true; return; }
       if (!self.userSpeaking) { self.needReply = false; self.send({ type: 'response.create' }); } else self.needReply = true;
     });
+  };
+
+  // The teacher spoke a real stretch in a class without changing the board: ask once for the picture/example that goes with it.
+  // (Questions to the student, goodbyes and short replies are left alone.)
+  P.needsBoard = function (cur) {
+    if (!cur || this.ending || this.nudged || !this.classOn || this.userSpeaking) return false;
+    var t = String(cur.text || '').trim();
+    if (cur.chars < 90) return false;
+    if (/[؟?]\s*$/.test(t)) return false;
+    return true;
+  };
+  P.boardNudge = function () {
+    if (!this.active || this.responding) return false;
+    this.nudged = true;
+    this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text:
+      '[یادداشت سیستم] You spoke but the board did not change. Do NOT repeat or re-say anything. Now call board once with a cue sheet: a picture or a small worked example for what you just said (a few words, numbers, a drawing). Then say at most ONE short sentence, and ask a tiny practice question.' }] } });
+    this.send({ type: 'response.create' });
+    return true;
   };
 
   P.runCall = function (c, cur) {
@@ -252,9 +273,22 @@
         delete d.__status; delete d.item; return { call_id: it.call_id, output: d };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not make the picture, draw it on the board instead' } }; });
     }
+    if (it.name === 'expert') {
+      return post('/api/class/' + id + '/expert', { question: args.question, need: args.need }).then(function (d) {
+        delete d.__status; return { call_id: it.call_id, output: d };
+      }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'the expert is not available now; solve it step by step yourself, carefully' } }; });
+    }
+    if (it.name === 'make_quiz') {
+      if (!self.o.onQuiz) return Promise.resolve({ call_id: it.call_id, output: { ok: false, error: 'ask the questions aloud instead' } });
+      return post('/api/class/' + id + '/quiz', { topic: args.topic, count: args.count }).then(function (d) {
+        if (!d.ok || !d.quiz) return { call_id: it.call_id, output: { ok: false, error: d.error || 'could not make the quiz now; ask the questions aloud instead' } };
+        self.o.onQuiz(d.quiz, function (res) { self.quizDone(d.quiz, res); });
+        return { call_id: it.call_id, quiet: true, output: { ok: true, note: 'The quiz card is on screen with ' + d.quiz.questions.length + ' questions. Say nothing more now and wait: you will get the result as a message.' } };
+      }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not make the quiz now; ask the questions aloud instead' } }; });
+    }
     if (it.name === 'start_class') {
       return post('/api/class/' + id + '/progress', { step: 0, note: 'شروع صنف', outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
-        if (d.ok) { d.started = true; self.o.onProgress(d); }
+        if (d.ok) { d.started = true; self.classOn = true; self.o.onProgress(d); }
         return { call_id: it.call_id, output: { ok: !!d.ok, note: d.ok ? 'class started: now write the title on the board and do the pre-check' : 'give a title and an outline of 4-7 steps' } };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false } }; });
     }
@@ -390,7 +424,8 @@
   // respond=false: it only becomes part of what the teacher knows (a marked part waits for the student's question)
   P.sendBoardNote = function (note, images, respond, label) {
     if (!this.active) return false;
-    var content = [{ type: 'input_text', text: note }];
+    var content = [{ type: 'input_text', text: note + (respond ? SHORT_REMINDER : '') }];
+    if (respond) { this.nudged = false; this.classOn = true; }
     (images || []).forEach(function (u) { if (u) content.push({ type: 'input_image', image_url: u }); });
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: content } });
     this.transcript.push({ role: 'user', text: label || '[تخته]' });
@@ -402,9 +437,25 @@
     if (!this.active || this.responding || this.userSpeaking) return false;
     this.send({ type: 'response.create' }); return true;
   };
+  // the student finished a quiz card: the teacher gets the score and the mistakes
+  P.quizDone = function (quiz, res) {
+    if (!this.active) return;
+    var wrong = [];
+    (res && res.answers || []).forEach(function (a, i) {
+      var q = quiz.questions[i];
+      if (q && a !== q.answer) wrong.push('Q' + (i + 1) + ' «' + q.q + '» student chose «' + (a >= 0 ? q.options[a] : 'no answer') + '», right is «' + q.options[q.answer] + '»');
+    });
+    var n = quiz.questions.length, ok = n - wrong.length;
+    var note = '[نتیجهٔ تمرین] The student finished the quiz card: ' + ok + ' of ' + n + ' correct.' + (wrong.length ? ' Mistakes: ' + wrong.join('; ') + '.' : ' All correct.') +
+      ' React in ONE short warm sentence. If there were mistakes, show the main one on the board with a small example (clear first if needed), then give one new tiny practice step. If all correct, praise briefly and move to the next idea with a new example on the board.';
+    this.nudged = false;
+    this.sendBoardNote(note, [], true, '[تمرین] ' + ok + '/' + n);
+  };
+  var SHORT_REMINDER = '\n(Answer in ONE or TWO short sentences and show it ON THE BOARD with a picture or example; then a tiny practice question.)';
   P.sendText = function (text) {
     if (!this.active) return false;
-    this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + text }] } });
+    this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + text + SHORT_REMINDER }] } });
+    this.nudged = false; this.classOn = this.classOn || !!this.o.resumed;
     this.transcript.push({ role: 'user', text: text });
     this.stopSpeaking();
     if (this.responding) this.needReply = true; else this.send({ type: 'response.create' });

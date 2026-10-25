@@ -111,16 +111,22 @@ OPS_REF = SYSTEM[SYSTEM.index('PREREQUISITES'):]      # prerequisites rules, boa
 VOICE_SYSTEM = r"""You are "Ustad Khayyam", a warm, brilliant teacher giving a LIVE class by voice to one Afghan student, with a chalkboard between you.
 Everything you say is spoken aloud. The student hears you and can talk back or interrupt at any moment.
 
-HOW YOU SPEAK
-- Natural spoken Afghan Dari, the way a good teacher in Kabul talks to one student: warm, relaxed, simple words, short sentences. Not Iranian Persian, not bookish or formal. Afghan words: say «موتر» (not ماشین), «شفاخانه» (not بیمارستان), «لیسه» (not دبیرستان), and «ابتدایی» for basic or elementary (never «پایه»). No lists, no markdown, no emojis, never read symbols out letter by letter. Say numbers as words.
-- Talk like a person in a room, not like a lecture recording. Think aloud, use small reactions («خوب»، «ببینید»، «درست است؟»). Speak in short stretches (2-4 sentences), then check in: a quick question, or a pause for the student to react. Never go more than about 30 seconds without involving the student.
-- Ask questions in the middle of an explanation, and wait for the answer. Listen to what the student really says; answer exactly that.
+HOW YOU SPEAK (LESS VOICE, MORE BOARD)
+- Natural spoken Afghan Dari, the way a good teacher in Kabul talks to one student: warm, relaxed, simple words, short sentences. Not Iranian Persian, not bookish or formal. Afghan words: say «موتر» (not ماشین), «شفاخانه» (not بیمارستان), «لیسه» (not دبیرستان), «صنف» (not کلاس), and «ابتدایی» for basic or elementary (never «پایه»). No lists, no markdown, no emojis, never read symbols out letter by letter. Say numbers as words.
+- SPEAK VERY LITTLE. One stretch of speech is ONE or TWO short sentences (about 10-25 words), never more. The board and the pictures do the teaching; your voice only points at them, names them, and asks. Never give a paragraph. Never read what is on the board aloud, and never say the same thing twice in other words. Do not explain everything in speech: draw it.
+- EVERY stretch of speech comes with a board call: a picture, a worked example, a number line, a table, a short label or formula. Teach through EXAMPLES all the time (nān, apples, afghani coins, a moving موتر, the bazaar): one tiny concrete example drawn on the board is worth more than a long explanation. Idea → example drawn → a quick question or a practice task → next idea.
+- PRACTICE AND QUIZZES ARE HALF OF THE CLASS. After each idea give the student something to do: a tiny question to answer aloud, a «yourturn» task on the board, or the tool "make_quiz" for a short quiz card (use it every idea or two, and whenever they ask for practice). Check their answer, then go on. Quizzes need no talking.
+- If the student asks a question, answer in ONE or TWO sentences and show the answer on the board with an example. Do not give a spoken lecture. If they want more, draw the next example.
+- HARD PROBLEMS: for any multi-step calculation, proof, tricky physics or maths problem, or when you are not completely sure, say one short sentence and call the tool "expert" with the full problem; then teach its steps on the board in your own short words. Do not solve hard things in your head.
+- Speak in short stretches, then check in: a quick question, or a pause for the student to react. Never go more than about 15 seconds without involving the student or changing the board.
+- NOISE AND UNCLEAR SPEECH. If what you heard is unclear, very short, cut off, in another language, or does not make sense in the class (background noise, a TV, other people, a cough), do NOT continue as if they asked something, and NEVER repeat or restart what you just said. Say one tiny sentence («ببخشید، متوجه نشدم؛ دوباره می‌گویید؟») and wait. If you are not sure whether the student spoke to you, stay quiet or ask. After the student answers, continue from where you were, without repeating.
 - Address the student as «شما». Never scold. If they seem lost, slow down and explain it differently, with a picture.
 
 THE BOARD IS YOUR HAND (tool "board")
-- You control the chalkboard yourself, live, and the student mostly WATCHES it. Speech explains; the board shows. After every stretch of speech (2-4 sentences) put what you just said on the board. Never talk for more than about three sentences without the board changing (the only exceptions: you are asking the student something and waiting, or answering a quick yes/no).
-- THE BOARD FOLLOWS YOUR VOICE LIKE A TEACHER'S HAND. First say your stretch of speech. Then, in the same turn, call board ONCE with a cue sheet for what you just said: a list of 2-6 operations. Give the first operation of each cue a "when": the first 2-4 words of the sentence it belongs to, copied exactly as you said them. The page draws that cue just as your voice reaches those words, so the chalk moves while you speak about it. Operations with no "when" belong to the cue before them (a point and its circle, a label and its picture). Example: you say «اول سوال را ببینید. این‌جا نوشته شده که دو سیب داریم. و این‌جا سوال است» and then call board with ops [{"op":"point","target":"pic","region":"r1","when":"اول سوال را"},{"op":"mark","target":"pic","region":"r1","style":"underline"},{"op":"point","target":"pic","region":"r2","when":"این‌جا نوشته شده"},{"op":"mark","target":"pic","region":"r2","style":"circle"},{"op":"text","t":"2 + 3","zone":"a","when":"و این‌جا سوال"}].
-- Never call board before you have said something (the student must hear you whenever chalk moves). Never make a string of board calls one after another with silence between: one stretch of speech, one board call, then keep talking. Do not announce that you are drawing («حالا می‌کشم»).
+- You control the chalkboard yourself, live, and the student mostly WATCHES it. Speech explains; the board shows. After every stretch of speech (1-2 sentences) put what you just said on the board. Never speak twice without the board changing (the only exceptions: you are asking the student something and waiting, or answering a quick yes/no).
+- WHEN THE STUDENT TYPES OR WRITES A QUESTION ON THE BOARD (messages [نوشتهٔ تایپی شاگرد]) or types in the chat, the answer must appear ON THE BOARD: one or two short spoken sentences, and a board call with the answer as a picture/example/formula. A spoken answer alone is a mistake.
+- THE BOARD FOLLOWS YOUR VOICE LIKE A TEACHER'S HAND. First say your stretch of speech. Then, in the same turn, call board ONCE with a cue sheet for what you just said: a list of 2-6 operations. Give the first operation of each cue a "when": the first 2-4 words of the sentence it belongs to, copied exactly as you said them. The page draws that cue just as your voice reaches those words, so the chalk moves while you speak about it. Operations with no "when" belong to the cue before them (a point and its circle, a label and its picture). Example: you say «اول سوال را ببینید. این‌جا نوشته شده که دو سیب داریم» and then call board with ops [{"op":"point","target":"pic","region":"r1","when":"اول سوال را"},{"op":"mark","target":"pic","region":"r1","style":"underline"},{"op":"point","target":"pic","region":"r2","when":"این‌جا نوشته شده"},{"op":"mark","target":"pic","region":"r2","style":"circle"},{"op":"text","t":"2 + 3","zone":"a"}].
+- Never call board before you have said something (the student must hear you whenever chalk moves). Never make a string of board calls one after another with silence between: one short stretch of speech, one board call, then a question or the next short stretch. Do not announce that you are drawing («حالا می‌کشم»).
 - Show, do not write sentences. Board text is only short labels, numbers, formulas, keywords (1-4 words). Never copy what you are saying onto the board. More pictures, fewer words.
 - One cue sheet per stretch of speech (2-6 operations). Picture first, words second, formula last. Use everyday Afghan examples (nān, apples, pomegranates, the bazaar, afghani coins, mountains, a village road).
 - Give an "id" to anything you may mark or erase later.
@@ -226,6 +232,16 @@ VOICE_TOOLS = [
          "image": {"type": "string", "description": "the picture's key, for example p1"},
          "find": {"type": "string", "description": "optional: a specific thing to locate in the picture"}},
          "required": ["image"]}},
+    {"type": "function", "name": "expert",
+     "description": "Ask your expert colleague (a much stronger thinker) to work out a HARD problem for you in the background: a multi-step maths or physics problem, a proof, a tricky calculation, checking a worked solution, a difficult concept. Say one short sentence first (for example «یک لحظه، این را دقیق حساب می‌کنم»). It returns the solved steps and the final answer in plain text; then YOU teach it step by step on the board, in your own short words. Do not use it for simple questions.",
+     "parameters": {"type": "object", "properties": {
+         "question": {"type": "string", "description": "the full problem, with all numbers and what is asked, in English or Dari"},
+         "need": {"type": "string", "description": "optional: what you need back, e.g. 'steps and final answer' or 'check this solution: ...'"}}, "required": ["question"]}},
+    {"type": "function", "name": "make_quiz",
+     "description": "Give the student a short quiz card (3-6 multiple-choice questions) on what you just taught. The quiz appears under the board, the student answers by tapping, and you get the score and the mistakes afterwards. It is written in the background, so do not talk while you wait: say one short sentence («یک تمرین کوتاه برایتان آماده می‌کنم») and stop. Use it after every idea or two, and whenever the student asks for practice or a test.",
+     "parameters": {"type": "object", "properties": {
+         "topic": {"type": "string", "description": "exactly what to ask about, with the level (a few words in Dari or English)"},
+         "count": {"type": "integer", "description": "3 to 6"}}, "required": ["topic"]}},
     {"type": "function", "name": "start_class",
      "description": "Call this once, when the student has asked to learn something specific, before you begin teaching it. Not for greetings or small talk.",
      "parameters": {"type": "object", "properties": {
@@ -293,6 +309,32 @@ Return one JSON object only:
   }
 }
 Only record learning facts shown in this class (skills, mistakes, what helped). Never record personal details, family, location, health or anything not about learning. If you cannot tell, leave the list empty."""
+
+
+def parse_quiz(text, n=6):
+    """Validate a generated quiz: 2-6 questions, 4 distinct options, one valid answer index. Returns a clean dict or None."""
+    d = parse_model_json(text)
+    if not isinstance(d, dict) or not isinstance(d.get('questions'), list):
+        return None
+    out = []
+    for q in d['questions'][:6]:
+        if not isinstance(q, dict):
+            continue
+        qt = _short(q.get('q'), 300)
+        opts = q.get('options')
+        if not qt or not isinstance(opts, list):
+            continue
+        opts = [_short(o, 120) for o in opts[:4]]
+        try:
+            ans = int(q.get('answer'))
+        except (TypeError, ValueError):
+            continue
+        if len(opts) != 4 or not all(opts) or len({o.strip() for o in opts}) != 4 or not 0 <= ans <= 3:
+            continue
+        out.append({'q': qt, 'options': opts, 'answer': ans, 'why': _short(q.get('why'), 240)})
+    if len(out) < 2:
+        return None
+    return {'title': _short(d.get('title'), 80) or 'تمرین', 'questions': out[:max(2, min(6, n))]}
 
 
 # ───────── small helpers ─────────
@@ -1157,6 +1199,72 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             return jsonify(ok=False, error='the picture was not saved, draw it on the board instead')
         return jsonify(ok=True, key=item['key'], w=item['w'], h=item['h'], item=item,
                        note='The picture is ready as ' + item['key'] + '. Show it now with the board tool, op image, key ' + item['key'] + '.')
+
+    EXPERT_SYSTEM = ("You are the expert colleague of a school tutor. Solve the problem exactly and carefully. Reply in plain text, no markdown, in at most 14 short lines: "
+                     "first 'Answer:' with the final answer, then 'Steps:' with the numbered steps (each one short: the calculation and what it means), then 'Watch out:' with the usual mistake, if any. "
+                     "Check every number twice. If the problem is unclear or has no single answer, say so in one line.")
+    QUIZ_SYSTEM = ("You write short multiple-choice quizzes for a school student in Afghanistan. Return one JSON object only: "
+                   '{"title": "short Dari title", "questions": [{"q": "question in Dari", "options": ["A","B","C","D"], "answer": 0, "why": "one short Dari sentence explaining the right answer"}]}. '
+                   "Exactly the requested number of questions, 4 options each (short), one correct option, 'answer' is its index 0-3. Easy to medium, starting simple. Use everyday Afghan examples. "
+                   "Write numbers, formulas and terms exactly; double-check the arithmetic and that exactly one option is right. Natural Afghan Dari, «صنف» not «کلاس», «موتر» not «ماشین». No markdown.")
+
+    def _class_brief(cid):
+        try:
+            c = owned(cid)
+            return ((c.title or '') + ' / ' + (c.subject or ''))[:160] if c else ''
+        except Exception:
+            return ''
+
+    @app.route('/api/class/<int:cid>/expert', methods=['POST'])
+    @limiter.limit('20 per hour')
+    @login_required
+    def class_expert(cid):
+        """The teacher asks the strong model (level 'complex') to work out a hard problem in the background. Counted against the plan's allowance and dollar ceiling."""
+        if not owned(cid):
+            return jsonify(ok=False, error='class not found'), 404
+        p = request.get_json(silent=True) or {}
+        q = _short(p.get('question'), 1800)
+        need = _short(p.get('need'), 300)
+        if not q:
+            return jsonify(ok=False, error='give the full problem')
+        try:
+            reply, _sw, _reset, model = metered('tutor', EXPERT_SYSTEM, [{'role': 'user', 'content': q + (('\nNeeded: ' + need) if need else '')}], current_user.id, tier_of(current_user),
+                                                temperature=.1, max_output=1400, level='complex', intent_label='class/expert')
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('class_expert failed')
+            return jsonify(ok=False, error='the expert is not available now; solve it step by step yourself, carefully')
+        if reply is None:
+            return jsonify(ok=False, error='the expert is busy or the allowance is used up; solve it step by step yourself, carefully')
+        return jsonify(ok=True, solution=_short(reply, 3000),
+                       note='Teach this on the board in your own short words, step by step, with one example. Do not read it out.')
+
+    @app.route('/api/class/<int:cid>/quiz', methods=['POST'])
+    @limiter.limit('20 per hour')
+    @login_required
+    def class_quiz(cid):
+        """A short quiz card for the classroom, written by the strong model in the background (no voice needed). The student answers by tapping."""
+        if not owned(cid):
+            return jsonify(ok=False, error='class not found'), 404
+        p = request.get_json(silent=True) or {}
+        topic = _short(p.get('topic'), 300)
+        if not topic:
+            return jsonify(ok=False, error='say what the quiz is about')
+        n = max(3, min(6, _int(p.get('count'), 4)))
+        ask = 'Class: %s\nTopic: %s\nNumber of questions: %d' % (_class_brief(cid), topic, n)
+        try:
+            reply, _sw, _reset, model = metered('tutor', QUIZ_SYSTEM, [{'role': 'user', 'content': ask}], current_user.id, tier_of(current_user),
+                                                temperature=.4, max_output=1600, level='complex', json_mode=True, intent_label='class/quiz')
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('class_quiz failed')
+            return jsonify(ok=False, error='could not make the quiz now; ask the questions aloud instead')
+        if reply is None:
+            return jsonify(ok=False, error='the quiz maker is busy or the allowance is used up; ask the questions aloud instead')
+        quiz = parse_quiz(reply, n)
+        if not quiz:
+            return jsonify(ok=False, error='could not make a good quiz now; ask the questions aloud instead')
+        return jsonify(ok=True, quiz=quiz)
 
     @app.route('/api/class/<int:cid>/read_ink', methods=['POST'])
     @limiter.limit('60 per hour')
