@@ -444,7 +444,7 @@ TUTOR_PLAN_CONFIG = {
         {'model': 'gpt-5.4',      'limit': 150000,  'reset': 'monthly', 'col': 'tutor_tier3'},   # hard problems only ('complex' level)
     ],
     'tutor_pro': [
-        {'model': 'gpt-5.4',      'limit': 3000000, 'reset': 'monthly', 'col': 'tutor_tier1'},
+        {'model': 'gpt-5.4',      'limit': 1700000, 'reset': 'monthly', 'col': 'tutor_tier1'},
     ],
 }
 

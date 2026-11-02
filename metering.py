@@ -31,7 +31,7 @@ SESSION_MAX_SECONDS = int(os.getenv('VOICE_SESSION_MAX_SECONDS', '2400'))      #
 # The real voice ceiling: USD of live voice, dictation and read-aloud per calendar month (UTC), measured
 # from what OpenAI reports (voice_usage). The seconds above stay as a second, stricter guard.
 # Override one plan with VOICE_USD_CAPS_JSON, e.g. {"basic": 5}.
-VOICE_USD_CAPS = {'free': 1.0, 'basic': 4.0, 'pro': 10.0, 'premium': 15.0, 'tutor_pro': 25.0}
+VOICE_USD_CAPS = {'free': 1.0, 'basic': 4.0, 'pro': 10.0, 'premium': 15.0, 'tutor_pro': 35.0}
 # Daily dollar caps (UTC day): every plan except Tutor Pro, which only has the monthly cap. None = no daily cap.
 VOICE_USD_DAILY_CAPS = {'free': .25, 'basic': .80, 'pro': 2.0, 'premium': 3.0, 'tutor_pro': None}
 
@@ -63,7 +63,7 @@ USD_CAPS = {'free': {'chat': 1.50, 'tutor': .70},
             'basic': {'chat': 3.0, 'tutor': 1.50},
             'pro': {'chat': 5.0, 'tutor': 2.0},
             'premium': {'chat': 10.0, 'tutor': 5.0},
-            'tutor_pro': {'chat': 1.50, 'tutor': 23.0}}
+            'tutor_pro': {'chat': 1.50, 'tutor': 13.0}}
 # USD per million billed tokens. Override by env on price changes.
 TOKEN_RATES = {
     'gpt-5.4-mini': (.75, 4.50), 'gpt-5.4-nano': (.20, 1.25),
