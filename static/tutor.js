@@ -153,6 +153,7 @@
 
   /* ───────── the sidebar ───────── */
   function renderPath() {
+    renderClassBar();
     var box = $('path-box');
     if (!cls || cls.lobby || !(cls.outline || []).length) { box.hidden = true; return; }
     box.hidden = false;
@@ -656,6 +657,7 @@
         if (d.title && !(cls.lobby && !d.started)) { cls.title = d.title; $('lesson-title').textContent = d.title; }
         if (d.started || (cls.outline && cls.outline.length > 1)) leaveLobby();
         renderPath();
+        gainXP(d);
       },
       onUserText: function (t) { stuSpoke(); addMessage('user', t); },
       onAiText: function (t) { addMessage('ai', t); },          // the conversation is the only text; the board has no captions
@@ -700,6 +702,7 @@
       if (finished) return; finished = true; hideQuiz();
       var res = { answers: answers.slice() };
       while (res.answers.length < qs.length) res.answers.push(-1);
+      if (quiz.token && cls && answers.length) api('/api/class/' + cls.id + '/quiz_result', { token: quiz.token, answers: res.answers }).then(function (d) { if (d && d.ok) gainXP(d); });
       if (!skipped || answers.length) { try { done(res); } catch (err) { /* ignore */ } }
     }
     function render() {
@@ -1057,6 +1060,85 @@
     $('stu-send').addEventListener('click', sendInk);
   })();
 
+  /* ───────── level, XP, class progress and "what the tutor knows" ───────── */
+  var me = null, popT = 0;
+  var SUBJ_FA = { math: 'ریاضی', science: 'ساینس', english: 'انگلیسی', social: 'علوم اجتماعی', dari: 'ادبیات', computer: 'کمپیوتر', other: 'مضمون‌های دیگر' };
+  function renderStrip() {
+    var strip = $('pstrip'); if (!strip || !me) return;
+    strip.hidden = false;
+    var x = me.xp || {};
+    $('ps-lv-n').textContent = faNum(x.level || 1); $('ps-lv-name').textContent = x.name || '';
+    $('ps-xp-fill').style.width = Math.max(2, Math.min(100, (x.into || 0) / Math.max(1, x.need || 100) * 100)) + '%';
+    $('ps-xp-t').textContent = faNum(x.into || 0) + ' / ' + faNum(x.need || 100);
+    renderClassBar();
+  }
+  function renderClassBar() {
+    var box = $('ps-cls'); if (!box) return;
+    var out = cls && !cls.lobby ? (cls.outline || []) : [];
+    if (!out.length) { box.hidden = true; return; }
+    var n = out.length, done = Math.min(cls.step || 0, n);
+    box.hidden = false;
+    $('ps-cls-t').textContent = 'این صنف: ' + faNum(done) + ' از ' + faNum(n);
+    $('ps-cls-fill').style.width = Math.max(done ? 3 : 0, done / n * 100) + '%';
+  }
+  function loadMe() {
+    api('/api/class/me').then(function (d) { if (d && d.ok) { me = d; renderStrip(); } });
+  }
+  function gainXP(d) {
+    if (!d || !d.xp || !me) return;
+    var before = (me.xp || {}).level || 1;
+    me.xp = d.xp; renderStrip();
+    if (d.xp_gain > 0) {
+      var p = $('xp-pop'); p.textContent = '+' + faNum(d.xp_gain) + ' امتیاز'; p.hidden = false;
+      p.style.animation = 'none'; void p.offsetWidth; p.style.animation = '';
+      clearTimeout(popT); popT = setTimeout(function () { p.hidden = true; }, 1900);
+    }
+    if (d.xp.level > before) Stat.info('آفرین! به سطح «' + d.xp.name + '» رسیدید.', 4800);
+  }
+  window.openMemory = function () {
+    $('mem-back').hidden = false; $('mem-sheet').hidden = false;
+    api('/api/class/me').then(function (d) { if (d && d.ok) { me = d; renderStrip(); renderMemory(); } });
+  };
+  window.closeMemory = function () { $('mem-back').hidden = true; $('mem-sheet').hidden = true; };
+  function renderMemory() {
+    var body = $('mem-body'); body.textContent = '';
+    var mem = (me && me.memory) || {}, subs = mem.subjects || {}, keys = Object.keys(subs), style = mem.style || [];
+    function line(label, arr) {
+      if (!arr || !arr.length) return null;
+      var p = document.createElement('p');
+      if (label) { var b = document.createElement('b'); b.textContent = label + ': '; p.appendChild(b); }
+      p.appendChild(document.createTextNode(Array.isArray(arr) ? arr.join('، ') : arr)); return p;
+    }
+    function forget(payload, btn) {
+      btn.disabled = true;
+      api('/api/class/student', payload, 'DELETE').then(function (d) { if (d && d.ok) openMemory(); else btn.disabled = false; });
+    }
+    keys.forEach(function (k) {
+      var v = subs[k] || {}, card = document.createElement('div'); card.className = 'mem-card';
+      var h = document.createElement('h4'), t = document.createElement('span'); t.textContent = SUBJ_FA[k] || k; h.appendChild(t);
+      var del = document.createElement('button'); del.type = 'button'; del.className = 'mem-del'; del.textContent = 'فراموش کن';
+      del.onclick = function () { forget({ subject: k }, del); }; h.appendChild(del); card.appendChild(h);
+      [line('سطح', v.level ? [v.level] : null), line('نقطه‌های قوی', v.strong), line('نیاز به تمرین بیشتر', v.weak)].forEach(function (p) { if (p) card.appendChild(p); });
+      body.appendChild(card);
+    });
+    if (style.length) {
+      var sc = document.createElement('div'); sc.className = 'mem-card';
+      var sh = document.createElement('h4'), st = document.createElement('span'); st.textContent = 'چه جور توضیحی به شما کمک می‌کند'; sh.appendChild(st);
+      var sd = document.createElement('button'); sd.type = 'button'; sd.className = 'mem-del'; sd.textContent = 'فراموش کن';
+      sd.onclick = function () { forget({ style: true }, sd); }; sh.appendChild(sd); sc.appendChild(sh);
+      var sp = line('', style); if (sp) sc.appendChild(sp); body.appendChild(sc);
+    }
+    if (!keys.length && !style.length) {
+      var e = document.createElement('div'); e.className = 'mem-empty'; e.textContent = 'استاد هنوز چیزی دربارهٔ شما یاد نگرفته است. بعد از چند صنف، اینجا می‌بینید که چه می‌داند.'; body.appendChild(e);
+    }
+    var all = $('mem-all'); all.hidden = !(keys.length || style.length); all.classList.remove('sure'); all.textContent = 'فراموش کردن همه';
+    all.onclick = function () {
+      if (!all.classList.contains('sure')) { all.classList.add('sure'); all.textContent = 'مطمئن هستید؟ دوباره بزنید'; return; }
+      forget({}, all);
+    };
+  }
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('mem-sheet').hidden) closeMemory(); });
+
   /* ───────── init ───────── */
   var input = $('user-input');
   input.addEventListener('input', function () { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; });
@@ -1065,6 +1147,7 @@
   if (liveWanted) $('classroom').dataset.voiceui = '1';
   applySidebar(); showStart(); renderPath(); renderSaved();
   if (isMobile()) showPane('chat');
+  loadMe();
 
   fetch('/api/me').then(function (r) { return r.json(); }).then(function (d) {
     if (!d || !d.logged_in) return;

@@ -265,3 +265,50 @@
   .class-top .chat-title { font-size: 14.5px; }
   .pane-tab { font-size: 13px; }
 }
+
+/* progress strip: level, XP, this class, and what the tutor knows */
+.pstrip { padding: 6px 14px 8px; border-bottom: 1px solid var(--line-light); background: var(--paper); }
+.pstrip[hidden] { display: none; }
+.ps-main { position: relative; display: flex; align-items: center; gap: 12px; max-width: 760px; margin: 0 auto; }
+.ps-lv { display: inline-flex; align-items: center; gap: 8px; padding: 2px 12px 2px 4px; border: 1px solid var(--line-light); border-radius: 999px; background: transparent; color: var(--ink); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ps-lv b { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--gold-hi), var(--gold)); color: #3a2c0c; font-size: 14px; }
+.ps-xp { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.ps-bar { position: relative; flex: 1; height: 9px; border-radius: 99px; background: rgba(16, 38, 31, .09); overflow: hidden; }
+.ps-bar.thin { height: 5px; }
+.ps-bar i { position: absolute; inset-block: 0; inset-inline-start: 0; width: 0; border-radius: inherit; background: linear-gradient(to left, var(--gold-hi), var(--gold)); transition: width .8s var(--ease); }
+#ps-cls-fill { background: linear-gradient(to left, #2f8f6b, #56b78f); }
+.ps-xp-t { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
+.ps-mem { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line-light); border-radius: 50%; background: transparent; color: var(--ink-soft); cursor: pointer; }
+.ps-mem svg { width: 19px; height: 19px; }
+.ps-mem:hover, .ps-lv:hover { border-color: var(--ink-soft); }
+.ps-cls { display: flex; align-items: center; gap: 10px; max-width: 760px; margin: 6px auto 0; }
+.ps-cls[hidden] { display: none; }
+.ps-cls-t { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
+.xp-pop { position: absolute; inset-inline-start: 120px; top: -2px; padding: 2px 10px; border-radius: 999px; background: #3f9a6c; color: #fff; font-size: 13px; font-weight: 700; pointer-events: none; animation: xpPop 1.8s ease-out forwards; }
+.xp-pop[hidden] { display: none; }
+@keyframes xpPop { 0% { opacity: 0; transform: translateY(8px) scale(.9); } 15% { opacity: 1; transform: none; } 80% { opacity: 1; } 100% { opacity: 0; transform: translateY(-12px); } }
+.mem-back { position: fixed; inset: 0; z-index: 90; background: rgba(8, 24, 19, .45); }
+.mem-back[hidden], .mem-sheet[hidden] { display: none; }
+.mem-sheet { position: fixed; z-index: 91; inset-block: 0; inset-inline-start: 0; width: min(420px, 100%); display: flex; flex-direction: column; background: var(--paper); box-shadow: 0 0 40px rgba(0, 0, 0, .3); animation: memIn .28s var(--ease); }
+@keyframes memIn { from { transform: translateX(-24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.mem-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 4px; }
+.mem-head h3 { font-size: 18px; margin: 0; }
+.mem-note { margin: 0; padding: 4px 18px 10px; font-size: 14px; line-height: 1.9; color: var(--ink-soft); }
+.mem-body { flex: 1; overflow-y: auto; padding: 4px 18px 12px; display: grid; gap: 12px; align-content: start; }
+.mem-card { padding: 12px 14px; border: 1px solid var(--line-light); border-radius: 14px; }
+.mem-card h4 { display: flex; align-items: center; justify-content: space-between; margin: 0 0 6px; font-size: 15.5px; }
+.mem-card p { margin: 4px 0; font-size: 14px; line-height: 1.9; color: var(--ink); }
+.mem-card p b { color: var(--ink-soft); font-weight: 600; }
+.mem-del { padding: 3px 10px; border: 1px solid var(--line-light); border-radius: 999px; background: transparent; color: #b8453a; font: inherit; font-size: 12.5px; cursor: pointer; }
+.mem-empty { padding: 20px 4px; font-size: 14.5px; line-height: 2; color: var(--ink-soft); text-align: center; }
+.mem-foot { padding: 10px 18px 16px; border-top: 1px solid var(--line-light); }
+.mem-all { width: 100%; padding: 10px; border: 1px solid rgba(194, 87, 75, .5); border-radius: 12px; background: transparent; color: #b8453a; font: inherit; font-weight: 600; cursor: pointer; }
+.mem-all.sure { background: #b8453a; color: #fff; }
+@media (max-width: 700px) {
+  .pstrip { padding: 6px 10px 7px; }
+  .ps-main { gap: 8px; }
+  .ps-lv span { display: none; }
+  .ps-lv { padding: 2px; }
+  .ps-xp-t { font-size: 11.5px; }
+  .xp-pop { inset-inline-start: 46px; }
+}

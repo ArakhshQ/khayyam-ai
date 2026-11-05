@@ -17,7 +17,8 @@ import os
 import re
 from datetime import datetime, timedelta
 
-from flask import jsonify, request
+from flask import current_app, jsonify, request
+from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 import board_check as BC
 import chat_tools
@@ -311,6 +312,37 @@ Return one JSON object only:
 Only record learning facts shown in this class (skills, mistakes, what helped). Never record personal details, family, location, health or anything not about learning. If you cannot tell, leave the list empty."""
 
 
+# ───────── XP and levels (kept on the server; the browser only shows them) ─────────
+LEVEL_NAMES = ['نوآموز', 'کوشا', 'پرتلاش', 'دانا', 'ماهر', 'برجسته', 'استاد', 'استادِ بزرگ']
+XP_PER_STEP = 20
+XP_PER_RIGHT = 10
+XP_ALL_RIGHT_BONUS = 15
+XP_DAY_CAP = 300
+
+
+def level_info(total):
+    """Level L starts at 50*L*(L-1) XP (100, 300, 600, 1000 ...)."""
+    total = max(0, int(total or 0))
+    lv = 1
+    while 50 * (lv + 1) * lv <= total and lv < 99:
+        lv += 1
+    start, nxt = 50 * lv * (lv - 1), 50 * (lv + 1) * lv
+    return {'total': total, 'level': lv, 'name': LEVEL_NAMES[min(lv, len(LEVEL_NAMES)) - 1], 'into': total - start, 'need': nxt - start}
+
+
+def xp_add(data, amount, today):
+    """Add XP (daily cap). Returns the amount really added."""
+    xp = data.setdefault('xp', {})
+    if not isinstance(xp, dict):
+        xp = data['xp'] = {}
+    if xp.get('day') != today:
+        xp['day'], xp['today'] = today, 0
+    gain = max(0, min(int(amount), XP_DAY_CAP - int(xp.get('today') or 0)))
+    xp['total'] = int(xp.get('total') or 0) + gain
+    xp['today'] = int(xp.get('today') or 0) + gain
+    return gain
+
+
 def parse_quiz(text, n=6):
     """Validate a generated quiz: 2-6 questions, 4 distinct options, one valid answer index. Returns a clean dict or None."""
     d = parse_model_json(text)
@@ -454,7 +486,12 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
 
     def save_student(data):
         row = db.session.get(TutorStudent, current_user.id)
-        text = json.dumps(data, ensure_ascii=False)[:6000]
+        text = json.dumps(data, ensure_ascii=False)
+        if len(text) > 16000:           # never cut JSON in the middle: drop the oldest subjects first
+            subs = data.get('subjects') or {}
+            while len(text) > 16000 and subs:
+                subs.pop(next(iter(subs)))
+                text = json.dumps(data, ensure_ascii=False)
         if row:
             row.data = text
             row.updated_at = _now()
@@ -988,7 +1025,27 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             cls.subject = p['subject']
         beats = _jl(cls.beats, [])
         save_cls(cls, beats, _short(p.get('note'), 160) or None, step=_int(p.get('step'), cls.step or 0))
-        return jsonify(ok=True, step=cls.step or 0, outline=_jl(cls.outline, []), title=cls.title)
+        gain, info = 0, None
+        try:      # XP for a newly finished step of the outline (never twice for the same step, at most two steps per call)
+            data = student_data()
+            xp = data.setdefault('xp', {})
+            if not isinstance(xp, dict):
+                xp = data['xp'] = {}
+            done = xp.setdefault('steps', {})
+            key = str(cls.id)
+            new_steps = max(0, min(int(cls.step or 0), 40) - int(done.get(key, 0)))
+            if new_steps > 0:
+                gain = xp_add(data, XP_PER_STEP * min(2, new_steps), _now().date().isoformat())
+                done[key] = int(cls.step or 0)
+                while len(done) > 40:
+                    done.pop(next(iter(done)))
+                save_student(data)
+                db.session.commit()
+            info = level_info((data.get('xp') or {}).get('total'))
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('xp for step failed')
+        return jsonify(ok=True, step=cls.step or 0, outline=_jl(cls.outline, []), title=cls.title, xp_gain=gain, xp=info)
 
     @app.route('/api/class/<int:cid>/poem', methods=['POST'])
     @limiter.limit('60 per minute')
@@ -1264,7 +1321,46 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         quiz = parse_quiz(reply, n)
         if not quiz:
             return jsonify(ok=False, error='could not make a good quiz now; ask the questions aloud instead')
+        quiz['token'] = URLSafeTimedSerializer(current_app.secret_key, salt='khayyam-quiz').dumps(
+            {'u': current_user.id, 'c': cid, 'a': [q['answer'] for q in quiz['questions']], 'n': os.urandom(6).hex()})
         return jsonify(ok=True, quiz=quiz)
+
+    @app.route('/api/class/<int:cid>/quiz_result', methods=['POST'])
+    @limiter.limit('40 per hour')
+    @login_required
+    def class_quiz_result(cid):
+        """The student finished a quiz card: the server grades it against the signed answer key and gives XP, once per quiz."""
+        if not owned(cid):
+            return jsonify(ok=False, error='class not found'), 404
+        p = request.get_json(silent=True) or {}
+        try:
+            tok = URLSafeTimedSerializer(current_app.secret_key, salt='khayyam-quiz').loads(str(p.get('token') or ''), max_age=4 * 3600)
+        except (BadSignature, Exception):
+            return jsonify(ok=False, error='bad quiz'), 400
+        if not isinstance(tok, dict) or tok.get('u') != current_user.id or tok.get('c') != cid or not isinstance(tok.get('a'), list):
+            return jsonify(ok=False, error='bad quiz'), 400
+        key, ans = tok['a'], p.get('answers')
+        if not isinstance(ans, list):
+            ans = []
+        right = sum(1 for i, k in enumerate(key) if i < len(ans) and _int(ans[i], -1) == k)
+        gain, info = 0, None
+        try:
+            data = student_data()
+            xp = data.setdefault('xp', {})
+            if not isinstance(xp, dict):
+                xp = data['xp'] = {}
+            seen = xp.setdefault('seen', [])
+            if tok.get('n') not in seen:
+                seen.append(tok.get('n'))
+                del seen[:-20]
+                gain = xp_add(data, XP_PER_RIGHT * right + (XP_ALL_RIGHT_BONUS if key and right == len(key) else 0), _now().date().isoformat())
+                save_student(data)
+                db.session.commit()
+            info = level_info((data.get('xp') or {}).get('total'))
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('xp for quiz failed')
+        return jsonify(ok=True, right=right, total=len(key), xp_gain=gain, xp=info)
 
     @app.route('/api/class/<int:cid>/read_ink', methods=['POST'])
     @limiter.limit('60 per hour')
@@ -1372,13 +1468,38 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
     def class_student():
         return jsonify(data=student_data())
 
+    @app.route('/api/class/me')
+    @login_required
+    def class_me():
+        """Level, XP and what the tutor remembers, for the strip at the top of the tutor page."""
+        d = student_data()
+        return jsonify(ok=True, xp=level_info((d.get('xp') or {}).get('total')),
+                       memory={'subjects': d.get('subjects') or {}, 'style': d.get('style') or []})
+
     @app.route('/api/class/student', methods=['DELETE'])
     @login_required
     def class_student_delete():
-        row = db.session.get(TutorStudent, current_user.id)
-        if row:
-            db.session.delete(row)
+        """Forget what the tutor knows: one subject, the style notes, or everything. The student's XP is not a memory and stays."""
+        p = request.get_json(silent=True) or {}
+        d = student_data()
+        try:
+            if isinstance(p.get('subject'), str):
+                (d.get('subjects') or {}).pop(p['subject'], None)
+            elif p.get('style') is True:
+                d['style'] = []
+            else:
+                d = {'xp': d['xp']} if isinstance(d.get('xp'), dict) else {}
+            if d:
+                save_student(d)
+            else:
+                row = db.session.get(TutorStudent, current_user.id)
+                if row:
+                    db.session.delete(row)
             db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('forget failed')
+            return jsonify(ok=False), 500
         return jsonify(ok=True)
 
 

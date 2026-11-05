@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
   <link rel="stylesheet" href="/static/chat.css?v=20261020">
-  <link rel="stylesheet" href="/static/tutor.css?v=20261035">
+  <link rel="stylesheet" href="/static/tutor.css?v=20261036">
 </head>
 <body class="app on-light tutor-page">
 
@@ -31,6 +31,7 @@
   <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.500C4 4.700 4.700 4 5.500 4H11v15H5.500C4.700 19 4 18.300 4 17.500v-12Z"/><path d="M20 5.500c0-.8-.7-1.500-1.500-1.500H13v15h5.500c.8 0 1.500-.7 1.500-1.500v-12Z"/></g></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></symbol>
   <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5.5v13M16 5.5v13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></symbol>
+  <symbol id="i-memory" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></g></symbol>
   <symbol id="i-hand" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V6.5a1.5 1.5 0 0 1 3 0V11"/><path d="M11 10.5V4.5a1.5 1.5 0 0 1 3 0V11"/><path d="M14 10.5V6a1.5 1.5 0 0 1 3 0v8c0 4-2.5 6.5-6 6.5-2.6 0-4-1.5-5.2-3.7L4 13.6a1.4 1.4 0 0 1 2.4-1.4L8 14"/></g></symbol>
   <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.500" width="14" height="9.500" rx="2.200"/><path d="M8.500 10.500V8a3.500 3.500 0 0 1 7 0v2.500"/></g></symbol>
   <symbol id="i-clip" viewBox="0 0 24 24"><path d="m20 11.500-8.200 8.200a5 5 0 0 1-7-7l8.600-8.600a3.300 3.300 0 0 1 4.700 4.700l-8.600 8.600a1.600 1.600 0 0 1-2.300-2.300l7.900-7.900" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -103,6 +104,29 @@
         <button type="button" role="tab" class="pane-tab" id="tab-chat" aria-selected="false" onclick="showPane('chat')"><svg><use href="#i-chat"/></svg>گفتگو</button>
       </div>
     </div>
+
+    <div class="pstrip" id="pstrip" hidden>
+      <div class="ps-main">
+        <button type="button" class="ps-lv" id="ps-lv" onclick="openMemory()" aria-label="سطح شما"><b id="ps-lv-n">۱</b><span id="ps-lv-name">نوآموز</span></button>
+        <div class="ps-xp" title="امتیاز شما">
+          <div class="ps-bar"><i id="ps-xp-fill"></i></div>
+          <span class="ps-xp-t" id="ps-xp-t">۰ / ۱۰۰</span>
+        </div>
+        <button type="button" class="ps-mem" id="ps-mem" onclick="openMemory()" aria-label="استاد دربارهٔ من چه می‌داند" title="استاد دربارهٔ من چه می‌داند"><svg><use href="#i-memory"/></svg></button>
+        <span class="xp-pop" id="xp-pop" hidden></span>
+      </div>
+      <div class="ps-cls" id="ps-cls" hidden>
+        <span class="ps-cls-t" id="ps-cls-t"></span>
+        <div class="ps-bar thin"><i id="ps-cls-fill"></i></div>
+      </div>
+    </div>
+    <div class="mem-back" id="mem-back" hidden onclick="closeMemory()"></div>
+    <aside class="mem-sheet" id="mem-sheet" hidden role="dialog" aria-label="استاد دربارهٔ شما چه می‌داند">
+      <div class="mem-head"><h3>استاد دربارهٔ شما چه می‌داند</h3><button type="button" class="icon-btn" onclick="closeMemory()" aria-label="بستن">✕</button></div>
+      <p class="mem-note">استاد این‌ها را از صنف‌های شما یاد گرفته تا درس را برای شما بسازد. هر کدام را که نمی‌خواهید پاک کنید. امتیاز و سطح شما پاک نمی‌شود.</p>
+      <div class="mem-body" id="mem-body"></div>
+      <div class="mem-foot"><button type="button" class="mem-all" id="mem-all">فراموش کردن همه</button></div>
+    </aside>
 
     <div class="classroom" data-pane="board" id="classroom">
       <div class="drop-hint" aria-hidden="true">عکس یا فایل را همین‌جا رها کنید</div>
@@ -187,13 +211,13 @@
 </template>
 
 <script src="/static/ui.js?v=20261020"></script>
-<script src="/static/board_core.js?v=20261035"></script>
-<script src="/static/board_math.js?v=20261035"></script>
-<script src="/static/board_model.js?v=20261035"></script>
-<script src="/static/board.js?v=20261035"></script>
-<script src="/static/board_student.js?v=20261035"></script>
+<script src="/static/board_core.js?v=20261036"></script>
+<script src="/static/board_math.js?v=20261036"></script>
+<script src="/static/board_model.js?v=20261036"></script>
+<script src="/static/board.js?v=20261036"></script>
+<script src="/static/board_student.js?v=20261036"></script>
 <script>window.__LIVE_VOICE = {{ "true" if live_voice else "false" }};</script>
-<script src="/static/tutor_live.js?v=20261035"></script>
-<script src="/static/tutor.js?v=20261035"></script>
+<script src="/static/tutor_live.js?v=20261036"></script>
+<script src="/static/tutor.js?v=20261036"></script>
 </body>
 </html>
