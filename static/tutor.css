@@ -247,3 +247,21 @@
 .quizcard .qz-why { margin-top: 8px; font-size: 15px; line-height: 1.9; color: var(--ink-soft); }
 .quizcard .qz-next { margin-top: 10px; padding: 8px 18px; border-radius: 999px; border: none; background: var(--ink); color: var(--paper); font: inherit; cursor: pointer; }
 .quizcard .qz-x { background: none; border: none; color: var(--ink-soft); cursor: pointer; font: inherit; font-size: 13.5px; }
+
+/* phone: the board with its toolbar below it; hand and "enough for today" live in the top bar; swipe the board to move through it */
+.top-act { display: none; }
+.swipe-ind { position: absolute; z-index: 25; top: 10px; left: 50%; transform: translateX(-50%); padding: 4px 12px; border-radius: 999px; background: rgba(12, 38, 31, .85); color: #f6f0e0; font-size: 13px; pointer-events: none; }
+.swipe-ind[hidden] { display: none; }
+@media (max-width: 700px) {
+  body.class-live .top-act { display: inline-flex; }
+  .top-stop { align-items: center; height: 34px; padding: 0 12px; border: 1px solid var(--line-light); border-radius: 999px; background: transparent; color: var(--ink-soft); font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+  .top-act.icon-btn.on { background: rgba(244, 216, 110, .35); }
+  #classroom[data-live] .board-controls { display: none !important; }
+  #classroom[data-live] .board-stage { padding-bottom: 58px; }
+  #classroom[data-live] .stu-tools { bottom: 8px; flex-wrap: nowrap; max-width: calc(100% - 12px); }
+  #classroom[data-live] .stu-btn span { display: none; }
+  #classroom[data-live] .stu-btn { padding: 8px 12px; }
+  #classroom[data-live] .stu-send { white-space: nowrap; }
+  .class-top .chat-title { font-size: 14.5px; }
+  .pane-tab { font-size: 13px; }
+}

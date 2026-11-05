@@ -294,6 +294,24 @@
     if (inflight) setWaiting(true); else { setWaiting(true); fetchNext(); }
   }
   window.boardToggle = function () { if (board) { if (board.playing) board.pause(); else board.play(); setHand(false); } };
+  // phone: the toolbar's hand button shows its state; the class bar is only shown while a live class runs
+  try {
+    new MutationObserver(function () { document.body.classList.toggle('class-live', !!$('classroom').dataset.live); }).observe($('classroom'), { attributes: true, attributeFilter: ['data-live'] });
+  } catch (err) { /* old browser: the buttons stay in the controls row */ }
+  // swipe the board sideways to look at what came before / comes next (not while the student's own pen, pointer or keyboard tool is open)
+  (function () {
+    var st = $('board-stage'), x0 = 0, y0 = 0, t0 = 0, on = false, indT = 0;
+    if (!st) return;
+    st.addEventListener('touchstart', function (e) { on = e.touches.length === 1 && !document.querySelector('.stu-btn.on'); if (on) { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now(); } }, { passive: true });
+    st.addEventListener('touchend', function (e) {
+      if (!on || !board || !board.model) return; on = false;
+      var t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+      if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.8 || Date.now() - t0 > 900) return;
+      if (dx < 0) board.next(); else board.prev();
+      var ind = $('swipe-ind'), n = stepCount();
+      if (ind && n) { ind.textContent = faNum(board.sceneIdx + 1) + ' از ' + faNum(n); ind.hidden = false; clearTimeout(indT); indT = setTimeout(function () { ind.hidden = true; }, 1400); }
+    }, { passive: true });
+  })();
   window.boardNext = function () { if (board) board.next(); };
   window.boardPrev = function () { if (board) board.prev(); };
   window.boardSpeed = function () {
@@ -302,7 +320,7 @@
     board.setSpeed(v);
     $('btn-speed').textContent = { 1: '۱', 1.25: '۱٫۲۵', 1.5: '۱٫۵', .75: '۰٫۷۵' }[v] + '×';
   };
-  function setHand(on) { handUp = on; $('btn-hand').classList.toggle('on', on); }
+  function setHand(on) { handUp = on; $('btn-hand').classList.toggle('on', on); var th = $('top-hand'); if (th) th.classList.toggle('on', on); }
   window.raiseHand = function () {
     if (live) { live.interrupt(); $('voice-record-btn').classList.remove('muted'); toast('استاد گوش می‌دهد؛ صحبت کنید.'); return; }
     if (!board || !board.model) { toast('اول یک صنف شروع کنید.'); return; }

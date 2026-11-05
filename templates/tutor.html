@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
   <link rel="stylesheet" href="/static/chat.css?v=20261020">
-  <link rel="stylesheet" href="/static/tutor.css?v=20261034">
+  <link rel="stylesheet" href="/static/tutor.css?v=20261035">
 </head>
 <body class="app on-light tutor-page">
 
@@ -96,6 +96,8 @@
       <button class="icon-btn" type="button" onclick="toggleSidebar()" aria-label="درس‌ها"><svg><use href="#i-menu"/></svg></button>
       <span class="chat-title" id="lesson-title">صنف درس</span>
       <span class="spacer"></span>
+      <button type="button" class="icon-btn top-act" id="top-hand" onclick="raiseHand()" aria-label="دست بالا" title="دست بالا"><svg><use href="#i-hand"/></svg></button>
+      <button type="button" class="top-act top-stop" id="top-stop" onclick="stopClass()" title="امروز کافی است">پایان</button>
       <div class="pane-tabs" role="tablist" aria-label="نمای صنف">
         <button type="button" role="tab" class="pane-tab active" id="tab-board" aria-selected="true" onclick="showPane('board')"><svg><use href="#i-board"/></svg>تخته</button>
         <button type="button" role="tab" class="pane-tab" id="tab-chat" aria-selected="false" onclick="showPane('chat')"><svg><use href="#i-chat"/></svg>گفتگو</button>
@@ -123,6 +125,7 @@
         </div>
         <div class="caption" id="caption" aria-live="off"></div>
         <div class="quizcard" id="quizcard" hidden></div>
+        <div class="swipe-ind" id="swipe-ind" hidden></div>
         <div class="board-controls" id="board-controls" hidden>
           <div class="ctl-row">
             <button type="button" class="ctl icon" id="btn-prev" onclick="boardPrev()" aria-label="بخش پیشین"><svg><use href="#i-prev"/></svg></button>
@@ -184,13 +187,13 @@
 </template>
 
 <script src="/static/ui.js?v=20261020"></script>
-<script src="/static/board_core.js?v=20261034"></script>
-<script src="/static/board_math.js?v=20261034"></script>
-<script src="/static/board_model.js?v=20261034"></script>
-<script src="/static/board.js?v=20261034"></script>
-<script src="/static/board_student.js?v=20261034"></script>
+<script src="/static/board_core.js?v=20261035"></script>
+<script src="/static/board_math.js?v=20261035"></script>
+<script src="/static/board_model.js?v=20261035"></script>
+<script src="/static/board.js?v=20261035"></script>
+<script src="/static/board_student.js?v=20261035"></script>
 <script>window.__LIVE_VOICE = {{ "true" if live_voice else "false" }};</script>
-<script src="/static/tutor_live.js?v=20261034"></script>
-<script src="/static/tutor.js?v=20261034"></script>
+<script src="/static/tutor_live.js?v=20261035"></script>
+<script src="/static/tutor.js?v=20261035"></script>
 </body>
 </html>

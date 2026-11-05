@@ -55,6 +55,7 @@
       });
     }).then(function (s) {
       if (s.__status !== 200 || !s.value || !s.receipt) { var er = new Error('session ' + s.__status + ': ' + (s.detail || s.error || '')); er.stage = 'session'; er.status = s.__status; throw er; }
+      self.manual = s.manual_turns === true;           // the page decides what counts as the student speaking (noise and echo do not start a reply)
       self.receipt = s.receipt; self.deadline = Number(s.allowance_deadline || 0) * 1000; self.warnAt = Number(s.warning_seconds || 120);
       self.timer = setInterval(function () { self.tick(); }, 1000);
       var pc = self.pc = new RTCPeerConnection();
@@ -166,11 +167,27 @@
       this.noteUsage(e.response && e.response.usage);
       this.afterResponse(cur, e.response);
     } else if (t === 'input_audio_buffer.speech_started') {
-      this.userSpeaking = true; this.nudged = false; this.talkAt = Date.now(); this.flush(); this.o.onState('listening');
+      this.userSpeaking = true; this.talkAt = Date.now();
+      if (this.manual) { this.sp0 = Date.now(); this.o.onState('listening'); return; }      // maybe only noise: the tutor keeps going until it is clear this is the student
+      this.nudged = false; this.flush(); this.o.onState('listening');
     } else if (t === 'input_audio_buffer.speech_stopped') {
-      this.userSpeaking = false; if (this.talkAt) { this.talkMs += Date.now() - this.talkAt; this.talkAt = 0; } this.o.onState('thinking');
+      this.userSpeaking = false; if (this.talkAt) { this.talkMs += Date.now() - this.talkAt; this.talkAt = 0; }
+      if (this.manual) {
+        var dur = Date.now() - (this.sp0 || Date.now()), me = this;
+        this.o.onState(this.responding ? 'speaking' : 'idle');
+        clearTimeout(this.tNoTx);
+        // the words normally arrive within a second; if they do not (transcription failed), a long sound still counts as the student
+        if (dur >= 1100) this.tNoTx = setTimeout(function () { me.realTurn(); }, 3000);
+        return;
+      }
+      this.o.onState('thinking');
     } else if (t === 'conversation.item.input_audio_transcription.completed') {
       var tx = (e.transcript || '').trim();
+      if (this.manual) {
+        clearTimeout(this.tNoTx);
+        if (!this.isStudent(tx)) { if (e.item_id) this.send({ type: 'conversation.item.delete', item_id: e.item_id }); this.afterNoise(); return; }
+        this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); this.realTurn(); return;
+      }
       if (tx) { this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); }
     } else if (t === 'output_audio_buffer.stopped' || t === 'output_audio_buffer.cleared') {
       this.spEnd = Date.now();                         // nothing is playing now
@@ -179,7 +196,7 @@
     } else if (t === 'error') {
       var m = e.error && e.error.message || '';
       if (global.console) console.warn('realtime error', e.error);
-      if (!/active response|cancel|no active/i.test(m)) this.o.onError('خطایی در گفتگوی صوتی رخ داد.');
+      if (!/active response|cancel|no active|item.*(not found|does not exist)|conversation\.item\.delete/i.test(m)) this.o.onError('خطایی در گفتگوی صوتی رخ داد.');
     }
   };
 
@@ -233,6 +250,41 @@
       if (self.responding) { self.needReply = true; return; }
       if (!self.userSpeaking) { self.needReply = false; self.send({ type: 'response.create' }); } else self.needReply = true;
     });
+  };
+
+  /* ───────── who is speaking: the student, or noise / the speaker's own echo ─────────
+     The server does not answer or interrupt by itself (manual turns). A sound counts as the student only when its words are real. */
+  function words(s) { return String(s || '').toLowerCase().replace(/[.,!?؟،؛:;"'«»()\-–—…]/g, ' ').split(/\s+/).filter(Boolean); }
+  var JUNK = /^(thank you|thanks|thanks for watching|bye|you|okay|ok|yeah|uh|um|hmm|mm|ah|oh|\.+)$/i;
+  P.isEcho = function (tx) {
+    var w = words(tx); if (w.length < 2) return false;
+    var recent = {}, n = 0;
+    this.transcript.slice(-4).forEach(function (t) { if (t.role === 'assistant') words(t.text).forEach(function (x) { recent[x] = 1; }); });
+    if (this.cur && this.cur.text) words(this.cur.text).forEach(function (x) { recent[x] = 1; });
+    w.forEach(function (x) { if (recent[x]) n++; });
+    return n / w.length >= 0.75;
+  };
+  P.isStudent = function (tx) {
+    var w = words(tx);
+    if (!w.length) return false;
+    if (this.isEcho(tx)) return false;
+    var talking = this.responding || Date.now() < this.spEnd;          // the tutor is speaking right now: be stricter
+    if (talking && w.length < 2) return false;
+    if (talking && JUNK.test(String(tx).trim().replace(/[.!?]+$/, ''))) return false;
+    if (!talking && w.length === 1 && w[0].length < 2) return false;
+    return true;
+  };
+  // the student really spoke: stop the tutor, show what was waiting, and let it answer
+  P.realTurn = function () {
+    clearTimeout(this.tNoTx);
+    if (!this.active || this.ending) return;
+    this.nudged = false; this.flush(); this.stopSpeaking(); this.o.onState('thinking');
+    if (this.responding) this.needReply = true; else this.send({ type: 'response.create' });
+  };
+  // a noise was ignored: if something was waiting for a quiet moment (a tool result), carry on
+  P.afterNoise = function () {
+    if (this.userSpeaking || this.responding) return;
+    if (this.needReply) { this.needReply = false; this.send({ type: 'response.create' }); }
   };
 
   // The teacher spoke a real stretch in a class without changing the board: ask once for the picture/example that goes with it.

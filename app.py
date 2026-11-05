@@ -4041,6 +4041,9 @@ def create_live_voice_session():
 
     import urllib.request
     import urllib.error
+    # Class voice: the page decides when the student really spoke (a cough, a TV or the phone speaker's own echo must not make the tutor
+    # stop or start a new answer). Set VOICE_MANUAL_TURNS=off to go back to the server deciding.
+    manual_turns = (mode == "class" and os.getenv("VOICE_MANUAL_TURNS", "on").lower() != "off")
     payload = {
         "expires_after": {"anchor": "created_at", "seconds": 30},
         "session": {
@@ -4054,8 +4057,8 @@ def create_live_voice_session():
                     "transcription": {"model": os.getenv('REALTIME_TRANSCRIBE_MODEL','gpt-live-transcribe'),
                                       "prompt": "The speaker may use Afghan Dari (دری افغانستان), Persian script, and occasional English words. Transcribe the words actually spoken; do not translate or invent text."},
                     "turn_detection": {
-                        "type": "server_vad", "create_response": True,
-                        "interrupt_response": True
+                        "type": "server_vad", "create_response": not manual_turns,
+                        "interrupt_response": not manual_turns
                     }
                 }
             }
@@ -4128,7 +4131,7 @@ def create_live_voice_session():
             {"uid": current_user.id, "mode": mode, "context": context,
              "sid": session_id, "issued": int(time.time()), "model": payload["session"]["model"]})
         return jsonify(value=result["value"], expires_at=result.get("expires_at"),
-                       receipt=receipt, mode=mode, allowance_seconds=remaining,
+                       receipt=receipt, mode=mode, allowance_seconds=remaining, manual_turns=manual_turns,
                        warning_seconds=VOICE_WARNING_SECONDS,
                        monthly_remaining_seconds=quota['monthly_remaining_seconds'],
                        allowance_deadline=int(now.replace(tzinfo=timezone.utc).timestamp())+remaining)
