@@ -312,3 +312,34 @@
   .ps-xp-t { font-size: 11.5px; }
   .xp-pop { inset-inline-start: 46px; }
 }
+
+/* quiz card v2: level badge, progress dots, hint / skip / ask the teacher, result */
+.quizcard { max-height: 56vh; overflow-y: auto; }
+.quizcard .qz-head { gap: 10px; }
+.quizcard .qz-label { padding: 2px 12px; border-radius: 999px; font-weight: 700; font-size: 13px; background: rgba(16, 38, 31, .08); color: var(--ink); }
+.quizcard .qz-label.easy { background: rgba(70, 160, 100, .18); color: #2c6b46; }
+.quizcard .qz-label.medium { background: rgba(216, 178, 90, .28); color: #7d5d17; }
+.quizcard .qz-label.hard { background: rgba(194, 87, 75, .16); color: #a2392f; }
+.quizcard .qz-label.test { background: var(--ink); color: var(--paper); }
+.quizcard .qz-count { margin-inline-start: auto; }
+.quizcard .qz-dots { display: flex; gap: 5px; margin: 2px 0 8px; flex-wrap: wrap; }
+.quizcard .qz-dots i { width: 22px; height: 5px; border-radius: 9px; background: rgba(16, 38, 31, .14); }
+.quizcard .qz-dots i.cur { background: var(--ink-soft); }
+.quizcard .qz-dots i.ok { background: #3f9a6c; }
+.quizcard .qz-dots i.no { background: #c2574b; }
+.quizcard .qz-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.quizcard .qz-act { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line-light); background: transparent; color: var(--ink-soft); font: inherit; font-size: 13.5px; cursor: pointer; }
+.quizcard .qz-act:disabled { opacity: .55; cursor: default; }
+.quizcard .qz-act.skip { margin-inline-start: auto; }
+.quizcard .qz-hint { margin-top: 8px; padding: 8px 12px; border-radius: 12px; background: rgba(216, 178, 90, .16); font-size: 14.5px; line-height: 1.9; }
+.quizcard .qz-hint[hidden] { display: none; }
+.quizcard .qz-score { font-size: 34px; font-weight: 800; text-align: center; margin: 6px 0 2px; }
+.quizcard .qz-msg { text-align: center; font-size: 16px; line-height: 1.9; }
+.quizcard .qz-sub { text-align: center; font-size: 14px; color: var(--ink-soft); margin-top: 4px; }
+.quizcard .qz-xp { text-align: center; margin-top: 8px; font-weight: 700; color: #2c6b46; }
+.quizcard .qz-res .qz-next, .quizcard .qz-score ~ .qz-next { display: block; margin: 12px auto 2px; }
+/* phone: the quiz is a sheet that rises from the bottom, so it is always fully on screen */
+@media (max-width: 700px) {
+  .quizcard { position: fixed; z-index: 70; inset-inline: 0; bottom: 0; margin: 0; max-height: 74vh; border-radius: 20px 20px 0 0; border-bottom: none; box-shadow: 0 -8px 30px rgba(0, 0, 0, .25); padding-bottom: max(14px, env(safe-area-inset-bottom)); animation: memUp .25s var(--ease); }
+  @keyframes memUp { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+}

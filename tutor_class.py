@@ -13,6 +13,7 @@ module keeps the class coherent and saved:
 Every beat is cleaned and its arithmetic re-checked by board_check.py before anyone sees it.
 """
 import json
+import threading
 import os
 import re
 from datetime import datetime, timedelta
@@ -116,7 +117,7 @@ HOW YOU SPEAK (LESS VOICE, MORE BOARD)
 - Natural spoken Afghan Dari, the way a good teacher in Kabul talks to one student: warm, relaxed, simple words, short sentences. Not Iranian Persian, not bookish or formal. Afghan words: say «موتر» (not ماشین), «شفاخانه» (not بیمارستان), «لیسه» (not دبیرستان), «صنف» (not کلاس), and «ابتدایی» for basic or elementary (never «پایه»). No lists, no markdown, no emojis, never read symbols out letter by letter. Say numbers as words.
 - SPEAK VERY LITTLE. One stretch of speech is ONE or TWO short sentences (about 10-25 words), never more. The board and the pictures do the teaching; your voice only points at them, names them, and asks. Never give a paragraph. Never read what is on the board aloud, and never say the same thing twice in other words. Do not explain everything in speech: draw it.
 - EVERY stretch of speech comes with a board call: a picture, a worked example, a number line, a table, a short label or formula. Teach through EXAMPLES all the time (nān, apples, afghani coins, a moving موتر, the bazaar): one tiny concrete example drawn on the board is worth more than a long explanation. Idea → example drawn → a quick question or a practice task → next idea.
-- PRACTICE AND QUIZZES ARE HALF OF THE CLASS. After each idea give the student something to do: a tiny question to answer aloud, a «yourturn» task on the board, or the tool "make_quiz" for a short quiz card (use it every idea or two, and whenever they ask for practice). Check their answer, then go on. Quizzes need no talking.
+- PRACTICE AND QUIZZES ARE HALF OF THE CLASS. After each idea give the student something to do: a tiny question to answer aloud, a «yourturn» task on the board, or the tool "make_quiz" for a quiz card of 5+ questions (use it every idea or two, and whenever they ask for practice; the first quiz of a class is easy, then medium, then hard). Check their answer, then go on. Quizzes need no talking. At the END of the class, when all steps are done, call "make_test" for the final test, then explain the weak parts it shows.
 - If the student asks a question, answer in ONE or TWO sentences and show the answer on the board with an example. Do not give a spoken lecture. If they want more, draw the next example.
 - HARD PROBLEMS: for any multi-step calculation, proof, tricky physics or maths problem, or when you are not completely sure, say one short sentence and call the tool "expert" with the full problem; then teach its steps on the board in your own short words. Do not solve hard things in your head.
 - Speak in short stretches, then check in: a quick question, or a pause for the student to react. Never go more than about 15 seconds without involving the student or changing the board.
@@ -239,10 +240,13 @@ VOICE_TOOLS = [
          "question": {"type": "string", "description": "the full problem, with all numbers and what is asked, in English or Dari"},
          "need": {"type": "string", "description": "optional: what you need back, e.g. 'steps and final answer' or 'check this solution: ...'"}}, "required": ["question"]}},
     {"type": "function", "name": "make_quiz",
-     "description": "Give the student a short quiz card (3-6 multiple-choice questions) on what you just taught. The quiz appears under the board, the student answers by tapping, and you get the score and the mistakes afterwards. It is written in the background, so do not talk while you wait: say one short sentence («یک تمرین کوتاه برایتان آماده می‌کنم») and stop. Use it after every idea or two, and whenever the student asks for practice or a test.",
+     "description": "Give the student a quiz card (5 or more multiple-choice questions) on what you just taught. It appears under the board; the student taps answers and may skip a question, ask for a hint, or ask you to explain it. It is written in the background, so say one short sentence («یک تمرین کوتاه برایتان آماده می‌کنم») and stop talking. The difficulty rises by itself: the first quiz of a class is easy, the second medium, the third and later hard. Use it after every idea or two and whenever the student asks for practice. You get the score and the mistakes afterwards.",
      "parameters": {"type": "object", "properties": {
-         "topic": {"type": "string", "description": "exactly what to ask about, with the level (a few words in Dari or English)"},
-         "count": {"type": "integer", "description": "3 to 6"}}, "required": ["topic"]}},
+         "topic": {"type": "string", "description": "exactly what to ask about (a few words in Dari or English)"},
+         "count": {"type": "integer", "description": "5 to 8, default 5"}}, "required": ["topic"]}},
+    {"type": "function", "name": "make_test",
+     "description": "The FINAL TEST of the class: 12 questions on the whole class, easy to hard, shown as a card under the board. Call it when every step of the class is done (the progress tool tells you) or when the student asks for a test or exam. Say one short sentence first and then stop talking; you get the result afterwards.",
+     "parameters": {"type": "object", "properties": {}}},
     {"type": "function", "name": "start_class",
      "description": "Call this once, when the student has asked to learn something specific, before you begin teaching it. Not for greetings or small talk.",
      "parameters": {"type": "object", "properties": {
@@ -318,6 +322,8 @@ XP_PER_STEP = 20
 XP_PER_RIGHT = 10
 XP_ALL_RIGHT_BONUS = 15
 XP_DAY_CAP = 300
+XP_TEST_PASS_BONUS = 30
+_LLM_SLOTS = threading.BoundedSemaphore(int(os.getenv('CLASS_LLM_CONCURRENCY', '3')))
 
 
 def level_info(total):
@@ -343,13 +349,19 @@ def xp_add(data, amount, today):
     return gain
 
 
-def parse_quiz(text, n=6):
-    """Validate a generated quiz: 2-6 questions, 4 distinct options, one valid answer index. Returns a clean dict or None."""
+def _quiz_state_ro(data, cid):
+    q = data.get('quiz') if isinstance(data, dict) else None
+    st = q.get(str(cid)) if isinstance(q, dict) else None
+    return st if isinstance(st, dict) else {}
+
+
+def parse_quiz(text, n=6, min_q=5):
+    """Validate a generated quiz: at least min_q good questions (4 distinct options, one valid answer index). Returns a clean dict or None."""
     d = parse_model_json(text)
     if not isinstance(d, dict) or not isinstance(d.get('questions'), list):
         return None
     out = []
-    for q in d['questions'][:6]:
+    for q in d['questions'][:16]:
         if not isinstance(q, dict):
             continue
         qt = _short(q.get('q'), 300)
@@ -363,10 +375,20 @@ def parse_quiz(text, n=6):
             continue
         if len(opts) != 4 or not all(opts) or len({o.strip() for o in opts}) != 4 or not 0 <= ans <= 3:
             continue
-        out.append({'q': qt, 'options': opts, 'answer': ans, 'why': _short(q.get('why'), 240)})
-    if len(out) < 2:
+        out.append({'q': qt, 'options': opts, 'answer': ans, 'why': _short(q.get('why'), 260),
+                    'hint': _short(q.get('hint'), 220), 'topic': _short(q.get('topic'), 60)})
+    if len(out) < max(2, min_q):
         return None
-    return {'title': _short(d.get('title'), 80) or 'تمرین', 'questions': out[:max(2, min(6, n))]}
+    return {'title': _short(d.get('title'), 80) or 'تمرین', 'questions': out[:max(2, n)]}
+
+
+QUIZ_LEVELS = ['easy', 'medium', 'hard']
+LEVEL_FA = {'easy': 'آسان', 'medium': 'متوسط', 'hard': 'دشوار'}
+QUIZ_LEVEL_RULES = {
+    'easy': 'EASY: one step, direct recall or recognition of what was just taught, small friendly numbers, wrong options that are clearly different.',
+    'medium': 'MEDIUM: apply the idea in two steps or in a short everyday problem; wrong options are the typical mistakes students make.',
+    'hard': 'HARD: multi-step reasoning, word problems or "which statement is wrong" questions, tricky but fair options; the student must really understand, not just remember.',
+}
 
 
 # ───────── small helpers ─────────
@@ -1045,7 +1067,16 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         except Exception:
             db.session.rollback()
             app.logger.exception('xp for step failed')
-        return jsonify(ok=True, step=cls.step or 0, outline=_jl(cls.outline, []), title=cls.title, xp_gain=gain, xp=info)
+        outline_now = _jl(cls.outline, [])
+        all_done, note = False, None
+        try:
+            if len(outline_now) >= 2 and (cls.step or 0) >= len(outline_now):
+                all_done = True
+                if not (_quiz_state_ro(student_data(), cls.id).get('tests')):
+                    note = 'Every step of the class is done. Say one short closing sentence and call make_test now for the final test of the class.'
+        except Exception:
+            db.session.rollback()
+        return jsonify(ok=True, step=cls.step or 0, outline=outline_now, title=cls.title, xp_gain=gain, xp=info, all_done=all_done, note=note)
 
     @app.route('/api/class/<int:cid>/poem', methods=['POST'])
     @limiter.limit('60 per minute')
@@ -1260,17 +1291,65 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
     EXPERT_SYSTEM = ("You are the expert colleague of a school tutor. Solve the problem exactly and carefully. Reply in plain text, no markdown, in at most 14 short lines: "
                      "first 'Answer:' with the final answer, then 'Steps:' with the numbered steps (each one short: the calculation and what it means), then 'Watch out:' with the usual mistake, if any. "
                      "Check every number twice. If the problem is unclear or has no single answer, say so in one line.")
-    QUIZ_SYSTEM = ("You write short multiple-choice quizzes for a school student in Afghanistan. Return one JSON object only: "
-                   '{"title": "short Dari title", "questions": [{"q": "question in Dari", "options": ["A","B","C","D"], "answer": 0, "why": "one short Dari sentence explaining the right answer"}]}. '
-                   "Exactly the requested number of questions, 4 options each (short), one correct option, 'answer' is its index 0-3. Easy to medium, starting simple. Use everyday Afghan examples. "
-                   "Write numbers, formulas and terms exactly; double-check the arithmetic and that exactly one option is right. Natural Afghan Dari, «صنف» not «کلاس», «موتر» not «ماشین». No markdown.")
+    QUIZ_SYSTEM = ("You write multiple-choice quizzes for a school student in Afghanistan, like Khan Academy exercises. Return one JSON object only: "
+                   '{"title": "short Dari title", "questions": [{"q": "question in Dari", "options": ["A","B","C","D"], "answer": 0, "topic": "2-4 word Dari topic", '
+                   '"hint": "one short Dari sentence that explains the idea needed WITHOUT giving the answer", "why": "one or two short Dari sentences explaining the right answer"}]}. '
+                   "4 short options each, exactly one correct, 'answer' is its index 0-3 (vary the position). Questions are ONLY about what this class teaches. "
+                   "Use everyday Afghan examples (nān, afghani, bazaar, موتر). Write numbers, formulas and terms exactly; double-check every calculation and that exactly one option is right. "
+                   "Natural Afghan Dari, «صنف» not «کلاس», «موتر» not «ماشین». No markdown.")
 
-    def _class_brief(cid):
-        try:
-            c = owned(cid)
-            return ((c.title or '') + ' / ' + (c.subject or ''))[:160] if c else ''
-        except Exception:
+    def _class_context(cid):
+        """What the class is about and how far it went (for questions that match what was really taught)."""
+        c = owned(cid)
+        if not c:
             return ''
+        out = _jl(c.outline, [])
+        bits = ['Class: %s' % (c.title or '')[:120], 'Subject: %s' % (c.subject or '')[:40]]
+        if out:
+            bits.append('Outline: ' + ' | '.join(str(x)[:100] for x in out[:8]) + ' (done so far: %d)' % (c.step or 0))
+        if getattr(c, 'summary', None):
+            bits.append('Summary so far: ' + str(c.summary)[:700])
+        return '\n'.join(bits)
+
+    def _quiz_state(data, cid):
+        q = data.setdefault('quiz', {})
+        if not isinstance(q, dict):
+            q = data['quiz'] = {}
+        st = q.setdefault(str(cid), {})
+        if not isinstance(st, dict):
+            st = q[str(cid)] = {}
+        while len(q) > 40:
+            q.pop(next(iter(q)))
+        return st
+
+    def _llm_slot():
+        """Slow model calls (expert, quiz, test) may not use all the server's threads."""
+        return _LLM_SLOTS.acquire(timeout=float(os.getenv('CLASS_LLM_WAIT_SECONDS', '20')))
+
+    def _quiz_token(cid, quiz, kind, level):
+        return URLSafeTimedSerializer(current_app.secret_key, salt='khayyam-quiz').dumps(
+            {'u': current_user.id, 'c': cid, 'a': [q['answer'] for q in quiz['questions']], 'n': os.urandom(6).hex(),
+             'k': kind, 'l': level, 't': [q.get('topic') or '' for q in quiz['questions']]})
+
+    def _generate(cid, ask, n, min_q, max_out, label):
+        """One quiz/test generation through the strong model. Returns (quiz or None, error text)."""
+        if not _llm_slot():
+            return None, 'the server is busy right now; ask the questions aloud instead'
+        try:
+            reply, _sw, _reset, model = metered('tutor', QUIZ_SYSTEM, [{'role': 'user', 'content': ask}], current_user.id, tier_of(current_user),
+                                                temperature=.4, max_output=max_out, level='complex', json_mode=True, intent_label=label)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('%s failed', label)
+            return None, 'could not make it now; ask the questions aloud instead'
+        finally:
+            _LLM_SLOTS.release()
+        if reply is None:
+            return None, 'the quiz maker is busy or the allowance is used up; ask the questions aloud instead'
+        quiz = parse_quiz(reply, n, min_q)
+        if not quiz:
+            return None, 'could not make a good one now; ask the questions aloud instead'
+        return quiz, ''
 
     @app.route('/api/class/<int:cid>/expert', methods=['POST'])
     @limiter.limit('20 per hour')
@@ -1284,6 +1363,8 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         need = _short(p.get('need'), 300)
         if not q:
             return jsonify(ok=False, error='give the full problem')
+        if not _llm_slot():
+            return jsonify(ok=False, error='the expert is busy; solve it step by step yourself, carefully')
         try:
             reply, _sw, _reset, model = metered('tutor', EXPERT_SYSTEM, [{'role': 'user', 'content': q + (('\nNeeded: ' + need) if need else '')}], current_user.id, tier_of(current_user),
                                                 temperature=.1, max_output=1400, level='complex', intent_label='class/expert')
@@ -1291,6 +1372,8 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             db.session.rollback()
             app.logger.exception('class_expert failed')
             return jsonify(ok=False, error='the expert is not available now; solve it step by step yourself, carefully')
+        finally:
+            _LLM_SLOTS.release()
         if reply is None:
             return jsonify(ok=False, error='the expert is busy or the allowance is used up; solve it step by step yourself, carefully')
         return jsonify(ok=True, solution=_short(reply, 3000),
@@ -1300,36 +1383,43 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
     @limiter.limit('20 per hour')
     @login_required
     def class_quiz(cid):
-        """A short quiz card for the classroom, written by the strong model in the background (no voice needed). The student answers by tapping."""
+        """A quiz card (5+ questions) written in the background by the strong model. Difficulty rises with each finished quiz of the class: easy, medium, hard."""
         if not owned(cid):
             return jsonify(ok=False, error='class not found'), 404
         p = request.get_json(silent=True) or {}
         topic = _short(p.get('topic'), 300)
         if not topic:
             return jsonify(ok=False, error='say what the quiz is about')
-        n = max(3, min(6, _int(p.get('count'), 4)))
-        ask = 'Class: %s\nTopic: %s\nNumber of questions: %d' % (_class_brief(cid), topic, n)
-        try:
-            reply, _sw, _reset, model = metered('tutor', QUIZ_SYSTEM, [{'role': 'user', 'content': ask}], current_user.id, tier_of(current_user),
-                                                temperature=.4, max_output=1600, level='complex', json_mode=True, intent_label='class/quiz')
-        except Exception:
-            db.session.rollback()
-            app.logger.exception('class_quiz failed')
-            return jsonify(ok=False, error='could not make the quiz now; ask the questions aloud instead')
-        if reply is None:
-            return jsonify(ok=False, error='the quiz maker is busy or the allowance is used up; ask the questions aloud instead')
-        quiz = parse_quiz(reply, n)
+        n = max(5, min(8, _int(p.get('count'), 5)))
+        done_n = int(_quiz_state(student_data(), cid).get('n') or 0)
+        level = QUIZ_LEVELS[min(done_n, len(QUIZ_LEVELS) - 1)]
+        ask = '%s\nQuiz about: %s\nNumber of questions: %d (at least 5)\nDifficulty: %s' % (_class_context(cid), topic, n, QUIZ_LEVEL_RULES[level])
+        quiz, err = _generate(cid, ask, n, 5, 2800, 'class/quiz')
         if not quiz:
-            return jsonify(ok=False, error='could not make a good quiz now; ask the questions aloud instead')
-        quiz['token'] = URLSafeTimedSerializer(current_app.secret_key, salt='khayyam-quiz').dumps(
-            {'u': current_user.id, 'c': cid, 'a': [q['answer'] for q in quiz['questions']], 'n': os.urandom(6).hex()})
+            return jsonify(ok=False, error=err)
+        quiz.update(kind='quiz', level=level, number=done_n + 1, label='تمرین ' + LEVEL_FA[level], token=_quiz_token(cid, quiz, 'quiz', level))
+        return jsonify(ok=True, quiz=quiz)
+
+    @app.route('/api/class/<int:cid>/test', methods=['POST'])
+    @limiter.limit('8 per hour')
+    @login_required
+    def class_test(cid):
+        """The final test of a class: 10-12 questions across the whole outline, easy to hard."""
+        if not owned(cid):
+            return jsonify(ok=False, error='class not found'), 404
+        ask = ('%s\nWrite the FINAL TEST of this whole class: exactly 12 questions covering every part of the outline evenly, ordered from easy to hard '
+               '(4 easy: direct recall; 5 medium: apply in two steps; 3 hard: multi-step reasoning or word problems). Every question has a "topic" naming the part of the class it checks.') % _class_context(cid)
+        quiz, err = _generate(cid, ask, 12, 10, 4200, 'class/test')
+        if not quiz:
+            return jsonify(ok=False, error=err)
+        quiz.update(kind='test', level='test', label='آزمون پایانی', token=_quiz_token(cid, quiz, 'test', 'test'))
         return jsonify(ok=True, quiz=quiz)
 
     @app.route('/api/class/<int:cid>/quiz_result', methods=['POST'])
     @limiter.limit('40 per hour')
     @login_required
     def class_quiz_result(cid):
-        """The student finished a quiz card: the server grades it against the signed answer key and gives XP, once per quiz."""
+        """The student finished a quiz card or the test: the server grades it against the signed answer key and gives XP, once per quiz."""
         if not owned(cid):
             return jsonify(ok=False, error='class not found'), 404
         p = request.get_json(silent=True) or {}
@@ -1340,9 +1430,17 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         if not isinstance(tok, dict) or tok.get('u') != current_user.id or tok.get('c') != cid or not isinstance(tok.get('a'), list):
             return jsonify(ok=False, error='bad quiz'), 400
         key, ans = tok['a'], p.get('answers')
+        kind, level, topics = tok.get('k') or 'quiz', tok.get('l') or 'easy', tok.get('t') or []
         if not isinstance(ans, list):
             ans = []
         right = sum(1 for i, k in enumerate(key) if i < len(ans) and _int(ans[i], -1) == k)
+        skipped = sum(1 for i in range(len(key)) if i >= len(ans) or _int(ans[i], -1) < 0)
+        wrong_topics = []
+        for i, k in enumerate(key):
+            if not (i < len(ans) and _int(ans[i], -1) == k) and i < len(topics) and topics[i] and topics[i] not in wrong_topics:
+                wrong_topics.append(topics[i])
+        per = {'easy': XP_PER_RIGHT, 'medium': XP_PER_RIGHT + 3, 'hard': XP_PER_RIGHT + 6, 'test': XP_PER_RIGHT + 3}.get(level, XP_PER_RIGHT)
+        bonus = XP_ALL_RIGHT_BONUS if key and right == len(key) else (XP_TEST_PASS_BONUS if kind == 'test' and key and right * 10 >= len(key) * 8 else 0)
         gain, info = 0, None
         try:
             data = student_data()
@@ -1353,14 +1451,21 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             if tok.get('n') not in seen:
                 seen.append(tok.get('n'))
                 del seen[:-20]
-                gain = xp_add(data, XP_PER_RIGHT * right + (XP_ALL_RIGHT_BONUS if key and right == len(key) else 0), _now().date().isoformat())
+                gain = xp_add(data, per * right + bonus, _now().date().isoformat())
+                st = _quiz_state(data, cid)
+                if kind == 'quiz' and right + (len(key) - right - skipped) > 0:      # at least one question answered: the next quiz is a level up
+                    st['n'] = int(st.get('n') or 0) + 1
+                if kind == 'test':
+                    tests = st.setdefault('tests', [])
+                    tests.append({'right': right, 'total': len(key), 'day': _now().date().isoformat(), 'weak': wrong_topics[:6]})
+                    del tests[:-5]
                 save_student(data)
                 db.session.commit()
             info = level_info((data.get('xp') or {}).get('total'))
         except Exception:
             db.session.rollback()
             app.logger.exception('xp for quiz failed')
-        return jsonify(ok=True, right=right, total=len(key), xp_gain=gain, xp=info)
+        return jsonify(ok=True, right=right, total=len(key), skipped=skipped, kind=kind, level=level, wrong_topics=wrong_topics[:6], xp_gain=gain, xp=info)
 
     @app.route('/api/class/<int:cid>/read_ink', methods=['POST'])
     @limiter.limit('60 per hour')

@@ -696,34 +696,73 @@
   function hideQuiz() { var q = $('quizcard'); if (q) { q.hidden = true; q.textContent = ''; } }
   function showQuiz(quiz, done) {
     var box = $('quizcard'); if (!box || !quiz || !quiz.questions || !quiz.questions.length) return;
-    var qs = quiz.questions, i = 0, answers = [], finished = false;
+    var qs = quiz.questions, i = 0, answers = [], finished = false, srv = null;
+    var isTest = quiz.kind === 'test';
     function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
-    function finish(skipped) {
-      if (finished) return; finished = true; hideQuiz();
+    function report() {                       // grade on the server (XP), tell the teacher
       var res = { answers: answers.slice() };
       while (res.answers.length < qs.length) res.answers.push(-1);
-      if (quiz.token && cls && answers.length) api('/api/class/' + cls.id + '/quiz_result', { token: quiz.token, answers: res.answers }).then(function (d) { if (d && d.ok) gainXP(d); });
-      if (!skipped || answers.length) { try { done(res); } catch (err) { /* ignore */ } }
+      if (quiz.token && cls && answers.length) api('/api/class/' + cls.id + '/quiz_result', { token: quiz.token, answers: res.answers }).then(function (d) {
+        if (d && d.ok) { srv = d; gainXP(d); if (box.querySelector('.qz-score')) renderResult(); }
+      });
+      try { done(res); } catch (err) { /* ignore */ }
+      return res;
+    }
+    function closeNow() {                     // closed in the middle: what was answered still counts
+      if (finished) { hideQuiz(); return; }
+      finished = true; hideQuiz();
+      if (answers.length) report();
+    }
+    function finish() { finished = true; report(); renderResult(); }
+    function right() { var n = 0; qs.forEach(function (q, k) { if (answers[k] === q.answer) n++; }); return n; }
+    function head() {
+      var h = el('div', 'qz-head'), l = el('span', 'qz-label' + (quiz.level ? ' ' + quiz.level : ''), quiz.label || quiz.title || 'تمرین');
+      h.appendChild(l);
+      h.appendChild(el('span', 'qz-count', faNum(Math.min(i + 1, qs.length)) + ' از ' + faNum(qs.length)));
+      var x = el('button', 'qz-x', 'بستن'); x.type = 'button'; x.onclick = closeNow; h.appendChild(x); box.appendChild(h);
+      var dots = el('div', 'qz-dots');
+      qs.forEach(function (q, k) { var d = el('i', k === i && !finished ? 'cur' : (answers[k] === undefined ? '' : (answers[k] === q.answer ? 'ok' : 'no'))); dots.appendChild(d); });
+      box.appendChild(dots);
+    }
+    function renderResult() {
+      box.textContent = ''; box.hidden = false; i = qs.length;
+      var h = el('div', 'qz-head'); h.appendChild(el('span', 'qz-label' + (quiz.level ? ' ' + quiz.level : ''), (quiz.label || 'تمرین') + ' · نتیجه'));
+      var x = el('button', 'qz-x', 'بستن'); x.type = 'button'; x.onclick = hideQuiz; h.appendChild(x); box.appendChild(h);
+      var n = qs.length, ok = srv ? srv.right : right(), sk = answers.filter(function (a) { return a < 0; }).length + (n - answers.length);
+      var pct = ok / n;
+      box.appendChild(el('div', 'qz-score', faNum(ok) + ' از ' + faNum(n)));
+      box.appendChild(el('div', 'qz-msg', pct === 1 ? 'عالی بود! همه را درست جواب دادید.' : pct >= 0.8 ? 'خیلی خوب! تقریباً همه را درست جواب دادید.' : pct >= 0.5 ? 'خوب است؛ جاهای ضعیف را با هم مرور می‌کنیم.' : 'اشکال ندارد؛ همین‌جا یاد می‌گیریم. استاد برایتان دوباره توضیح می‌دهد.'));
+      if (sk) box.appendChild(el('div', 'qz-sub', faNum(sk) + ' پرسش را رد کردید'));
+      if (srv && srv.xp_gain) box.appendChild(el('div', 'qz-xp', '+' + faNum(srv.xp_gain) + ' امتیاز'));
+      var weak = (srv && srv.wrong_topics) || [];
+      if (isTest && weak.length) box.appendChild(el('div', 'qz-sub', 'برای مرور: ' + weak.join('، ')));
+      var nb = el('button', 'qz-next', 'ادامه'); nb.type = 'button'; nb.onclick = hideQuiz; box.appendChild(nb);
     }
     function render() {
       box.textContent = ''; box.hidden = false;
-      var head = el('div', 'qz-head'); head.appendChild(el('span', '', (quiz.title || 'تمرین') + ' · ' + faNum(i + 1) + ' از ' + faNum(qs.length)));
-      var x = el('button', 'qz-x', 'بستن'); x.type = 'button'; x.onclick = function () { finish(true); }; head.appendChild(x); box.appendChild(head);
+      head();
       var q = qs[i]; box.appendChild(el('div', 'qz-q', q.q));
-      var opts = el('div', 'qz-opts'), btns = [];
+      var opts = el('div', 'qz-opts'), btns = [], acts = el('div', 'qz-acts'), hintBox = el('div', 'qz-hint'); hintBox.hidden = true;
+      function reveal(k) {                    // k = chosen index, or -1 when skipped
+        answers[i] = k;
+        btns.forEach(function (bb, kk) { bb.disabled = true; if (kk === q.answer) bb.classList.add('right'); else if (kk === k) bb.classList.add('wrong'); });
+        acts.remove(); hintBox.hidden = true;
+        box.appendChild(el('div', 'qz-why', (k === q.answer ? 'درست ✓ ' : k < 0 ? 'پاسخ درست این بود. ' : 'درست نیست. ') + (q.why || '')));
+        var nb = el('button', 'qz-next', i + 1 < qs.length ? 'بعدی' : 'دیدن نتیجه'); nb.type = 'button';
+        nb.onclick = function () { if (i + 1 < qs.length) { i++; render(); } else finish(); };
+        box.appendChild(nb);
+        var dots = box.querySelectorAll('.qz-dots i'); if (dots[i]) dots[i].className = k === q.answer ? 'ok' : 'no';
+      }
       q.options.forEach(function (t, k) {
         var b = el('button', 'qz-opt', t); b.type = 'button'; btns.push(b);
-        b.onclick = function () {
-          if (answers.length > i) return; answers[i] = k;
-          btns.forEach(function (bb, kk) { bb.disabled = true; if (kk === q.answer) bb.classList.add('right'); else if (kk === k) bb.classList.add('wrong'); });
-          if (q.why) box.appendChild(el('div', 'qz-why', (k === q.answer ? 'درست ✓ ' : 'درست نیست. ') + q.why));
-          var nb = el('button', 'qz-next', i + 1 < qs.length ? 'بعدی' : 'پایان'); nb.type = 'button';
-          nb.onclick = function () { if (i + 1 < qs.length) { i++; render(); } else finish(false); };
-          box.appendChild(nb);
-        };
+        b.onclick = function () { if (answers[i] !== undefined) return; reveal(k); };
         opts.appendChild(b);
       });
       box.appendChild(opts);
+      if (q.hint) { var hb = el('button', 'qz-act', 'کمک'); hb.type = 'button'; hb.onclick = function () { hintBox.textContent = q.hint; hintBox.hidden = false; hb.disabled = true; }; acts.appendChild(hb); }
+      if (live && live.active) { var ab = el('button', 'qz-act', 'از استاد بپرسم'); ab.type = 'button'; ab.onclick = function () { if (live.explainQuestion(q, i + 1)) { ab.disabled = true; ab.textContent = 'استاد توضیح می‌دهد…'; } }; acts.appendChild(ab); }
+      var sb = el('button', 'qz-act skip', 'رد کردن'); sb.type = 'button'; sb.onclick = function () { if (answers[i] === undefined) reveal(-1); }; acts.appendChild(sb);
+      box.appendChild(acts); box.appendChild(hintBox);
     }
     render();
   }

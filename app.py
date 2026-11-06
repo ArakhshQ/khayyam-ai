@@ -32,6 +32,7 @@ import poetry_search
 import media as media_store
 import chat_tools
 import metering as metering_mod
+import monitor
 import dari_text
 from metering import (VOICE_PLANS, voice_usd_cap, voice_usd_daily_cap, SESSION_MAX_SECONDS, settle_live_floor, breaker_open,
     global_spend_today_micro, tool_tier, ensure_storage as ensure_api_meter, reserve as reserve_api,
@@ -61,8 +62,10 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
 if not database_url.startswith("sqlite"):
     # Supabase drops idle connections: validate on checkout and recycle before it does.
+    # one connection per busy thread: 12 threads per worker by default, so 8 + 6 (Supabase allows far more than 2 workers x 14)
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 280,
-                                               'pool_size': 5, 'max_overflow': 5}
+                                               'pool_size': int(os.getenv('DB_POOL_SIZE', '8')), 'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '6')),
+                                               'pool_timeout': 20}
 
 # Render terminates TLS in front of us: trust exactly one proxy for scheme and host.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=0, x_proto=1, x_host=1)
@@ -1107,6 +1110,17 @@ def profile_page():
 def pricing_page():
     return render_template("pricing.html")
 
+def _legal_ctx():
+    return {'contact_email': (os.getenv('CONTACT_EMAIL') or os.getenv('SMTP_FROM') or '').strip()}
+
+@app.route("/privacy")
+def privacy_page():
+    return render_template("privacy.html", page='privacy', **_legal_ctx())
+
+@app.route("/terms")
+def terms_page():
+    return render_template("terms.html", page='terms', **_legal_ctx())
+
 @app.route("/api/register", methods=["POST"])
 @limiter.limit("5 per hour")
 def api_register():
@@ -1805,6 +1819,40 @@ def tutor_page(class_id=None):
 @app.route("/tutor/classic")
 def tutor_classic_page():
     return render_template("tutor_classic.html")
+
+monitor.init(lambda to, subject, heading, body, lines: send_card_email(to, subject, heading, body, lines))
+
+
+@app.route('/healthz')
+@limiter.exempt
+def healthz():
+    """For uptime monitors (UptimeRobot, Render health check): 200 only if the database answers."""
+    try:
+        db.session.execute(sql_text('SELECT 1'))
+        return jsonify(ok=True, db=True, uptime=monitor.uptime_seconds()), 200
+    except Exception:
+        try: db.session.rollback()
+        except Exception: pass
+        app.logger.exception('healthz: database check failed')
+        return jsonify(ok=False, db=False), 503
+
+
+@app.route('/api/admin/health')
+@login_required
+@admin_required
+def admin_health():
+    """Admin: is monitoring wired up, today's spend against the limit, and the latest server errors."""
+    limit = float(os.getenv('GLOBAL_DAILY_USD_LIMIT', '100') or 0)
+    try:
+        spend = round(global_spend_today_micro(db) / 1e6, 2)
+    except Exception:
+        try: db.session.rollback()
+        except Exception: pass
+        spend = None
+    return jsonify(ok=True, alerts_configured=monitor.configured(), spend_today=spend, daily_limit=limit,
+                   uptime_seconds=monitor.uptime_seconds(), gemini=bool(os.getenv('GEMINI_API_KEY')),
+                   smtp=_smtp_configured(), errors=monitor.recent_errors()[:30])
+
 
 @app.route("/admin")
 @login_required

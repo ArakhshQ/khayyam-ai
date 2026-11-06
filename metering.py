@@ -98,6 +98,11 @@ def global_spend_today_micro(db, fresh=False):
     except Exception:
         db.session.rollback()          # voice table not created yet (nothing spent on voice)
     _BREAKER.update(at=_t.time(), micro=total)
+    try:
+        import monitor
+        monitor.check_spend(total, float(os.getenv('GLOBAL_DAILY_USD_LIMIT', GLOBAL_DAILY_USD_LIMIT)))
+    except Exception:
+        pass
     return total
 
 

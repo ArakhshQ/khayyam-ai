@@ -235,7 +235,7 @@
       return;
     }
     if (calls.some(function (c) { return c.item.name === 'board'; })) { this.nudged = false; this.classOn = true; }
-    var WORK = { look: 'look', find_poem: 'poem', start_class: 'start', web_search: 'search', make_picture: 'picture', expert: 'expert', make_quiz: 'quiz' };
+    var WORK = { look: 'look', find_poem: 'poem', start_class: 'start', web_search: 'search', make_picture: 'picture', expert: 'expert', make_quiz: 'quiz', make_test: 'quiz' };
     var jobs = calls.map(function (c) {
       var w = WORK[c.item.name], p = self.runCall(c, cur);
       if (w && self.o.onWork) { self.o.onWork(w, true); var off = function () { self.o.onWork(w, false); }; p.then(off, off); }
@@ -330,12 +330,12 @@
         delete d.__status; return { call_id: it.call_id, output: d };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'the expert is not available now; solve it step by step yourself, carefully' } }; });
     }
-    if (it.name === 'make_quiz') {
+    if (it.name === 'make_quiz' || it.name === 'make_test') {
       if (!self.o.onQuiz) return Promise.resolve({ call_id: it.call_id, output: { ok: false, error: 'ask the questions aloud instead' } });
-      return post('/api/class/' + id + '/quiz', { topic: args.topic, count: args.count }).then(function (d) {
+      return post('/api/class/' + id + (it.name === 'make_test' ? '/test' : '/quiz'), { topic: args.topic, count: args.count }).then(function (d) {
         if (!d.ok || !d.quiz) return { call_id: it.call_id, output: { ok: false, error: d.error || 'could not make the quiz now; ask the questions aloud instead' } };
         self.o.onQuiz(d.quiz, function (res) { self.quizDone(d.quiz, res); });
-        return { call_id: it.call_id, quiet: true, output: { ok: true, note: 'The quiz card is on screen with ' + d.quiz.questions.length + ' questions. Say nothing more now and wait: you will get the result as a message.' } };
+        return { call_id: it.call_id, quiet: true, output: { ok: true, note: 'The ' + (d.quiz.kind === 'test' ? 'final test' : 'quiz (' + d.quiz.level + ')') + ' is on screen with ' + d.quiz.questions.length + ' questions. Say nothing more now and wait: you will get the result as a message.' } };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not make the quiz now; ask the questions aloud instead' } }; });
     }
     if (it.name === 'start_class') {
@@ -352,7 +352,7 @@
     if (it.name === 'progress') {
       return post('/api/class/' + id + '/progress', { step: args.step, note: args.note, outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
         if (d.ok) self.o.onProgress(d);
-        return { call_id: it.call_id, output: { ok: !!d.ok } };
+        return { call_id: it.call_id, output: d.note ? { ok: !!d.ok, note: d.note } : { ok: !!d.ok } };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false } }; });
     }
     if (it.name === 'end_class') {
@@ -492,18 +492,31 @@
   // the student finished a quiz card: the teacher gets the score and the mistakes
   P.quizDone = function (quiz, res) {
     if (!this.active) return;
-    var wrong = [];
-    (res && res.answers || []).forEach(function (a, i) {
-      var q = quiz.questions[i];
-      if (q && a !== q.answer) wrong.push('Q' + (i + 1) + ' «' + q.q + '» student chose «' + (a >= 0 ? q.options[a] : 'no answer') + '», right is «' + q.options[q.answer] + '»');
+    var wrong = [], skipped = 0, answers = (res && res.answers) || [];
+    quiz.questions.forEach(function (q, i) {
+      var a = answers[i];
+      if (a === q.answer) return;
+      if (a == null || a < 0) skipped++;
+      wrong.push('Q' + (i + 1) + (q.topic ? ' [' + q.topic + ']' : '') + ' «' + q.q + '» ' + (a == null || a < 0 ? 'skipped' : 'student chose «' + q.options[a] + '»') + ', right is «' + q.options[q.answer] + '»');
     });
-    var n = quiz.questions.length, ok = n - wrong.length;
-    var note = '[نتیجهٔ تمرین] The student finished the quiz card: ' + ok + ' of ' + n + ' correct.' + (wrong.length ? ' Mistakes: ' + wrong.join('; ') + '.' : ' All correct.') +
-      ' React in ONE short warm sentence. If there were mistakes, show the main one on the board with a small example (clear first if needed), then give one new tiny practice step. If all correct, praise briefly and move to the next idea with a new example on the board.';
+    var n = quiz.questions.length, ok = n - wrong.length, isTest = quiz.kind === 'test';
+    var head = (isTest ? '[نتیجهٔ آزمون پایانی]' : '[نتیجهٔ تمرین ' + (quiz.level || '') + ']') + ' The student finished the ' + (isTest ? 'final test' : quiz.level + ' quiz') + ': ' + ok + ' of ' + n + ' correct' + (skipped ? ', ' + skipped + ' skipped' : '') + '.';
+    var next = isTest
+      ? ' React warmly in ONE short sentence. Then take the weakest topic(s) from the mistakes and re-teach ONE of them on the board with a fresh example (clear first if needed), then offer to continue with the next class or to practice the weak part. Do not read the whole list.'
+      : ' React in ONE short warm sentence. If there were mistakes, show the main one on the board with a small example (clear first if needed), then give one new tiny practice step. If all correct, praise briefly and move to the next idea with a new example on the board.';
+    var note = head + (wrong.length ? ' Mistakes: ' + wrong.join('; ') + '.' : ' All correct.') + next;
     this.nudged = false;
-    this.sendBoardNote(note, [], true, '[تمرین] ' + ok + '/' + n);
+    this.sendBoardNote(note, [], true, '[' + (isTest ? 'آزمون' : 'تمرین') + '] ' + ok + '/' + n);
   };
   var SHORT_REMINDER = '\n(Answer in ONE or TWO short sentences and show it ON THE BOARD with a picture or example; then a tiny practice question.)';
+  // the student asks the teacher to explain one quiz question (the card stays open)
+  P.explainQuestion = function (q, n) {
+    if (!this.active) return false;
+    this.nudged = false;
+    this.sendBoardNote('[پرسش شاگرد از تمرین] The student is stuck on quiz question ' + n + ': «' + q.q + '» with options ' + q.options.map(function (o, i) { return (i + 1) + ') ' + o; }).join(' ') +
+      '. Do NOT tell the answer. Explain the idea behind it on the board with a tiny example (one or two short sentences of speech), then say they can try again.', [], true, '[توضیح] پرسش ' + n);
+    return true;
+  };
   P.sendText = function (text) {
     if (!this.active) return false;
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + text + SHORT_REMINDER }] } });

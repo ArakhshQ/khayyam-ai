@@ -91,3 +91,5 @@ body.auth-body { min-height: 100svh; display: flex; flex-direction: column; posi
 
 @media (max-width: 480px) { .auth-card { padding: 30px 20px 24px; border-radius: 22px; } .auth-heading h1 { font-size: 31px; } }
 @media (prefers-reduced-motion: reduce) { .auth-bg::before { animation: none; } .auth-card { animation: none; } }
+.auth-consent { margin: 14px 0 10px; text-align: center; font-size: 13.5px; line-height: 1.8; color: var(--mist); }
+.auth-consent a { color: var(--gold-hi); text-decoration: none; font-weight: 600; }
