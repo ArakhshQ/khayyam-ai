@@ -30,6 +30,20 @@
     this.cur = null; this.queue = []; this.resps = []; this.spEnd = 0; this.pumpT = 0; this.transcript = []; this.muted = false; this.endT = 0;
   }
   var P = Session.prototype;
+  // Test switches, read once when the file loads (the page rewrites its address later and drops the query) and kept for this tab.
+  var FLAGS = (function () {
+    var f = { debug: false, aec: true }, q = '';
+    try { q = global.location.search || ''; } catch (e) {}
+    try {
+      if (/[?&]voicedebug=1/.test(q)) global.sessionStorage.setItem('khy_voicedebug', '1');
+      if (/[?&]voicedebug=0/.test(q)) global.sessionStorage.removeItem('khy_voicedebug');
+      if (/[?&]voiceaec=0/.test(q)) global.sessionStorage.setItem('khy_voiceaec', '0');
+      if (/[?&]voiceaec=1/.test(q)) global.sessionStorage.removeItem('khy_voiceaec');
+      f.debug = global.sessionStorage.getItem('khy_voicedebug') === '1';
+      f.aec = global.sessionStorage.getItem('khy_voiceaec') !== '0';
+    } catch (e) { f.debug = /[?&]voicedebug=1/.test(q); f.aec = !/[?&]voiceaec=0/.test(q); }
+    return f;
+  })();
 
   P.send = function (m) { if (this.dc && this.dc.readyState === 'open') this.dc.send(JSON.stringify(m)); };
 
@@ -38,8 +52,7 @@
     if (o.onStage) o.onStage('mic');
     // Test switches (not for students): ?voiceaec=0 opens the mic without echo cancellation / noise suppression (use headphones),
     // ?voicedebug=1 shows live audio quality numbers. They help tell a bad connection from a bad phone audio mode.
-    var qs = ''; try { qs = global.location.search || ''; } catch (e) {}
-    var aec = !/[?&]voiceaec=0/.test(qs);
+    var aec = FLAGS.aec;
     return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: aec, noiseSuppression: aec } }).then(function (mic) {
       self.mic = mic;
       if (o.onStage) o.onStage('session');
@@ -85,7 +98,7 @@
       }).then(function (sdp) { return pc.setRemoteDescription({ type: 'answer', sdp: sdp }); }).then(function () { return opened; });
     }).then(function () {
       self.active = true; self.startedAt = Date.now(); o.onState('connected');
-      if (/[?&]voicedebug=1/.test(qs)) self.debugStats();
+      if (FLAGS.debug) self.debugStats();
       self.needReply = false; self.classOn = !!o.resumed;
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
       if (o.firstPicture) self.putPicture(o.firstPicture);
@@ -104,18 +117,23 @@
     this.dbgT = setInterval(function () {
       if (!self.pc || self.closed) return;
       self.pc.getStats().then(function (rep) {
-        var a = null, rtt = null;
+        var a = null, rtt = null, out = null, pair = null, cands = {};
         rep.forEach(function (r) {
           if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.mediaType === 'audio')) a = r;
-          if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated && r.currentRoundTripTime != null) rtt = r.currentRoundTripTime;
+          if (r.type === 'outbound-rtp' && (r.kind === 'audio' || r.mediaType === 'audio')) out = r;
+          if (r.type === 'local-candidate' || r.type === 'remote-candidate') cands[r.id] = r;
+          if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated) { pair = r; if (r.currentRoundTripTime != null) rtt = r.currentRoundTripTime; }
         });
+        var path = '-';
+        if (pair) { var lc = cands[pair.localCandidateId] || {}, rc = cands[pair.remoteCandidateId] || {}; path = (lc.candidateType || '?') + '/' + (lc.protocol || '?') + ' > ' + (rc.candidateType || '?') + (rc.address || rc.ip ? ' ' + (rc.address || rc.ip) : ''); }
+        var sent = out ? 'mic sent: ' + out.packetsSent + ' pkts' : 'mic: -';
         if (!a) { box.textContent = 'no audio stats yet'; return; }
         var d = last ? { n: a.totalSamplesReceived - last.totalSamplesReceived, c: a.concealedSamples - last.concealedSamples, lost: a.packetsLost - last.packetsLost, rcv: a.packetsReceived - last.packetsReceived } : null;
         last = { totalSamplesReceived: a.totalSamplesReceived, concealedSamples: a.concealedSamples, packetsLost: a.packetsLost, packetsReceived: a.packetsReceived };
         var jb = a.jitterBufferEmittedCount ? Math.round(a.jitterBufferDelay / a.jitterBufferEmittedCount * 1000) : 0;
         var win = d && d.n > 0 ? (d.c / d.n * 100).toFixed(1) + '%' : '-';
         var tot = a.totalSamplesReceived ? (a.concealedSamples / a.totalSamplesReceived * 100).toFixed(1) + '%' : '-';
-        box.textContent = 'concealed last 2s: ' + win + ' | total: ' + tot + '\nlost pkts: ' + a.packetsLost + ' (+' + (d ? d.lost : 0) + ') | jitter: ' + Math.round((a.jitter || 0) * 1000) + ' ms | buffer: ' + jb + ' ms | rtt: ' + (rtt == null ? '-' : Math.round(rtt * 1000) + ' ms');
+        box.textContent = 'concealed last 2s: ' + win + ' | total: ' + tot + '\nlost pkts: ' + a.packetsLost + ' (+' + (d ? d.lost : 0) + ') | jitter: ' + Math.round((a.jitter || 0) * 1000) + ' ms | buffer: ' + jb + ' ms | rtt: ' + (rtt == null ? '-' : Math.round(rtt * 1000) + ' ms') + '\npath: ' + path + '\n' + sent + ' | aec: ' + (FLAGS.aec ? 'on' : 'off');
       }).catch(function () {});
     }, 2000);
   };

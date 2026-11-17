@@ -4122,6 +4122,9 @@ def create_live_voice_session():
             td["threshold"] = min(.95, max(.2, float(os.getenv("VOICE_VAD_THRESHOLD", "0.6"))))
             td["silence_duration_ms"] = min(2000, max(200, int(os.getenv("VOICE_VAD_SILENCE_MS", "600"))))
             td["prefix_padding_ms"] = min(1000, max(0, int(os.getenv("VOICE_VAD_PREFIX_MS", "300"))))
+            tl = os.getenv("REALTIME_TRANSCRIBE_LANG", "fa").strip().lower()     # hint for the written transcript only ("" = automatic)
+            if tl:
+                payload["session"]["audio"]["input"]["transcription"]["language"] = tl
             nr = os.getenv("REALTIME_NOISE_REDUCTION", "far_field").lower()
             if nr in ("near_field", "far_field"):
                 payload["session"]["audio"]["input"]["noise_reduction"] = {"type": nr}
