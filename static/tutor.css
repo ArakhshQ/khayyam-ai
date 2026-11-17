@@ -278,6 +278,12 @@
 .ps-bar i { position: absolute; inset-block: 0; inset-inline-start: 0; width: 0; border-radius: inherit; background: linear-gradient(to left, var(--gold-hi), var(--gold)); transition: width .8s var(--ease); }
 #ps-cls-fill { background: linear-gradient(to left, #2f8f6b, #56b78f); }
 .ps-xp-t { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
+.ps-voice { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid var(--line-light); border-radius: 999px; color: var(--ink-soft); font-size: 12.5px; white-space: nowrap; }
+.ps-voice[hidden] { display: none; }
+.ps-voice svg { width: 15px; height: 15px; }
+.ps-voice b { font-weight: 600; }
+.ps-voice.mid { color: #9a6a12; border-color: rgba(169, 130, 47, .55); }
+.ps-voice.low { color: #b8453a; border-color: rgba(194, 87, 75, .6); }
 .ps-mem { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line-light); border-radius: 50%; background: transparent; color: var(--ink-soft); cursor: pointer; }
 .ps-mem svg { width: 19px; height: 19px; }
 .ps-mem:hover, .ps-lv:hover { border-color: var(--ink-soft); }

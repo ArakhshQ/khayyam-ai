@@ -25,7 +25,7 @@ VOICE_PLANS = {
     'basic': {'price': 15, 'daily': 2400, 'monthly': 21600},
     'pro': {'price': 30, 'daily': 4500, 'monthly': 45000},
     'premium': {'price': 60, 'daily': 7200, 'monthly': 72000},
-    'tutor_pro': {'price': 90, 'daily': 10800, 'monthly': 108000},
+    'tutor_pro': {'price': 90, 'daily': 18000, 'monthly': 108000},
 }
 SESSION_MAX_SECONDS = int(os.getenv('VOICE_SESSION_MAX_SECONDS', '2400'))      # one live session never runs longer than this
 # The real voice ceiling: USD of live voice, dictation and read-aloud per calendar month (UTC), measured

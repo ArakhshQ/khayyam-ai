@@ -547,7 +547,7 @@
     api('/api/class/' + id + '/pause', { pos: board.sceneIdx }).then(function (d) {
       untyping(); closing = false;
       if (d.__status !== 200) { closing = false; Stat.fail('save', 'ذخیرهٔ صنف ممکن نشد.'); return; }
-      Stat.ok('save', 'صنف ذخیره شد ✓', 2600);
+      Stat.ok('save', 'صنف ذخیره شد ✓', 2600); loadVoice();
       cls.status = 'paused';
       var txt = 'صنف ذخیره شد. هر وقت خواستید از همین‌جا ادامه می‌دهیم.' + (d.summary ? '\n\n' + d.summary : '');
       addMessage('ai', txt, linkRow('صنف تازه', function () { newClass(); }));
@@ -1123,6 +1123,21 @@
   function loadMe() {
     api('/api/class/me').then(function (d) { if (d && d.ok) { me = d; renderStrip(); } });
   }
+  // Voice time left: the dollar caps decide it. Show the one that runs out first (today or this month).
+  function loadVoice() {
+    var el = $('ps-voice'); if (!el) return;
+    api('/api/voice/quota').then(function (q) {
+      if (!q || q.__status !== 200 || !q.usd_cap) { el.hidden = true; return; }
+      var left = q.usd_left, cap = q.usd_cap, label = 'این ماه';
+      if (q.usd_day_cap && q.usd_day_left != null && q.usd_day_left < q.usd_left) { left = q.usd_day_left; cap = q.usd_day_cap; label = 'امروز'; }
+      var pct = Math.max(0, Math.min(100, Math.round(left / Math.max(0.0001, cap) * 100)));
+      $('ps-voice-t').textContent = faNum(pct) + '٪';
+      el.className = 'ps-voice' + (pct <= 10 ? ' low' : pct <= 30 ? ' mid' : '');
+      el.title = 'صدای باقی‌مانده ' + label + ': ' + faNum(pct) + '٪';
+      el.setAttribute('aria-label', el.title);
+      el.hidden = false;
+    }).catch(function () { el.hidden = true; });
+  }
   function gainXP(d) {
     if (!d || !d.xp || !me) return;
     var before = (me.xp || {}).level || 1;
@@ -1186,7 +1201,7 @@
   if (liveWanted) $('classroom').dataset.voiceui = '1';
   applySidebar(); showStart(); renderPath(); renderSaved();
   if (isMobile()) showPane('chat');
-  loadMe();
+  loadMe(); loadVoice();
 
   fetch('/api/me').then(function (r) { return r.json(); }).then(function (d) {
     if (!d || !d.logged_in) return;
