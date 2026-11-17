@@ -344,8 +344,19 @@
 .quizcard .qz-sub { text-align: center; font-size: 14px; color: var(--ink-soft); margin-top: 4px; }
 .quizcard .qz-xp { text-align: center; margin-top: 8px; font-weight: 700; color: #2c6b46; }
 .quizcard .qz-res .qz-next, .quizcard .qz-score ~ .qz-next { display: block; margin: 12px auto 2px; }
-/* phone: the quiz is a sheet that rises from the bottom, so it is always fully on screen */
-@media (max-width: 700px) {
-  .quizcard { position: fixed; z-index: 70; inset-inline: 0; bottom: 0; margin: 0; max-height: 74vh; border-radius: 20px 20px 0 0; border-bottom: none; box-shadow: 0 -8px 30px rgba(0, 0, 0, .25); padding-bottom: max(14px, env(safe-area-inset-bottom)); animation: memUp .25s var(--ease); }
-  @keyframes memUp { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }
-}
+/* the quiz is its own view: it takes the place of the board (the chat stays); a switch above goes back to the board */
+@keyframes memUp { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+.view-switch { align-self: center; display: inline-flex; gap: 4px; padding: 3px; margin: 0 0 8px; border-radius: 999px; background: rgba(16, 38, 31, .07); }
+.view-switch[hidden] { display: none; }
+.vs { display: inline-flex; align-items: center; gap: 6px; padding: 5px 18px; border: 0; border-radius: 999px; background: transparent; color: var(--ink-soft); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.vs.on { background: var(--emerald); color: var(--paper); }
+.vs-dot { display: none; width: 7px; height: 7px; border-radius: 50%; background: #d8b25a; }
+.classroom[data-view="board"] .vs-dot { display: inline-block; }
+.classroom:not([data-view="quiz"]) .quizcard { display: none !important; }
+.classroom[data-view="quiz"] .board-pane > :not(.view-switch):not(.quizcard) { display: none !important; }
+.classroom[data-view="quiz"] .quizcard { flex: 1; min-height: 0; max-height: none; margin: 0; padding: 18px clamp(12px, 4vw, 36px) max(24px, env(safe-area-inset-bottom)); overflow-y: auto; border-radius: 16px; box-shadow: none; animation: memUp .25s var(--ease); }
+.classroom[data-view="quiz"] .quizcard > * { max-width: 640px; margin-inline: auto; }
+.classroom[data-view="quiz"] .quizcard .qz-q { font-size: 19px; }
+.classroom[data-view="quiz"] .quizcard .qz-opt { padding: 13px 16px; font-size: 17px; }
+.classroom[data-view="quiz"] .quizcard .qz-next { display: block; margin-inline: auto; padding: 10px 26px; }
+

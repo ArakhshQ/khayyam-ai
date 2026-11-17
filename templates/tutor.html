@@ -11,7 +11,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/khayyam.css?v=20261020">
   <link rel="stylesheet" href="/static/chat.css?v=20261020">
-  <link rel="stylesheet" href="/static/tutor.css?v=20261119">
+  <link rel="stylesheet" href="/static/tutor.css?v=20261121">
 </head>
 <body class="app on-light tutor-page">
 
@@ -129,11 +129,15 @@
       <div class="mem-foot"><button type="button" class="mem-all" id="mem-all">فراموش کردن همه</button></div>
     </aside>
 
-    <div class="classroom" data-pane="board" id="classroom">
+    <div class="classroom" data-pane="board" data-view="board" id="classroom">
       <div class="drop-hint" aria-hidden="true">عکس یا فایل را همین‌جا رها کنید</div>
 
       <!-- Chalkboard -->
       <section class="board-pane" aria-label="تختهٔ صنف">
+        <div class="view-switch" id="view-switch" role="tablist" aria-label="تخته یا تمرین" hidden>
+          <button type="button" role="tab" class="vs on" id="vs-board" onclick="setView('board')">تخته</button>
+          <button type="button" role="tab" class="vs" id="vs-quiz" onclick="setView('quiz')">تمرین<i class="vs-dot" aria-hidden="true"></i></button>
+        </div>
         <div class="board-stage" id="board-stage">
           <div class="stu-tools" id="stu-tools" role="toolbar" aria-label="ابزار شما روی تخته" hidden>
             <button type="button" class="stu-btn" data-tool="point" title="نشان دادن: روی تخته نشان بدهید یا دور چیزی خط بکشید" aria-label="نشان دادن"><svg><use href="#i-point"/></svg><span>نشان بده</span></button>
@@ -212,13 +216,13 @@
 </template>
 
 <script src="/static/ui.js?v=20261020"></script>
-<script src="/static/board_core.js?v=20261119"></script>
-<script src="/static/board_math.js?v=20261119"></script>
-<script src="/static/board_model.js?v=20261119"></script>
-<script src="/static/board.js?v=20261119"></script>
-<script src="/static/board_student.js?v=20261119"></script>
+<script src="/static/board_core.js?v=20261121"></script>
+<script src="/static/board_math.js?v=20261121"></script>
+<script src="/static/board_model.js?v=20261121"></script>
+<script src="/static/board.js?v=20261121"></script>
+<script src="/static/board_student.js?v=20261121"></script>
 <script>window.__LIVE_VOICE = {{ "true" if live_voice else "false" }};</script>
-<script src="/static/tutor_live.js?v=20261119"></script>
-<script src="/static/tutor.js?v=20261119"></script>
+<script src="/static/tutor_live.js?v=20261121"></script>
+<script src="/static/tutor.js?v=20261121"></script>
 </body>
 </html>

@@ -566,6 +566,12 @@
       '. Do NOT tell the answer. Explain the idea behind it on the board with a tiny example (one or two short sentences of speech), then say they can try again.', [], true, '[توضیح] پرسش ' + n);
     return true;
   };
+  // which quiz question the student is looking at (quiet: it only becomes part of what the teacher knows)
+  P.quizAt = function (q, n, total) {
+    if (!this.active) return false;
+    return this.sendBoardNote('[تمرین] The student is now on quiz question ' + n + ' of ' + total + ': «' + q.q + '» options ' + q.options.map(function (o, i) { return (i + 1) + ') ' + o; }).join(' ') +
+      ' (right answer: ' + (q.options[q.answer] || '?') + ' — NEVER say it. Stay quiet. If the student asks about this question, explain the idea on the board without giving the answer.)', [], false, '[تمرین] پرسش ' + n);
+  };
   P.sendText = function (text) {
     if (!this.active) return false;
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + text + SHORT_REMINDER }] } });

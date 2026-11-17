@@ -647,6 +647,7 @@
       onBeat: function (from, beat) {
         if (!board || !board.model) return;
         leaveLobby(true);
+        quizToBoard();
         board.setTimeline(from, [beat]);
         if (board.sceneIdx >= from || board.model.scenes.length === 1) board.gotoScene(from, true);
       },
@@ -693,11 +694,30 @@
     };
   }
   // the quiz card under the board: tap an answer, see right/wrong with the reason, next; the result goes back to the teacher
-  function hideQuiz() { var q = $('quizcard'); if (q) { q.hidden = true; q.textContent = ''; } }
+  // The quiz has its own view: while it is open it takes the place of the board (the chat stays), with a switch to look at the board.
+  var quizActive = false;
+  window.setView = function (v) {
+    if (v === 'quiz' && !quizActive) v = 'board';
+    var c = $('classroom'); if (!c) return;
+    c.dataset.view = v;
+    $('vs-board').classList.toggle('on', v === 'board'); $('vs-quiz').classList.toggle('on', v === 'quiz');
+    $('vs-board').setAttribute('aria-selected', v === 'board' ? 'true' : 'false'); $('vs-quiz').setAttribute('aria-selected', v === 'quiz' ? 'true' : 'false');
+    if (v === 'board' && board) setTimeout(function () { if (board) board.onResize(); }, 60);
+  };
+  // the teacher explains something on the board while the student is on the quiz: take them to the board
+  function quizToBoard() { if (quizActive && $('classroom').dataset.view === 'quiz') { window.setView('board'); if ($('classroom').dataset.pane === 'chat') showPane('board'); } }
+  function hideQuiz() {
+    var q = $('quizcard'); if (q) { q.hidden = true; q.textContent = ''; }
+    quizActive = false; var sw = $('view-switch'); if (sw) sw.hidden = true;
+    if ($('classroom')) window.setView('board');
+  }
   function showQuiz(quiz, done) {
     var box = $('quizcard'); if (!box || !quiz || !quiz.questions || !quiz.questions.length) return;
     var qs = quiz.questions, i = 0, answers = [], finished = false, srv = null;
     var isTest = quiz.kind === 'test';
+    quizActive = true; $('view-switch').hidden = false;
+    if ($('classroom').dataset.pane === 'chat') showPane('board');       // the student is taken straight to the quiz
+    window.setView('quiz');
     function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
     function report() {                       // grade on the server (XP), tell the teacher
       var res = { answers: answers.slice() };
@@ -742,6 +762,7 @@
       box.textContent = ''; box.hidden = false;
       head();
       var q = qs[i]; box.appendChild(el('div', 'qz-q', q.q));
+      if (live && live.active && live.quizAt) live.quizAt(q, i + 1, qs.length);      // so the teacher knows which question they are on
       var opts = el('div', 'qz-opts'), btns = [], acts = el('div', 'qz-acts'), hintBox = el('div', 'qz-hint'); hintBox.hidden = true;
       function reveal(k) {                    // k = chosen index, or -1 when skipped
         answers[i] = k;
@@ -760,7 +781,7 @@
       });
       box.appendChild(opts);
       if (q.hint) { var hb = el('button', 'qz-act', 'کمک'); hb.type = 'button'; hb.onclick = function () { hintBox.textContent = q.hint; hintBox.hidden = false; hb.disabled = true; }; acts.appendChild(hb); }
-      if (live && live.active) { var ab = el('button', 'qz-act', 'از استاد بپرسم'); ab.type = 'button'; ab.onclick = function () { if (live.explainQuestion(q, i + 1)) { ab.disabled = true; ab.textContent = 'استاد توضیح می‌دهد…'; } }; acts.appendChild(ab); }
+      if (live && live.active) { var ab = el('button', 'qz-act', 'از استاد بپرسم'); ab.type = 'button'; ab.onclick = function () { if (live.explainQuestion(q, i + 1)) { ab.disabled = true; ab.textContent = 'استاد توضیح می‌دهد…'; quizToBoard(); } }; acts.appendChild(ab); }
       var sb = el('button', 'qz-act skip', 'رد کردن'); sb.type = 'button'; sb.onclick = function () { if (answers[i] === undefined) reveal(-1); }; acts.appendChild(sb);
       box.appendChild(acts); box.appendChild(hintBox);
     }
