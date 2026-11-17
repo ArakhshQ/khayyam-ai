@@ -36,7 +36,11 @@
   P.start = function () {
     var self = this, o = this.o;
     if (o.onStage) o.onStage('mic');
-    return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (mic) {
+    // Test switches (not for students): ?voiceaec=0 opens the mic without echo cancellation / noise suppression (use headphones),
+    // ?voicedebug=1 shows live audio quality numbers. They help tell a bad connection from a bad phone audio mode.
+    var qs = ''; try { qs = global.location.search || ''; } catch (e) {}
+    var aec = !/[?&]voiceaec=0/.test(qs);
+    return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: aec, noiseSuppression: aec } }).then(function (mic) {
       self.mic = mic;
       if (o.onStage) o.onStage('session');
       // the previous session must be finished on the server first, or it still counts as "another session active"
@@ -81,12 +85,39 @@
       }).then(function (sdp) { return pc.setRemoteDescription({ type: 'answer', sdp: sdp }); }).then(function () { return opened; });
     }).then(function () {
       self.active = true; self.startedAt = Date.now(); o.onState('connected');
+      if (/[?&]voicedebug=1/.test(qs)) self.debugStats();
       self.needReply = false; self.classOn = !!o.resumed;
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
       if (o.firstPicture) self.putPicture(o.firstPicture);
       if (o.resumed) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[ادامهٔ صنف] The student is back and presses continue. This is the same class as before, not a new one: greet them and carry on from what is in your notes and on the board. Do not ask what they want to learn.' }] } });
       self.send({ type: 'response.create' });          // the teacher speaks first
     });
+  };
+
+  // Live audio quality readout (only with ?voicedebug=1). "Concealed" = audio the browser had to invent because packets
+  // arrived late or not at all: high means network/CPU trouble; near zero while it still sounds bad means the sound itself
+  // (the model or the phone's call audio mode) is the cause.
+  P.debugStats = function () {
+    var self = this, box = document.createElement('div'), last = null;
+    box.style.cssText = 'position:fixed;z-index:9999;left:6px;bottom:6px;max-width:92vw;padding:6px 9px;border-radius:8px;background:rgba(0,0,0,.78);color:#9f9;font:11px/1.5 monospace;direction:ltr;white-space:pre-wrap;pointer-events:none';
+    document.body.appendChild(box); this.dbgBox = box;
+    this.dbgT = setInterval(function () {
+      if (!self.pc || self.closed) return;
+      self.pc.getStats().then(function (rep) {
+        var a = null, rtt = null;
+        rep.forEach(function (r) {
+          if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.mediaType === 'audio')) a = r;
+          if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated && r.currentRoundTripTime != null) rtt = r.currentRoundTripTime;
+        });
+        if (!a) { box.textContent = 'no audio stats yet'; return; }
+        var d = last ? { n: a.totalSamplesReceived - last.totalSamplesReceived, c: a.concealedSamples - last.concealedSamples, lost: a.packetsLost - last.packetsLost, rcv: a.packetsReceived - last.packetsReceived } : null;
+        last = { totalSamplesReceived: a.totalSamplesReceived, concealedSamples: a.concealedSamples, packetsLost: a.packetsLost, packetsReceived: a.packetsReceived };
+        var jb = a.jitterBufferEmittedCount ? Math.round(a.jitterBufferDelay / a.jitterBufferEmittedCount * 1000) : 0;
+        var win = d && d.n > 0 ? (d.c / d.n * 100).toFixed(1) + '%' : '-';
+        var tot = a.totalSamplesReceived ? (a.concealedSamples / a.totalSamplesReceived * 100).toFixed(1) + '%' : '-';
+        box.textContent = 'concealed last 2s: ' + win + ' | total: ' + tot + '\nlost pkts: ' + a.packetsLost + ' (+' + (d ? d.lost : 0) + ') | jitter: ' + Math.round((a.jitter || 0) * 1000) + ' ms | buffer: ' + jb + ' ms | rtt: ' + (rtt == null ? '-' : Math.round(rtt * 1000) + ' ms');
+      }).catch(function () {});
+    }, 2000);
   };
 
   // what the realtime model says it used (tokens by kind): we add it up and tell the server, which prices it
@@ -543,6 +574,7 @@
     if (this.usageT) { clearTimeout(this.usageT); this.usageT = 0; }
     if (!this.reported) { this.reported = true; this.sendUsage(true); }
     clearInterval(this.timer); clearTimeout(this.endT); clearTimeout(this.pumpT);
+    if (this.dbgT) { clearInterval(this.dbgT); this.dbgT = 0; } if (this.dbgBox) { try { this.dbgBox.remove(); } catch (e) {} this.dbgBox = null; }
     try { if (this.dc) this.dc.close(); } catch (e) {}
     try { if (this.pc) this.pc.close(); } catch (e) {}
     if (this.mic) this.mic.getTracks().forEach(function (t) { t.stop(); });
