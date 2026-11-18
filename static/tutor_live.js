@@ -32,13 +32,17 @@
   var P = Session.prototype;
   // Test switches, read once when the file loads (the page rewrites its address later and drops the query) and kept for this tab.
   var FLAGS = (function () {
-    var f = { debug: false, aec: true }, q = '';
+    var f = { debug: false, aec: true, ws: null }, q = '';
     try { q = global.location.search || ''; } catch (e) {}
     try {
       if (/[?&]voicedebug=1/.test(q)) global.sessionStorage.setItem('khy_voicedebug', '1');
       if (/[?&]voicedebug=0/.test(q)) global.sessionStorage.removeItem('khy_voicedebug');
       if (/[?&]voiceaec=0/.test(q)) global.sessionStorage.setItem('khy_voiceaec', '0');
       if (/[?&]voiceaec=1/.test(q)) global.sessionStorage.removeItem('khy_voiceaec');
+      if (/[?&]voicews=1/.test(q)) global.sessionStorage.setItem('khy_voicews', '1');      // ?voicews=1: voice over a reliable connection (TCP)
+      if (/[?&]voicews=0/.test(q)) global.sessionStorage.setItem('khy_voicews', '0');      // ?voicews=0: the normal WebRTC voice
+      if (/[?&]voicews=auto/.test(q)) global.sessionStorage.removeItem('khy_voicews');
+      var w = global.sessionStorage.getItem('khy_voicews'); f.ws = w === '1' ? true : w === '0' ? false : null;
       f.debug = global.sessionStorage.getItem('khy_voicedebug') === '1';
       f.aec = global.sessionStorage.getItem('khy_voiceaec') !== '0';
     } catch (e) { f.debug = /[?&]voicedebug=1/.test(q); f.aec = !/[?&]voiceaec=0/.test(q); }
@@ -53,6 +57,7 @@
     // Test switches (not for students): ?voiceaec=0 opens the mic without echo cancellation / noise suppression (use headphones),
     // ?voicedebug=1 shows live audio quality numbers. They help tell a bad connection from a bad phone audio mode.
     var aec = FLAGS.aec;
+    if (FLAGS.ws !== false && global.RealtimeWS) global.RealtimeWS.prepare();      // the sound system may only be started inside this tap on some phones
     return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: aec, noiseSuppression: aec } }).then(function (mic) {
       self.mic = mic;
       if (o.onStage) o.onStage('session');
@@ -75,6 +80,9 @@
       self.manual = s.manual_turns === true;           // the page decides what counts as the student speaking (noise and echo do not start a reply)
       self.receipt = s.receipt; self.deadline = Number(s.allowance_deadline || 0) * 1000; self.warnAt = Number(s.warning_seconds || 120);
       self.timer = setInterval(function () { self.tick(); }, 1000);
+      var viaWs = global.RealtimeWS && (FLAGS.ws === true || (FLAGS.ws === null && s.transport === 'ws'));
+      if (viaWs) return self.connectWs(s);
+      if (global.RealtimeWS) global.RealtimeWS.discard();
       var pc = self.pc = new RTCPeerConnection();
       self.audio = document.createElement('audio'); self.audio.autoplay = true; document.body.appendChild(self.audio);
       pc.ontrack = function (e) { self.audio.srcObject = e.streams[0]; self.audio.play().catch(function () {}); };
@@ -107,6 +115,17 @@
     });
   };
 
+  // Voice over a WebSocket (TCP): same session, same events, but audio is sent and played by the page itself (see realtime_ws.js)
+  P.connectWs = function (s) {
+    var self = this, o = this.o;
+    if (o.onStage) o.onStage('connect');
+    return global.RealtimeWS.open({
+      model: s.model, key: s.value, mic: self.mic, autoInterrupt: !self.manual,
+      onEvent: function (ev) { self.onEvent(ev); },
+      onClose: function () { if (!self.closed && self.active) o.onError('ارتباط صوتی قطع شد.'); }
+    }).then(function (conn) { self.ws = conn; self.dc = conn; });
+  };
+
   // Live audio quality readout (only with ?voicedebug=1). "Concealed" = audio the browser had to invent because packets
   // arrived late or not at all: high means network/CPU trouble; near zero while it still sounds bad means the sound itself
   // (the model or the phone's call audio mode) is the cause.
@@ -115,7 +134,13 @@
     box.style.cssText = 'position:fixed;z-index:9999;left:6px;bottom:6px;max-width:92vw;padding:6px 9px;border-radius:8px;background:rgba(0,0,0,.78);color:#9f9;font:11px/1.5 monospace;direction:ltr;white-space:pre-wrap;pointer-events:none';
     document.body.appendChild(box); this.dbgBox = box;
     this.dbgT = setInterval(function () {
-      if (!self.pc || self.closed) return;
+      if (self.closed) return;
+      if (self.ws) {
+        var st = self.ws.stats();
+        box.textContent = 'TCP websocket (reliable)\nqueued: ' + st.queuedMs + ' ms | underruns: ' + st.underruns + ' | gap max: ' + st.gapMax + ' ms\nmic sent: ' + st.sent + ' | stuck: ' + st.bufferedKB + ' KB | dropped: ' + st.dropped + ' | audio: ' + st.state + ' | aec: ' + (FLAGS.aec ? 'on' : 'off');
+        return;
+      }
+      if (!self.pc) return;
       self.pc.getStats().then(function (rep) {
         var a = null, rtt = null, out = null, pair = null, cands = {};
         rep.forEach(function (r) {
@@ -599,6 +624,7 @@
     if (!this.reported) { this.reported = true; this.sendUsage(true); }
     clearInterval(this.timer); clearTimeout(this.endT); clearTimeout(this.pumpT);
     if (this.dbgT) { clearInterval(this.dbgT); this.dbgT = 0; } if (this.dbgBox) { try { this.dbgBox.remove(); } catch (e) {} this.dbgBox = null; }
+    try { if (this.ws) this.ws.close(); } catch (e) {}
     try { if (this.dc) this.dc.close(); } catch (e) {}
     try { if (this.pc) this.pc.close(); } catch (e) {}
     if (this.mic) this.mic.getTracks().forEach(function (t) { t.stop(); });

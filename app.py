@@ -4181,7 +4181,9 @@ def create_live_voice_session():
         receipt = URLSafeSerializer(app.secret_key, salt="khayyam-voice-v2").dumps(
             {"uid": current_user.id, "mode": mode, "context": context,
              "sid": session_id, "issued": int(time.time()), "model": payload["session"]["model"]})
+        transport = 'ws' if os.getenv("VOICE_TRANSPORT", "webrtc").strip().lower() in ('ws', 'websocket', 'tcp') else 'webrtc'
         return jsonify(value=result["value"], expires_at=result.get("expires_at"),
+                       transport=transport, model=payload["session"]["model"],
                        receipt=receipt, mode=mode, allowance_seconds=remaining, manual_turns=manual_turns,
                        warning_seconds=VOICE_WARNING_SECONDS,
                        monthly_remaining_seconds=quota['monthly_remaining_seconds'],

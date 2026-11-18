@@ -53,6 +53,17 @@
     if (!content) return;
     if (typeof window.khayyamVoiceRender === 'function') window.khayyamVoiceRender(role, content);
   };
+  // ?voicews=1 reliable (TCP) voice, ?voicews=0 normal WebRTC voice, ?voicews=auto: follow the server setting
+  const WS_FLAG = (() => {
+    try {
+      const q = location.search || '';
+      if (/[?&]voicews=1/.test(q)) sessionStorage.setItem('khy_voicews', '1');
+      if (/[?&]voicews=0/.test(q)) sessionStorage.setItem('khy_voicews', '0');
+      if (/[?&]voicews=auto/.test(q)) sessionStorage.removeItem('khy_voicews');
+      const w = sessionStorage.getItem('khy_voicews');
+      return w === '1' ? true : w === '0' ? false : null;
+    } catch (_) { return null; }
+  })();
   function teardown(s) {
     if (!s || s.closed) return;
     s.closed = true;
@@ -143,6 +154,7 @@
     const s = {closed:false, ending:false, saving:false, pending:[], completed:new Set(),
       assistantDrafts:new Map(), seq:0, receipt:null, pc:null, dc:null, mic:null, audio:null};
     state = s;
+    if (WS_FLAG !== false && window.RealtimeWS) window.RealtimeWS.prepare();      // some phones only start sound inside the tap
     setButton(true);
     note('در حال اتصال...', true);
     try {
@@ -169,6 +181,19 @@
           stop(s);
         }
       }, 1000);
+      const viaWs = window.RealtimeWS && (WS_FLAG === true || (WS_FLAG === null && session.transport === 'ws'));
+      if (viaWs) {
+        // reliable connection (TCP): the page sends and plays the audio itself (see realtime_ws.js)
+        s.dc = await window.RealtimeWS.open({
+          model: session.model, key: session.value, mic: s.mic, autoInterrupt: true,
+          onEvent: d => { if (!s.closed) { try { onEvent(s, d); } catch (err) { console.warn(err); } } },
+          onClose: () => { if (!s.closed) note('اتصال صوتی قطع شد. برای پایان میکروفون را بزنید.', true); }
+        });
+        if (s.closed) { try { s.dc.close(); } catch (_) {} return; }
+        note('متصل شد — صحبت کنید.', true);
+        return;
+      }
+      if (window.RealtimeWS) window.RealtimeWS.discard();
       s.pc = new RTCPeerConnection();
       s.audio = document.createElement('audio');
       s.audio.autoplay = true;
