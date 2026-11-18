@@ -651,6 +651,7 @@
         board.setTimeline(from, [beat]);
         if (board.sceneIdx >= from || board.model.scenes.length === 1) board.gotoScene(from, true);
       },
+      getPlan: function () { return cls && cls.outline && cls.outline.length > 1 ? { step: cls.step || 0, outline: cls.outline } : null; },
       onProgress: function (d) {
         if (!cls) return;
         if (Array.isArray(d.outline) && d.outline.length) cls.outline = d.outline;

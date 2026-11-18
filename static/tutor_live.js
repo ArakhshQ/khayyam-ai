@@ -133,6 +133,9 @@
     var self = this, box = document.createElement('div'), last = null;
     box.style.cssText = 'position:fixed;z-index:9999;left:6px;bottom:6px;max-width:92vw;padding:6px 9px;border-radius:8px;background:rgba(0,0,0,.78);color:#9f9;font:11px/1.5 monospace;direction:ltr;white-space:pre-wrap;pointer-events:none';
     document.body.appendChild(box); this.dbgBox = box;
+    var cp = document.createElement('button'); cp.textContent = 'copy class log'; cp.style.cssText = 'position:fixed;z-index:9999;left:6px;bottom:84px;padding:4px 9px;border-radius:8px;border:0;background:#222;color:#9f9;font:11px monospace';
+    cp.onclick = function () { var t = (self._log || []).join('\n'); try { navigator.clipboard.writeText(t); cp.textContent = 'copied ✓'; } catch (e) { cp.textContent = 'copy failed'; } setTimeout(function () { cp.textContent = 'copy class log'; }, 1800); };
+    document.body.appendChild(cp); this.dbgBtn = cp;
     this.dbgT = setInterval(function () {
       if (self.closed) return;
       if (self.ws) {
@@ -231,7 +234,7 @@
         this.spEnd = Math.max(this.spEnd, this.cur.begin + (this.cur.chars / CPS) * 1000);
       }
     } else if (t === 'response.output_audio_transcript.done') {
-      if (e.transcript && e.transcript.trim()) { this.transcript.push({ role: 'assistant', text: e.transcript.trim() }); this.o.onAiText(e.transcript.trim()); }
+      if (e.transcript && e.transcript.trim()) { this.transcript.push({ role: 'assistant', text: e.transcript.trim() }); this.o.onAiText(e.transcript.trim()); this.log('tutor', e.transcript.trim()); this.dirTutor(e.transcript.trim()); }
     } else if (t === 'response.output_item.done') {
       var it = e.item;
       if (it && it.type === 'function_call' && this.cur) this.cur.calls.push({ item: it, atChars: this.cur.chars, resp: this.cur });
@@ -259,7 +262,8 @@
       var tx = (e.transcript || '').trim();
       if (this.manual) {
         clearTimeout(this.tNoTx);
-        if (!this.isStudent(tx)) { if (e.item_id) this.send({ type: 'conversation.item.delete', item_id: e.item_id }); this.afterNoise(); return; }
+        if (!this.isStudent(tx)) { this.log('ignored', tx); if (e.item_id) this.send({ type: 'conversation.item.delete', item_id: e.item_id }); this.afterNoise(); return; }
+        this.log('student', tx); this.dirStudent(tx);
         this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); this.realTurn(); return;
       }
       if (tx) { this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); }
@@ -326,6 +330,79 @@
     });
   };
 
+  /* ───────── class director ─────────
+     The lesson state (which step, how long on it, what was asked) is kept HERE, not in the model's memory. Before each student turn
+     the teacher gets one short note with it, so it always knows where it is, never asks the same thing again and moves on.
+     The previous note is deleted each time, so notes do not pile up in the conversation. */
+  var DIR_SAME = 0.45, DIR_WRAP = 5, DIR_FORCE = 9;
+  P.dirState = function () { return this._dir || (this._dir = { step: -1, outline: null, turns: 0, qs: [], lastQ: '', asked: 0, stuAfter: 0, lastStu: '', noteId: '', n: 0, moved: '', forcing: false }); };
+  P.dirPlan = function (d) {
+    var D = this.dirState();
+    if (d && Array.isArray(d.outline) && d.outline.length) D.outline = d.outline;
+    if (d && typeof d.step === 'number' && d.step !== D.step) { D.step = d.step; D.turns = 0; D.asked = 0; D.stuAfter = 0; D.lastQ = ''; }
+  };
+  function lastQuestion(text) {
+    var m = String(text || '').match(/[^.!؟?\n]*[؟?]/g); if (!m) return '';
+    var q = m[m.length - 1].trim(); return words(q).length >= 3 ? q : '';
+  }
+  function similar(a, b) {
+    var x = words(a), y = words(b); if (!x.length || !y.length) return 0;
+    var sy = {}, inter = 0, uni = 0; y.forEach(function (w) { sy[w] = 1; });
+    var sx = {}; x.forEach(function (w) { sx[w] = 1; if (sy[w]) inter++; });
+    uni = Object.keys(sx).length + Object.keys(sy).length - inter; return uni ? inter / uni : 0;
+  }
+  // the teacher finished a spoken answer
+  P.dirTutor = function (text) {
+    if (!this.classOn) return;
+    var D = this.dirState(), q = lastQuestion(text);
+    D.turns++;
+    if (q) {
+      var again = D.qs.some(function (p) { return similar(p, q) >= DIR_SAME; });
+      D.asked = again ? D.asked + 1 : 1; D.lastQ = q; D.stuAfter = 0;
+      D.qs.push(q); if (D.qs.length > 8) D.qs.shift();
+      if (again) this.log('repeat-question', q);
+    }
+    this.dirForce();
+  };
+  P.dirStudent = function (tx) { var D = this.dirState(); D.stuAfter++; D.lastStu = String(tx || '').slice(0, 90); };
+  // far too long on one step: move the class on ourselves (the progress bar and the teacher both follow)
+  P.dirForce = function () {
+    var D = this.dirState(), me = this;
+    if (D.forcing || !D.outline || D.turns < DIR_FORCE || D.step < 0 || D.step + 1 >= D.outline.length) return;
+    D.forcing = true; this.log('auto-advance', 'step ' + D.step + ' -> ' + (D.step + 1));
+    post('/api/class/' + this.o.classId + '/progress', { step: D.step + 1, note: 'ادامه به گام بعدی' }).then(function (d) {
+      D.forcing = false;
+      if (d && d.ok) { me.o.onProgress(d); me.dirPlan(d); D.moved = d.where || ''; }
+    }).catch(function () { D.forcing = false; });
+  };
+  P.dirNote = function () {
+    if (!this.classOn) return '';
+    var D = this.dirState();
+    if ((!D.outline || D.step < 0) && this.o.getPlan) { var pl = this.o.getPlan(); if (pl) this.dirPlan(pl); }
+    if (!D.outline || D.outline.length < 2 || D.step < 0) return '';
+    var n = D.outline.length, i = Math.min(D.step, n - 1);
+    var s = '[وضعیت صنف] Step ' + (i + 1) + ' of ' + n + ': «' + D.outline[i] + '»' + (i + 1 < n ? '. Next: «' + D.outline[i + 1] + '»' : '. This is the last step') + '. Turns on this step: ' + D.turns + '.';
+    if (D.moved) { s += ' (The page just moved the class on to this step because the last one took too long: start teaching it.)'; D.moved = ''; }
+    if (D.lastQ && D.stuAfter > 0) s += ' You asked «' + D.lastQ + '» (' + D.asked + 'x) and the student answered «' + D.lastStu + '»: react to THAT answer and do not ask it again.';
+    if (D.asked >= 2) s += ' You already asked that twice: never again. Say the answer in one sentence and go on.';
+    if (D.turns >= DIR_WRAP) s += ' You have stayed long on this step: wrap it up now in one sentence, call progress with step=' + (i + 1) + ', and begin the next idea.';
+    return s + ' Teach one small idea, check once, then move on. Do not read this note aloud.';
+  };
+  P.dirInject = function () {
+    var note = this.dirNote(); if (!note) return;
+    var D = this.dirState();
+    if (D.noteId) this.send({ type: 'conversation.item.delete', item_id: D.noteId });
+    D.n++; D.noteId = 'dir' + D.n;
+    this.send({ type: 'conversation.item.create', item: { id: D.noteId, type: 'message', role: 'user', content: [{ type: 'input_text', text: note }] } });
+    this.log('note', note);
+  };
+
+  /* class log: what happened, in order (for finding problems: ?voicedebug=1 shows a copy button) */
+  P.log = function (kind, text) {
+    var L = this._log || (this._log = []); L.push((Math.round((Date.now() - (this.startedAt || Date.now())) / 1000)) + 's ' + kind + ': ' + String(text || '').replace(/\s+/g, ' ').slice(0, 220));
+    if (L.length > 300) L.shift(); global.__khyLog = L;
+  };
+
   /* ───────── who is speaking: the student, or noise / the speaker's own echo ─────────
      The server does not answer or interrupt by itself (manual turns). A sound counts as the student only when its words are real. */
   function words(s) { return String(s || '').toLowerCase().replace(/[.,!?؟،؛:;"'«»()\-–—…]/g, ' ').split(/\s+/).filter(Boolean); }
@@ -353,6 +430,7 @@
     clearTimeout(this.tNoTx);
     if (!this.active || this.ending) return;
     this.nudged = false; this.flush(); this.stopSpeaking(); this.o.onState('thinking');
+    this.dirInject();                                  // where the class is, before the teacher answers
     if (this.responding) this.needReply = true; else this.send({ type: 'response.create' });
   };
   // a noise was ignored: if something was waiting for a quiet moment (a tool result), carry on
@@ -414,7 +492,7 @@
     }
     if (it.name === 'start_class') {
       return post('/api/class/' + id + '/progress', { step: 0, note: 'شروع صنف', outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
-        if (d.ok) { d.started = true; self.classOn = true; self.o.onProgress(d); }
+        if (d.ok) { d.started = true; self.classOn = true; self.o.onProgress(d); self.dirPlan(d); self.log('start', d.title || ''); }
         return { call_id: it.call_id, output: { ok: !!d.ok, note: d.ok ? 'class started: now write the title on the board and do the pre-check' : 'give a title and an outline of 4-7 steps' } };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false } }; });
     }
@@ -425,8 +503,9 @@
     }
     if (it.name === 'progress') {
       return post('/api/class/' + id + '/progress', { step: args.step, note: args.note, outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
-        if (d.ok) self.o.onProgress(d);
-        return { call_id: it.call_id, output: d.note ? { ok: !!d.ok, note: d.note } : { ok: !!d.ok } };
+        if (d.ok) { self.o.onProgress(d); self.dirPlan(d); self.log('progress', 'step ' + d.step); }
+        var out = { ok: !!d.ok }; if (d.where) out.where = d.where; if (d.note) out.note = d.note;
+        return { call_id: it.call_id, output: out };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false } }; });
     }
     if (it.name === 'end_class') {
@@ -623,7 +702,7 @@
     if (this.usageT) { clearTimeout(this.usageT); this.usageT = 0; }
     if (!this.reported) { this.reported = true; this.sendUsage(true); }
     clearInterval(this.timer); clearTimeout(this.endT); clearTimeout(this.pumpT);
-    if (this.dbgT) { clearInterval(this.dbgT); this.dbgT = 0; } if (this.dbgBox) { try { this.dbgBox.remove(); } catch (e) {} this.dbgBox = null; }
+    if (this.dbgT) { clearInterval(this.dbgT); this.dbgT = 0; } if (this.dbgBox) { try { this.dbgBox.remove(); } catch (e) {} this.dbgBox = null; } if (this.dbgBtn) { try { this.dbgBtn.remove(); } catch (e) {} this.dbgBtn = null; }
     try { if (this.ws) this.ws.close(); } catch (e) {}
     try { if (this.dc) this.dc.close(); } catch (e) {}
     try { if (this.pc) this.pc.close(); } catch (e) {}
