@@ -331,16 +331,18 @@
   };
 
   /* ───────── class director ─────────
-     The lesson state (which step, how long on it, what was asked) is kept HERE, not in the model's memory. Before each student turn
-     the teacher gets one short note with it, so it always knows where it is, never asks the same thing again and moves on.
-     The previous note is deleted each time, so notes do not pile up in the conversation. */
-  var DIR_SAME = 0.45, DIR_WRAP = 5, DIR_FORCE = 9;
-  P.dirState = function () { return this._dir || (this._dir = { step: -1, outline: null, turns: 0, qs: [], lastQ: '', asked: 0, stuAfter: 0, lastStu: '', noteId: '', n: 0, moved: '', forcing: false }); };
+     Tracks the lesson state (step, turns, questions asked, quiz status) HERE, not in the model's memory.
+     Before each student turn the teacher gets one short context note. The note guides but does not command:
+     it tells the tutor where they are, what the student said, and whether a quiz is due.
+     The previous note is deleted each time so they do not pile up. */
+  var DIR_SAME = 0.45, DIR_NUDGE = 10, DIR_FORCE = 16;
+  P.dirState = function () { return this._dir || (this._dir = { step: -1, outline: null, turns: 0, qs: [], lastQ: '', asked: 0, stuAfter: 0, lastStu: '', noteId: '', n: 0, moved: '', forcing: false, quizDone: false, quizResult: '' }); };
   P.dirPlan = function (d) {
     var D = this.dirState();
     if (d && Array.isArray(d.outline) && d.outline.length) D.outline = d.outline;
-    if (d && typeof d.step === 'number' && d.step !== D.step) { D.step = d.step; D.turns = 0; D.asked = 0; D.stuAfter = 0; D.lastQ = ''; }
+    if (d && typeof d.step === 'number' && d.step !== D.step) { D.step = d.step; D.turns = 0; D.asked = 0; D.stuAfter = 0; D.lastQ = ''; D.quizDone = false; D.quizResult = ''; }
   };
+  P.dirQuiz = function (result) { var D = this.dirState(); D.quizDone = true; D.quizResult = result || 'done'; };
   function lastQuestion(text) {
     var m = String(text || '').match(/[^.!؟?\n]*[؟?]/g); if (!m) return '';
     var q = m[m.length - 1].trim(); return words(q).length >= 3 ? q : '';
@@ -351,7 +353,6 @@
     var sx = {}; x.forEach(function (w) { sx[w] = 1; if (sy[w]) inter++; });
     uni = Object.keys(sx).length + Object.keys(sy).length - inter; return uni ? inter / uni : 0;
   }
-  // the teacher finished a spoken answer
   P.dirTutor = function (text) {
     if (!this.classOn) return;
     var D = this.dirState(), q = lastQuestion(text);
@@ -365,7 +366,6 @@
     this.dirForce();
   };
   P.dirStudent = function (tx) { var D = this.dirState(); D.stuAfter++; D.lastStu = String(tx || '').slice(0, 90); };
-  // far too long on one step: move the class on ourselves (the progress bar and the teacher both follow)
   P.dirForce = function () {
     var D = this.dirState(), me = this;
     if (D.forcing || !D.outline || D.turns < DIR_FORCE || D.step < 0 || D.step + 1 >= D.outline.length) return;
@@ -381,12 +381,24 @@
     if ((!D.outline || D.step < 0) && this.o.getPlan) { var pl = this.o.getPlan(); if (pl) this.dirPlan(pl); }
     if (!D.outline || D.outline.length < 2 || D.step < 0) return '';
     var n = D.outline.length, i = Math.min(D.step, n - 1);
-    var s = '[وضعیت صنف] Step ' + (i + 1) + ' of ' + n + ': «' + D.outline[i] + '»' + (i + 1 < n ? '. Next: «' + D.outline[i + 1] + '»' : '. This is the last step') + '. Turns on this step: ' + D.turns + '.';
-    if (D.moved) { s += ' (The page just moved the class on to this step because the last one took too long: start teaching it.)'; D.moved = ''; }
-    if (D.lastQ && D.stuAfter > 0) s += ' You asked «' + D.lastQ + '» (' + D.asked + 'x) and the student answered «' + D.lastStu + '»: react to THAT answer and do not ask it again.';
-    if (D.asked >= 2) s += ' You already asked that twice: never again. Say the answer in one sentence and go on.';
-    if (D.turns >= DIR_WRAP) s += ' You have stayed long on this step: wrap it up now in one sentence, call progress with step=' + (i + 1) + ', and begin the next idea.';
-    return s + ' Teach one small idea, check once, then move on. Do not read this note aloud.';
+    // base: where we are
+    var s = '[وضعیت صنف] Step ' + (i + 1) + ' of ' + n + ': «' + D.outline[i] + '»' + (i + 1 < n ? '. Next: «' + D.outline[i + 1] + '»' : '. This is the last step') + '.';
+    // forced advance happened
+    if (D.moved) { s += ' The page moved the class to this new step. Start teaching it.'; D.moved = ''; }
+    // student just answered: react first
+    if (D.lastQ && D.stuAfter > 0) {
+      s += ' The student answered «' + D.lastStu + '» to your question «' + D.lastQ + '». REACT TO THEIR ANSWER FIRST: say whether they are right or wrong, explain if wrong with a different example.';
+      if (D.asked >= 2) s += ' You already asked this question ' + D.asked + ' times — do not ask it again. Give the answer in one sentence and continue.';
+    }
+    // repeat detection (even without student answer)
+    else if (D.asked >= 2) { s += ' You already asked the same question ' + D.asked + ' times. Stop asking it. Give the answer and explain differently.'; }
+    // quiz guidance
+    if (!D.quizDone && D.turns >= 3) { s += ' The student has not had a quiz on this step yet. When they show basic understanding, call make_quiz before moving on.'; }
+    if (D.quizDone && !D.moved) { s += ' A quiz was completed on this step. If the student understood, call progress with step=' + (i + 1) + ' to move on.'; }
+    // gentle nudge after a while (not a command to wrap up)
+    if (D.turns >= DIR_NUDGE && !D.quizDone) { s += ' You have been on this step for ' + D.turns + ' turns. Consider giving the quiz now and moving on.'; }
+    s += ' Do not read this note aloud.';
+    return s;
   };
   P.dirInject = function () {
     var note = this.dirNote(); if (!note) return;
@@ -658,6 +670,8 @@
       ? ' React warmly in ONE short sentence. Then take the weakest topic(s) from the mistakes and re-teach ONE of them on the board with a fresh example (clear first if needed), then offer to continue with the next class or to practice the weak part. Do not read the whole list.'
       : ' React in ONE short warm sentence. If there were mistakes, show the main one on the board with a small example (clear first if needed), then give one new tiny practice step. If all correct, praise briefly and move to the next idea with a new example on the board.';
     var note = head + (wrong.length ? ' Mistakes: ' + wrong.join('; ') + '.' : ' All correct.') + next;
+    this.dirQuiz(ok + '/' + n + (wrong.length ? ' weak' : ' perfect'));
+    this.log('quiz-result', ok + '/' + n);
     this.nudged = false;
     this.sendBoardNote(note, [], true, '[' + (isTest ? 'آزمون' : 'تمرین') + '] ' + ok + '/' + n);
   };
