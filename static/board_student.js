@@ -1,6 +1,7 @@
-/* Khayyam chalkboard: the student's side.
-   The student can (1) POINT: a gold marker follows the mouse or finger, and a stroke around or under something on the board selects it;
-   (2) WRITE with a pen (finger, stylus, mouse) in light-blue chalk; (3) TYPE text onto the board.
+/* Khayyam whiteboard: the student's side.
+   The student can (1) POINT: a gold marker follows the mouse or finger, and a stroke around or under something on the board selects it
+   (it shows as a yellow highlighter); (2) WRITE with a pen (finger, stylus, mouse) in a colour they choose: the line gets thicker
+   and thinner like real ink (stylus pressure, or the speed of the hand); (3) TYPE text onto the board, in the same marker hand as the teacher.
    Everything lives on its own canvas above the teacher's, so the lesson itself is never changed.
    The board can describe what a selection covers in exact terms (text lines, formulas, parts of a picture), and can take a snapshot,
    so the teacher is told precisely what the student means: no guessing from pixels alone.
@@ -8,7 +9,14 @@
 (function (global) {
   'use strict';
   var KB = global.KB, P = KB.Board.prototype;
-  var INK = '#9fd8ff', INK_W = 3.6, SEL = '#ffd84d', TXT_SIZE = 34;
+  var INK_W = 3.6, SEL = '#f5b400', TXT_SIZE = 34;
+  // the student's pens. The teacher is told the name of the colour the student wrote in.
+  KB.PEN_COLORS = [
+    { name: 'blue', hex: '#1f6fd1', fa: 'آبی' }, { name: 'black', hex: '#1f2a37', fa: 'سیاه' }, { name: 'red', hex: '#d1366b', fa: 'سرخ' },
+    { name: 'green', hex: '#178a4c', fa: 'سبز' }, { name: 'purple', hex: '#7a3fc4', fa: 'بنفش' }
+  ];
+  var INK = KB.PEN_COLORS[0].hex;
+  KB.penName = function (hex) { for (var i = 0; i < KB.PEN_COLORS.length; i++) if (KB.PEN_COLORS[i].hex === hex) return KB.PEN_COLORS[i].name; return 'blue'; };
 
   function inter(a, b) {
     var x0 = Math.max(a[0], b[0]), y0 = Math.max(a[1], b[1]), x1 = Math.min(a[0] + a[2], b[0] + b[2]), y1 = Math.min(a[1] + a[3], b[1] + b[3]);
@@ -18,7 +26,7 @@
   function rtl(s) { return KB.RTL_RE && KB.RTL_RE.test(s); }
 
   function st(board) {
-    if (!board.stu) board.stu = { tool: null, items: [], cur: null, hover: null, typing: null, idle: 0, fade: 0, undo: [], regions: {} };
+    if (!board.stu) board.stu = { tool: null, items: [], cur: null, hover: null, typing: null, idle: 0, fade: 0, undo: [], regions: {}, color: INK };
     return board.stu;
   }
 
@@ -41,6 +49,14 @@
     this.emit('tool', s.tool);
     return s.tool;
   };
+  P.setPenColor = function (hex) {
+    var s = st(this), ok = KB.PEN_COLORS.some(function (c) { return c.hex === hex; });
+    s.color = ok ? hex : INK;
+    if (s.typing) s.typing.el.style.color = s.color;
+    this.emit('color', s.color);
+    return s.color;
+  };
+  P.penColor = function () { return st(this).color; };
   P.studentWire = function () {
     var self = this, cv = this.cv.stu, s = st(this); if (!cv || s.wired) return; s.wired = true;
     cv.addEventListener('pointerdown', function (e) { self.stuDown(e); });
@@ -57,7 +73,7 @@
     this.commitTyping();
     try { this.cv.stu.setPointerCapture(e.pointerId); } catch (err) { }
     clearTimeout(s.idle);
-    s.cur = { k: s.tool === 'pen' ? 'p' : 'm', pts: [p], t: performance.now() };
+    s.cur = { k: s.tool === 'pen' ? 'p' : 'm', pts: [p], t: performance.now(), c: s.color, wd: [this.penWidth(e, 0)], lt: performance.now() };
     s.hover = p; this.studentDraw();
   };
   P.stuMove = function (e) {
@@ -65,7 +81,12 @@
     var p = this.toLogical(e); s.hover = p;
     if (s.cur) {
       var l = s.cur.pts[s.cur.pts.length - 1];
-      if (Math.hypot(p[0] - l[0], p[1] - l[1]) > 1.6) s.cur.pts.push(p);
+      var dd = Math.hypot(p[0] - l[0], p[1] - l[1]);
+      if (dd > 1.6) {
+        var now = performance.now(), v = dd / Math.max(4, now - s.cur.lt);          // logical px per ms
+        s.cur.pts.push(p); s.cur.lt = now;
+        if (s.cur.wd) { var w0 = s.cur.wd[s.cur.wd.length - 1], w1 = this.penWidth(e, v); s.cur.wd.push(w0 * .6 + w1 * .4); }   // smoothed, so it swells and thins gently
+      }
     }
     this.studentDraw(true);
   };
@@ -86,6 +107,11 @@
       this.studentDraw();
       clearTimeout(s.idle); s.idle = setTimeout(function () { self.emit('ink', { count: self.unsent().length }); }, 1400);
     }
+  };
+  // how wide the ink is at this moment: a stylus gives real pressure; a finger or mouse goes by speed (a quick hand leaves a thinner line)
+  P.penWidth = function (e, v) {
+    if (e && e.pointerType === 'pen' && e.pressure > 0 && e.pressure !== .5) return INK_W * (.55 + e.pressure * .95);
+    return INK_W * KB.clamp(1.22 - (v || 0) * .32, .72, 1.22);
   };
   P.ptsBox = function (pts) {
     var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
@@ -113,7 +139,7 @@
     var r = this.wrap.getBoundingClientRect(), H = this.profile.H, sc = r.width / 1000;
     var inp = document.createElement('textarea');
     inp.className = 'kb-typing'; inp.rows = 1; inp.setAttribute('dir', 'auto'); inp.setAttribute('aria-label', 'بنویسید و Enter بزنید');
-    inp.style.cssText = 'position:absolute;left:' + Math.round(Math.min(p[0], 1000 - 160) * sc) + 'px;top:' + Math.round(Math.max(0, p[1] - 18) * sc) + 'px;min-width:' + Math.round(150 * sc) + 'px;max-width:' + Math.round((1000 - Math.min(p[0], 840)) * sc - 6) + 'px;font-size:' + Math.round(TXT_SIZE * sc * 1.05) + 'px;';
+    inp.style.cssText = 'color:' + s.color + ';position:absolute;left:' + Math.round(Math.min(p[0], 1000 - 160) * sc) + 'px;top:' + Math.round(Math.max(0, p[1] - 18) * sc) + 'px;min-width:' + Math.round(150 * sc) + 'px;max-width:' + Math.round((1000 - Math.min(p[0], 840)) * sc - 6) + 'px;font-size:' + Math.round(TXT_SIZE * sc * 1.05) + 'px;';
     this.wrap.appendChild(inp);
     s.typing = { el: inp, p: p };
     inp.addEventListener('keydown', function (e) {
@@ -132,11 +158,11 @@
     var text = (t.el.value || '').trim(); this.cancelTyping();
     if (!text) return;
     text = text.slice(0, 300);
-    var item = { k: 't', text: text, x: t.p[0], y: t.p[1], size: TXT_SIZE, sent: true };
+    var item = { k: 't', text: text, x: t.p[0], y: t.p[1], size: TXT_SIZE, sent: true, c: s.color };
     s.items.push(item); s.undo.push(item); this.studentDraw();
     var b = this.itemBox(item);
     var rect = [Math.max(0, b[0] - 12), Math.max(0, b[1] - 12), b[2] + 24, b[3] + 24];
-    this.emit('typed', { text: text, rect: rect, desc: this.describeRect(rect) });
+    this.emit('typed', { text: text, rect: rect, desc: this.describeRect(rect), color: KB.penName(item.c) });
   };
   P.textLines = function (item) {
     var out = [], parts = String(item.text).split('\n'), maxW = 1000 - item.x - 12, lh = item.size * 1.5, self = this;
@@ -145,7 +171,7 @@
       if (!words.length) { out.push(''); return; }
       words.forEach(function (w) {
         var t = cur ? cur + ' ' + w : w;
-        if (cur && KB.measure(t, item.size, 'body', 600) > maxW) { out.push(cur); cur = w; } else cur = t;
+        if (cur && KB.measure(t, item.size, 'body', 500) > maxW) { out.push(cur); cur = w; } else cur = t;
       });
       out.push(cur);
     });
@@ -153,7 +179,7 @@
   };
   P.itemBox = function (it) {
     if (it.k === 't') {
-      var tl = this.textLines(it), w = 0; tl.lines.forEach(function (l) { w = Math.max(w, KB.measure(l, it.size, 'body', 600)); });
+      var tl = this.textLines(it), w = 0; tl.lines.forEach(function (l) { w = Math.max(w, KB.measure(l, it.size, 'body', 500)); });
       return [it.x, it.y - it.size * .2, Math.min(w, 1000 - it.x), tl.lines.length * tl.lh];
     }
     return this.ptsBox(it.pts);
@@ -166,21 +192,39 @@
     for (var i = 1; i < pts.length - 1; i++) { var mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2; ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my); }
     ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
   }
+  // pen ink with a width that changes along the line: each piece of the smoothed curve gets its own width (the round caps hide the joins)
+  // pen ink with a width that changes along the line. Pieces of the smoothed curve with about the same width go in one stroke
+  // (cheap on slow phones); a new stroke starts when the width has changed enough to see. Round caps hide the joins.
+  function inkPath(ctx, pts, wd, scale) {
+    if (!wd || wd.length !== pts.length || pts.length < 3) { ctx.lineWidth = INK_W * scale; strokePath(ctx, pts); ctx.stroke(); return; }
+    var px = pts[0][0], py = pts[0][1], cw = -1, open = false;
+    var q = function (w) { return Math.round(w * scale * 5) / 5; };
+    for (var i = 1; i < pts.length - 1; i++) {
+      var mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2, w = q(wd[i]);
+      if (w !== cw) { if (open) ctx.stroke(); ctx.lineWidth = w; cw = w; ctx.beginPath(); ctx.moveTo(px, py); open = true; }
+      ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+      px = mx; py = my;
+    }
+    var n = pts.length - 1;
+    if (q(wd[n]) !== cw) { if (open) ctx.stroke(); ctx.lineWidth = q(wd[n]); ctx.beginPath(); ctx.moveTo(px, py); }
+    ctx.lineTo(pts[n][0], pts[n][1]); ctx.stroke();
+  }
   P.drawStudentItems = function (ctx, items, o) {
     var self = this; o = o || {};
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     items.forEach(function (it) {
       if (o.onlyUnsent && it.sent) return;
       if (it.k === 'p') {
-        ctx.strokeStyle = o.color || INK; ctx.lineWidth = INK_W * (o.wScale || 1); ctx.globalAlpha = o.color ? 1 : .96;
-        strokePath(ctx, it.pts); ctx.stroke();
+        ctx.strokeStyle = o.color || it.c || INK; ctx.globalAlpha = 1;
+        inkPath(ctx, it.pts, it.wd, o.wScale || 1);
       } else if (it.k === 'm') {
+        // a yellow highlighter sweep with a thin amber line in it
         var age = (performance.now() - it.t) / 1000, a = age > 11 ? Math.max(0, 1 - (age - 11) / 3) : 1;
-        ctx.globalAlpha = .28 * a; ctx.strokeStyle = SEL; ctx.lineWidth = 15; ctx.shadowColor = SEL; ctx.shadowBlur = 14; strokePath(ctx, it.pts); ctx.stroke();
-        ctx.globalAlpha = .9 * a; ctx.lineWidth = 3.4; ctx.shadowBlur = 0; strokePath(ctx, it.pts); ctx.stroke();
+        ctx.globalAlpha = .32 * a; ctx.strokeStyle = '#ffd84d'; ctx.lineWidth = 18; strokePath(ctx, it.pts); ctx.stroke();
+        ctx.globalAlpha = .95 * a; ctx.strokeStyle = SEL; ctx.lineWidth = 3.2; strokePath(ctx, it.pts); ctx.stroke();
       } else if (it.k === 't') {
-        var tl = self.textLines(it); ctx.fillStyle = o.color || INK; ctx.globalAlpha = 1; ctx.textBaseline = 'top';
-        ctx.font = '600 ' + it.size + 'px Vazirmatn, system-ui, sans-serif';
+        var tl = self.textLines(it); ctx.fillStyle = o.color || it.c || INK; ctx.globalAlpha = 1; ctx.textBaseline = 'top';
+        ctx.font = '500 ' + it.size + 'px ' + KB.FAM.body;
         tl.lines.forEach(function (l, i) {
           var r = rtl(l), w = ctx.measureText(l).width;
           ctx.direction = r ? 'rtl' : 'ltr'; ctx.textAlign = 'left';
@@ -203,12 +247,12 @@
       s.raf = requestAnimationFrame(function () { s.raf = 0; self.studentDraw(); });
     }
   };
-  // "the teacher's pointer goes wherever my pointer goes": the gold chalk arrow sits on the student's cursor
+  // "the teacher's pointer goes wherever my pointer goes": the gold arrow sits on the student's cursor
   P.drawTeacherCursor = function (c, pos, trail) {
     c.save();
     c.translate(pos[0], pos[1]); c.rotate(-2.36);
-    c.shadowColor = 'rgba(244,216,110,.8)'; c.shadowBlur = 14;
-    c.fillStyle = '#f4d86e'; c.strokeStyle = 'rgba(8,28,22,.9)'; c.lineWidth = 2.2; c.lineJoin = 'round';
+    c.shadowColor = 'rgba(31,42,55,.28)'; c.shadowBlur = 8;
+    c.fillStyle = '#f5b400'; c.strokeStyle = 'rgba(31,42,55,.95)'; c.lineWidth = 2.2; c.lineJoin = 'round';
     var k = Math.max(1, (this.dpr / this.S) * .62);
     c.scale(k, k);
     c.beginPath(); c.moveTo(0, 0); c.lineTo(-30, -13); c.lineTo(-22, 0); c.lineTo(-30, 13); c.closePath(); c.fill(); c.shadowBlur = 0; c.stroke();
@@ -298,7 +342,7 @@
     items.forEach(function (it) { var b = self.ptsBox(it.pts); x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[0] + b[2]); y1 = Math.max(y1, b[1] + b[3]); });
     var H = this.profile.H, pad = 26;
     var rect = [Math.max(0, x0 - pad), Math.max(0, y0 - pad), Math.min(1000, x1 + pad) - Math.max(0, x0 - pad), Math.min(H, y1 + pad) - Math.max(0, y0 - pad)];
-    var out = { rect: rect, crop: this.snapshot({ rect: rect, inkOnly: true, targetW: 900 }), board: this.snapshot({ targetW: 1100 }), desc: this.describeRect(rect), count: items.length };
+    var out = { rect: rect, crop: this.snapshot({ rect: rect, inkOnly: true, targetW: 900 }), board: this.snapshot({ targetW: 1100 }), desc: this.describeRect(rect), count: items.length, color: KB.penName(items[items.length - 1].c) };
     items.forEach(function (it) { it.sent = true; });
     clearTimeout(s.idle);
     return out;

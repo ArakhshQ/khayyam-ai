@@ -1,4 +1,4 @@
-/* Khayyam chalkboard — lesson model.
+/* Khayyam whiteboard — lesson model.
    Turns a lesson script (scenes of actions) into positioned elements with fixed geometry and timing.
    Nothing here touches pixels, so the same model can be replayed, seeked and re-drawn at any size.
 
@@ -17,7 +17,9 @@
   ZONES.wide.left = ZONES.wide.b; ZONES.wide.right = ZONES.wide.a; ZONES.tall.left = ZONES.tall.b; ZONES.tall.right = ZONES.tall.a;
   ZONES.wide.first = ZONES.wide.a; ZONES.wide.second = ZONES.wide.b; ZONES.tall.first = ZONES.tall.a; ZONES.tall.second = ZONES.tall.b;
 
-  var FAM = { body: 'Vazirmatn, system-ui, sans-serif', display: 'Amiri, Vazirmatn, serif' };
+  // Board writing is in a marker hand (Marhey: Dari/Persian and Latin, like a teacher's whiteboard writing);
+  // formulas stay in clean Vazirmatn so fractions, powers and roots line up exactly.
+  var FAM = { body: 'Marhey, Vazirmatn, system-ui, sans-serif', display: 'Marhey, Vazirmatn, system-ui, sans-serif', math: 'Vazirmatn, system-ui, sans-serif' };
   var RTL_RE = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
   var SPEECH_CPS = 12.5;
 
@@ -109,7 +111,7 @@
     }
     function strokesOf(el, list, o) { list.forEach(function (pts) { addStroke(el, pts, o); }); growBox(el, bboxOfPts(list)); }
 
-    // shading with parallel chalk lines clipped to a polygon
+    // shading with parallel marker lines clipped to a polygon
     function hatch(poly, ang, gap, seed) {
       var out = [], c = Math.cos(ang), s = Math.sin(ang), x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
       poly.forEach(function (p) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); });
@@ -177,7 +179,7 @@
       var el = mkEl(a, 'math', 'm');
       var src = str(a.m != null ? a.m : a.t, 300); if (!src) return null;
       var sz = (typeof a.size === 'number' ? KB.clamp(a.size, 16, 110) : (KB.own(SIZES, a.size) ? SIZES[a.size] : SIZES.l) * 1.3) * P.ts;
-      function mlay(z) { return KB.mathLayout(src, z, digits, function (s2, z2) { return measure(s2, z2, 'body', 500); }); }
+      function mlay(z) { return KB.mathLayout(src, z, digits, function (s2, z2) { return measure(s2, z2, 'math', 500); }); }
       var lay = mlay(sz);
       var box, zn = KB.own(Z, a.zone) ? a.zone : (Array.isArray(a.box) || Array.isArray(a.at) ? null : 'main');
       if (Array.isArray(a.at)) { box = [num(a.at[0], 10, 0, 100) * W / 100, num(a.at[1], 10, 0, 100) * P.H / 100, lay.w, lay.asc + lay.desc]; }

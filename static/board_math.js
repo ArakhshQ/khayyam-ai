@@ -1,4 +1,4 @@
-/* Khayyam chalkboard — formulas and function plotting (no libraries).
+/* Khayyam whiteboard — formulas and function plotting (no libraries).
    Formula syntax is a small LaTeX subset:  \frac{a}{b}  x^2  x_1  \sqrt{x}  \times \div \cdot \pm \le \ge \ne \approx \pi \to  */
 (function (global) {
   'use strict';

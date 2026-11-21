@@ -3686,7 +3686,7 @@ def _voice_context(data):
     mode = data.get("mode", "chat")
     if mode not in ("chat", "tutor", "class"):
         raise ValueError("Invalid voice mode")
-    if mode == "class":                      # the live chalkboard class (tutor_class.py)
+    if mode == "class":                      # the live whiteboard class (tutor_class.py)
         hook = app.config.get("CLASS_VOICE")
         if not hook:
             raise ValueError("Class voice unavailable")

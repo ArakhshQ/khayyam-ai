@@ -1,4 +1,4 @@
-"""Khayyam chalkboard: server-side cleaning and checking of lesson beats.
+"""Khayyam whiteboard: server-side cleaning and checking of lesson beats.
 
 Everything the model writes for the board passes through `clean_beat` before it is stored or sent
 to a student's browser. It does three jobs:
@@ -14,7 +14,7 @@ import json
 import re
 from fractions import Fraction
 
-COLORS = ('white', 'yellow', 'pink', 'blue', 'green', 'orange')
+COLORS = ('white', 'black', 'yellow', 'pink', 'red', 'blue', 'green', 'orange', 'purple')
 ICONS = ('apple', 'book', 'sun', 'moon', 'star', 'tree', 'house', 'car', 'ball', 'basketball', 'drop',
          'cloud', 'flower', 'fish', 'bird', 'heart', 'pencil', 'cup', 'coin', 'bread', 'clock', 'person',
          'bulb', 'mountain', 'check', 'cross', 'arrowr', 'ruler', 'triangle', 'square', 'circle', 'magnet', 'seed')

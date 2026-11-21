@@ -1,4 +1,4 @@
-/* Khayyam chalkboard — core: random/noise, hand-drawn geometry, icons, chalk texture.
+/* Khayyam whiteboard — core: random/noise, hand-drawn geometry, icons, marker-ink texture.
    Everything here is resolution independent (logical board units); drawing to pixels happens in board.js. */
 (function (global) {
   'use strict';
@@ -32,9 +32,11 @@
   KB.ease = function (t) { return t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; };
 
   /* ───────── colours ───────── */
+  // Marker inks on a white board. The names are the ones the teacher uses; "white" is kept as the
+  // name of the default ink (older classes and prompts say "white"), and "black" means the same thing.
   KB.COLORS = {
-    white: '#f6f3e6', yellow: '#f4d86e', pink: '#f4a9bd', blue: '#8fcbf2',
-    green: '#a9deA0'.toLowerCase(), orange: '#f4a85c'
+    white: '#1f2a37', black: '#1f2a37', yellow: '#b7791f', pink: '#d1366b', red: '#d1366b',
+    blue: '#1f6fd1', green: '#178a4c', orange: '#d9661a', purple: '#7a3fc4'
   };
   KB.own = function (o, k) { return typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k); };
   KB.color = function (name) { if (typeof name === 'string' && /^#[0-9a-fA-F]{6}$/.test(name)) return name; return KB.own(KB.COLORS, name) ? KB.COLORS[name] : KB.COLORS.white; };
@@ -143,7 +145,7 @@
     return subs.filter(function (s) { return s.length > 1; });
   };
 
-  /* ───────── chalk line-art icons, drawn in a 100 x 100 box ─────────
+  /* ───────── line-art icons, drawn in a 100 x 100 box ─────────
      each icon is a list of: a path string, or ['c',cx,cy,r], ['e',cx,cy,rx,ry], ['rays',cx,cy,r1,r2,n], ['star',cx,cy,R,r] */
   KB.ICONS = {
     apple: ['M50 32 C32 18 10 30 14 56 C18 82 36 94 50 87 C64 94 82 82 86 56 C90 30 68 18 50 32 Z', 'M50 32 C50 24 52 17 57 10', 'M57 16 C67 7 79 11 81 19 C71 24 63 22 57 16 Z'],
@@ -203,21 +205,20 @@
     return out;
   };
 
-  /* ───────── chalk grain tile (white with holes); tinted per colour by caller ───────── */
+  /* ───────── marker-ink tile: almost solid, with faint streaks where the felt tip ran a little dry ───────── */
   KB.makeGrain = function (hex) {
     var c = document.createElement('canvas'); c.width = c.height = 144;
     var x = c.getContext('2d'), img = x.createImageData(144, 144), d = img.data, r = KB.rng(90210);
     var R = parseInt(hex.slice(1, 3), 16), G = parseInt(hex.slice(3, 5), 16), B = parseInt(hex.slice(5, 7), 16);
     for (var i = 0; i < d.length; i += 4) {
       var v = r(), a = 255;
-      if (v < .07) a = 70 + r() * 70;            // pits
-      else if (v < .30) a = 190 + r() * 45;      // thin spots
+      if (v < .04) a = 205 + r() * 30;          // a few lighter specks
       d[i] = R; d[i + 1] = G; d[i + 2] = B; d[i + 3] = a;
     }
-    // a few larger scratches so strokes look dragged over a rough board
     x.putImageData(img, 0, 0);
+    // soft streaks along the stroke direction
     x.globalCompositeOperation = 'destination-out';
-    for (var s = 0; s < 22; s++) { x.fillStyle = 'rgba(0,0,0,' + (.25 + r() * .4) + ')'; x.fillRect(r() * 144, r() * 144, 1 + r() * 9, 1 + r() * 1.4); }
+    for (var s = 0; s < 10; s++) { x.fillStyle = 'rgba(0,0,0,' + (.06 + r() * .1) + ')'; x.fillRect(r() * 144, r() * 144, 6 + r() * 26, .8 + r() * .8); }
     return c;
   };
 })(window);

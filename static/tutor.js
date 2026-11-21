@@ -1,4 +1,4 @@
-/* Tutor classroom: one continuous class on the chalkboard.
+/* Tutor classroom: one continuous class on the whiteboard.
    The teacher writes the class a few short steps at a time (/api/class/*); this file plays them on the board, keeps the next steps
    ready before they are needed, takes the student's questions and answers at any moment, and saves the place so the class can
    continue another day. */
@@ -108,7 +108,9 @@
     c.textContent = text;
     if (extra) c.appendChild(extra);
     bubble.appendChild(c); wrap.appendChild(av); wrap.appendChild(bubble);
-    $('messages').appendChild(wrap); scrollDown(); return wrap;
+    $('messages').appendChild(wrap); scrollDown();
+    if (role === 'ai') markUnread();
+    return wrap;
   }
   function linkRow(label, fn, cname) {
     var row = document.createElement('div'); row.style.marginTop = '10px'; if (cname) row.className = cname;
@@ -299,6 +301,52 @@
   try {
     new MutationObserver(function () { document.body.classList.toggle('class-live', !!$('classroom').dataset.live); }).observe($('classroom'), { attributes: true, attributeFilter: ['data-live'] });
   } catch (err) { /* old browser: the buttons stay in the controls row */ }
+
+  /* ───────── focus: in a live class on a wide screen the board has the room and the conversation is a drawer ───────── */
+  var wideMQ = window.matchMedia('(min-width: 981px)'), focusOn = false, sideWasOpen = null, dockT = 0;
+  function drawerOpen() { return $('classroom').classList.contains('drawer-open'); }
+  function setDrawer(open) {
+    var room = $('classroom'), btn = $('dock-chat');
+    room.classList.toggle('drawer-open', !!open);
+    if (btn) { btn.setAttribute('aria-expanded', open ? 'true' : 'false'); if (open) btn.classList.remove('unread'); }
+    if (open) scrollDown();
+  }
+  function markUnread() { var btn = $('dock-chat'); if (btn && focusOn && !drawerOpen()) btn.classList.add('unread'); }
+  window.toggleDrawer = function (open) {
+    if (!focusOn) { showPane(open === false ? 'board' : 'chat'); return; }
+    setDrawer(open == null ? !drawerOpen() : open);
+  };
+  function syncFocus() {
+    var room = $('classroom'), liveNow = !!room.dataset.live, boardUp = $('board-empty').hidden, dock = $('class-dock');
+    if (dock) dock.hidden = !(liveNow && boardUp);
+    var f = liveNow && boardUp && wideMQ.matches;
+    if (f === focusOn) return;
+    focusOn = f; room.classList.toggle('focus', f);
+    if (f) { sideWasOpen = sidebarOpen; if (sidebarOpen) { sidebarOpen = false; applySidebar(); } setDrawer(false); }
+    else {
+      setDrawer(false); var ub = $('dock-chat'); if (ub) ub.classList.remove('unread');
+      if (sideWasOpen && !isMobile()) { sidebarOpen = true; applySidebar(); }
+      sideWasOpen = null;
+    }
+    if (board) setTimeout(function () { if (board) board.onResize(); }, 320);
+  }
+  function dockAwake() {
+    var room = $('classroom'); room.classList.remove('dock-idle'); clearTimeout(dockT);
+    dockT = setTimeout(function () { if (room.dataset.live) room.classList.add('dock-idle'); }, 3500);
+  }
+  try {
+    var syncObs = new MutationObserver(syncFocus);
+    syncObs.observe($('classroom'), { attributes: true, attributeFilter: ['data-live'] });
+    syncObs.observe($('board-empty'), { attributes: true, attributeFilter: ['hidden'] });
+    if (wideMQ.addEventListener) wideMQ.addEventListener('change', syncFocus); else if (wideMQ.addListener) wideMQ.addListener(syncFocus);
+    // the dock's and the phone's microphone buttons show the same state as the one in the composer
+    new MutationObserver(function () {
+      var src = $('voice-record-btn');
+      ['dock-mic', 'top-mic'].forEach(function (id) { var b = $(id); if (!b) return; ['live', 'muted', 'talking'].forEach(function (k) { b.classList.toggle(k, src.classList.contains(k)); }); });
+    }).observe($('voice-record-btn'), { attributes: true, attributeFilter: ['class'] });
+  } catch (err) { /* old browser: the two-column room stays */ }
+  ['pointermove', 'pointerdown', 'keydown'].forEach(function (n) { $('classroom').addEventListener(n, dockAwake, { passive: true }); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && focusOn && drawerOpen()) setDrawer(false); });
   // swipe the board sideways to look at what came before / comes next (not while the student's own pen, pointer or keyboard tool is open)
   (function () {
     var st = $('board-stage'), x0 = 0, y0 = 0, t0 = 0, on = false, indT = 0;
@@ -321,7 +369,7 @@
     board.setSpeed(v);
     $('btn-speed').textContent = { 1: '۱', 1.25: '۱٫۲۵', 1.5: '۱٫۵', .75: '۰٫۷۵' }[v] + '×';
   };
-  function setHand(on) { handUp = on; $('btn-hand').classList.toggle('on', on); var th = $('top-hand'); if (th) th.classList.toggle('on', on); }
+  function setHand(on) { handUp = on; ['btn-hand', 'top-hand', 'dock-hand'].forEach(function (id) { var b = $(id); if (b) b.classList.toggle('on', on); }); }
   window.raiseHand = function () {
     if (live) { live.interrupt(); $('voice-record-btn').classList.remove('muted'); toast('استاد گوش می‌دهد؛ صحبت کنید.'); return; }
     if (!board || !board.model) { toast('اول یک صنف شروع کنید.'); return; }
@@ -1077,11 +1125,11 @@
     var tm = new Promise(function (res) { setTimeout(function () { res(null); }, 25000); });
     Promise.race([api('/api/class/' + id + '/read_ink', { image: t.crop }), tm]).catch(function () { return null; }).then(function (d) {
       var rd = d && d.ok ? d : null, L = [];
-      L.push('[نوشتهٔ شاگرد روی تخته] The student wrote this BY HAND on the board (light-blue chalk).');
+      L.push('[نوشتهٔ شاگرد روی تخته] The student wrote this BY HAND on the board with their own pen (' + (t.color || 'blue') + ' ink).');
       if (rd && rd.text) L.push('My reading of it: «' + rd.text + '» (kind: ' + rd.kind + ', confidence ' + rd.confidence.toFixed(2) + (rd.note ? '; unclear: ' + rd.note : '') + ').');
       else L.push('The reading tool could not read it; read it yourself from the first picture and say what you read.');
       L.push('Where it is: ' + descText(t.desc));
-      L.push('The first picture is their writing alone (dark on white), the second is the whole board. React like their teacher: say back what you read if it is uncertain or matters, then judge it kindly (a tick or a pink circle on it, one sentence why, a hint before the full answer).');
+      L.push('The first picture is their writing alone (dark on white), the second is the whole board. React like their teacher: say back what you read if it is uncertain or matters, then judge it kindly (a green tick or a red circle on it, one sentence why, a hint before the full answer).');
       Stat.clear('ink');
       withLive(function () {
         live.sendBoardNote(L.join('\n'), [t.crop, t.board], true, '[نوشتهٔ شاگرد روی تخته] ' + (rd && rd.text ? rd.text : ''));
@@ -1091,8 +1139,8 @@
   }
   function onStuTyped(info) {
     stuSpoke(); Stat.clear('turn');
-    var note = '[نوشتهٔ تایپی شاگرد] The student typed this on the board (light-blue text): «' + info.text + '».\nWhere it is: ' + descText(info.desc) +
-      '\nReact like their teacher: judge it kindly (a tick or a pink circle on it, one sentence why, a hint before the full answer), or answer it if it is a question.';
+    var note = '[نوشتهٔ تایپی شاگرد] The student typed this on the board (in their ' + (info.color || 'blue') + ' pen): «' + info.text + '».\nWhere it is: ' + descText(info.desc) +
+      '\nReact like their teacher: judge it kindly (a green tick or a red circle on it, one sentence why, a hint before the full answer), or answer it if it is a question.';
     var imgs = [board.snapshot({ rect: padRect(info.rect, 60), targetW: 700 }), board.snapshot({ targetW: 1000 })];
     addMessage('user', info.text);
     withLive(function () {
@@ -1102,8 +1150,10 @@
   }
   function wireStudent(b) {
     var bar = $('stu-tools');
+    b.on('color', function (hex) { [].forEach.call(document.querySelectorAll('.stu-col'), function (x) { var on = x.dataset.color === hex; x.classList.toggle('on', on); x.setAttribute('aria-checked', on ? 'true' : 'false'); }); });
     b.on('select', onStuSelect).on('ink', onStuInk).on('typed', onStuTyped).on('tool', function (name) {
       [].forEach.call(bar.querySelectorAll('.stu-btn[data-tool]'), function (x) { x.classList.toggle('on', x.dataset.tool === name); });
+      var cols = $('stu-colors'); if (cols) cols.hidden = name !== 'pen';
       if (name === 'point') Stat.info('با موس یا انگشت روی تخته نشان بدهید یا دور چیزی خط بکشید؛ بعد بگویید چه می‌خواهید.', 5200);
       else if (name === 'pen') Stat.info('با انگشت یا قلم بنویسید؛ وقتی تمام شد «فرستادن نوشته» را بزنید.', 5200);
       else if (name === 'type') Stat.info('روی تخته بزنید، بنویسید و Enter بزنید.', 4500);
@@ -1117,6 +1167,13 @@
   (function stuInit() {
     var bar = $('stu-tools'); if (!bar) return;
     [].forEach.call(bar.querySelectorAll('.stu-btn[data-tool]'), function (x) { x.addEventListener('click', function () { if (board) board.setTool(x.dataset.tool); }); });
+    var cols = $('stu-colors');
+    if (cols && window.KB && KB.PEN_COLORS) KB.PEN_COLORS.forEach(function (c, i) {
+      var x = document.createElement('button'); x.type = 'button'; x.className = 'stu-col' + (i ? '' : ' on'); x.dataset.color = c.hex;
+      x.style.setProperty('--c', c.hex); x.setAttribute('role', 'radio'); x.setAttribute('aria-checked', i ? 'false' : 'true'); x.setAttribute('aria-label', 'قلم ' + c.fa); x.title = c.fa;
+      x.addEventListener('click', function () { if (board && board.setPenColor) board.setPenColor(c.hex); });
+      cols.appendChild(x);
+    });
     $('stu-undo').addEventListener('click', function () { if (board && board.studentUndo()) { if (!board.unsent().length) $('stu-send').hidden = true; } });
     $('stu-send').addEventListener('click', sendInk);
   })();

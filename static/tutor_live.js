@@ -4,7 +4,7 @@
 
    Timing (draw while speaking): the model writes its words much faster than they are spoken, so the page keeps a "speech clock":
    the moment each response's audio starts, and about how long it lasts. A drawing called after N spoken characters starts a little
-   before the speech reaches N (so the chalk moves while the word is being said). A drawing called before the teacher has said
+   before the speech reaches N (so the marker moves while the word is being said). A drawing called before the teacher has said
    anything is held until the next words start, then drawn along with them. If the student interrupts, everything waiting is shown
    immediately, so the board always matches what the server has saved. */
 (function (global) {

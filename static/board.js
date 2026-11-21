@@ -1,5 +1,5 @@
-/* Khayyam chalkboard — renderer and lesson player.
-   Four stacked canvases: board (green slate + eraser ghosts), ink (everything written), anim (moving examples), fx (chalk tip, dust, eraser, pointer).
+/* Khayyam whiteboard — renderer and lesson player.
+   Stacked canvases: board (white surface + faint eraser ghosts), ink (everything written), anim (moving examples), fx (marker tip, eraser, pointer), stu (the student).
    Needs board_core.js, board_math.js, board_model.js. */
 (function (global) {
   'use strict';
@@ -26,9 +26,6 @@
     ['bg', 'ink', 'anim', 'fx', 'stu'].forEach(function (n) {
       var c = document.createElement('canvas'); c.className = 'kb-' + n; self.wrap.appendChild(c); self.cv[n] = c; self.cx[n] = c.getContext('2d');
     });
-    var tray = document.createElement('div'); tray.className = 'kb-tray';
-    tray.innerHTML = '<i class="kb-chalk" style="width:34px;inset-inline-start:34px;background:#f4f1e2"></i><i class="kb-chalk" style="width:25px;inset-inline-start:76px;background:#f0cf6a;transform:rotate(-3deg)"></i><i class="kb-chalk" style="width:19px;inset-inline-start:110px;background:#8fcbf2"></i><i class="kb-eraser"></i>';
-    this.wrap.appendChild(tray);
     host.appendChild(this.wrap);
     this._tick = this.tick.bind(this);
     if (global.ResizeObserver) { this.ro = new ResizeObserver(function () { self.onResize(); }); this.ro.observe(host); }
@@ -79,54 +76,43 @@
     }, 120);
   };
 
-  /* ───────── slate ───────── */
+  /* ───────── the white board ───────── */
   P.paintBg = function () {
-    var c = this.cx.bg, w = this.pxW, h = this.pxH, r = KB.rng(5150);
-    var g = c.createLinearGradient(0, 0, w * .6, h);
-    g.addColorStop(0, '#265a49'); g.addColorStop(.5, '#1d4b3d'); g.addColorStop(1, '#163c31');
-    c.fillStyle = g; c.fillRect(0, 0, w, h);
-    // cloth wipes: long faint streaks, the way a real board looks after it has been cleaned
-    for (var i = 0; i < 14; i++) {
-      var y = r() * h, x = r() * w * .5, len = w * (.3 + r() * .6), t = (14 + r() * 60) * this.S / 2, a0 = .004 + r() * .006;
-      var vg = c.createLinearGradient(0, 0, 0, t);
-      vg.addColorStop(0, 'rgba(235,244,238,0)'); vg.addColorStop(.5, 'rgba(235,244,238,' + a0 + ')'); vg.addColorStop(1, 'rgba(235,244,238,0)');
-      c.save(); c.translate(0, y); c.rotate((r() - .5) * .05); c.fillStyle = vg;
-      var segs = 10;
-      for (var q = 0; q < segs; q++) { c.globalAlpha = Math.sin(Math.PI * (q + .5) / segs); c.fillRect(x + len * q / segs, 0, len / segs + 1, t); }
-      c.restore();
-    }
-    c.globalAlpha = 1;
-    // fine grain
-    var tile = document.createElement('canvas'); tile.width = tile.height = 160;
-    var tc = tile.getContext('2d'), img = tc.createImageData(160, 160), d = img.data, rr = KB.rng(77);
-    for (var k = 0; k < d.length; k += 4) { var v = rr(); d[k] = d[k + 1] = d[k + 2] = v < .5 ? 0 : 255; d[k + 3] = v < .5 ? 10 + rr() * 22 : (v > .9 ? 8 + rr() * 14 : 0); }
-    tc.putImageData(img, 0, 0);
-    c.fillStyle = c.createPattern(tile, 'repeat'); c.fillRect(0, 0, w, h);
-    // light from the upper left, dark edges
-    var rg = c.createRadialGradient(w * .3, h * .1, 0, w * .5, h * .5, Math.max(w, h) * .85);
-    rg.addColorStop(0, 'rgba(255,255,255,.09)'); rg.addColorStop(.55, 'rgba(255,255,255,0)'); rg.addColorStop(1, 'rgba(0,0,0,.34)');
+    var c = this.cx.bg, w = this.pxW, h = this.pxH, S = this.S;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.fillStyle = '#fdfdfb'; c.fillRect(0, 0, w, h);
+    // a faint dot grid, like a good classroom whiteboard: helps the eye, never competes with the writing
+    var step = 40 * S, rad = Math.max(.8, 1.15 * S);
+    c.fillStyle = 'rgba(31,42,55,.10)';
+    for (var y = step * .5; y < h; y += step) for (var x = step * .5; x < w; x += step) { c.beginPath(); c.arc(x, y, rad, 0, TAU); c.fill(); }
+    // soft sheen from the upper left
+    var rg = c.createRadialGradient(w * .28, h * .05, 0, w * .5, h * .5, Math.max(w, h) * .9);
+    rg.addColorStop(0, 'rgba(255,255,255,.55)'); rg.addColorStop(.6, 'rgba(255,255,255,0)'); rg.addColorStop(1, 'rgba(40,60,80,.05)');
     c.fillStyle = rg; c.fillRect(0, 0, w, h);
     var self = this;
     this.ghosts.forEach(function (gh) { self.drawGhost(gh); });
   };
+  // where the eraser went a real whiteboard keeps a faint haze; on a screen stacked hazes read as a glitch, so a wiped
+  // board is drawn clean (the ghost list is still kept, so this can be turned back on with KB.GHOSTS = true)
   P.drawGhost = function (gh) {
+    if (!KB.GHOSTS) return;
     var c = this.cx.bg, S = this.S;
     c.save(); c.setTransform(S, 0, 0, S, 0, 0);
     var x = gh[0], y = gh[1], w = gh[2], h = gh[3], r = KB.rng(gh[4]);
-    for (var i = 0; i < 4; i++) {
-      var yy = y + h * (.05 + i * .24), hh = h * (.14 + r() * .16);
+    for (var i = 0; i < 3; i++) {
+      var yy = y + h * (.08 + i * .3), hh = h * (.12 + r() * .14);
       var g = c.createLinearGradient(x, 0, x + w, 0);
-      g.addColorStop(0, 'rgba(245,250,244,0)'); g.addColorStop(.12, 'rgba(245,250,244,' + (.05 + r() * .05) + ')'); g.addColorStop(.85, 'rgba(245,250,244,' + (.04 + r() * .04) + ')'); g.addColorStop(1, 'rgba(245,250,244,0)');
+      g.addColorStop(0, 'rgba(90,105,120,0)'); g.addColorStop(.15, 'rgba(90,105,120,' + (.009 + r() * .007) + ')'); g.addColorStop(.85, 'rgba(90,105,120,' + (.007 + r() * .006) + ')'); g.addColorStop(1, 'rgba(90,105,120,0)');
       c.fillStyle = g; c.fillRect(x, yy, w, hh);
     }
     c.restore();
   };
 
-  /* ───────── chalk pens ───────── */
+  /* ───────── marker pens ───────── */
   P.pattern = function (ctx, hex, device) {
     var key = hex + (device ? 'd' : 'u');
     if (!this.grains[key]) {
-      var tile = KB.makeGrain(hex.length === 7 ? hex : '#f6f3e6');
+      var tile = KB.makeGrain(hex.length === 7 ? hex : KB.COLORS.black);
       var pat = ctx.createPattern(tile, 'repeat');
       if (!device && pat.setTransform && global.DOMMatrix) { try { pat.setTransform(new DOMMatrix([1 / this.S, 0, 0, 1 / this.S, 0, 0])); } catch (e) { } }
       this.grains[key] = pat;
@@ -137,19 +123,21 @@
 
   // draw vertices i0..i1 of polyline `it.pl`
   P.strokeSeg = function (ctx, it, i0, i1, startCap, endCap) {
-    var pts = it.pl.pts, pat = this.pattern(ctx, it.color), w = it.w;
+    var pts = it.pl.pts, cum = it.pl.cum, pat = this.pattern(ctx, it.color), w = it.w;
+    if (!it._nz) it._nz = KB.noise((it.pl.len * 7.31 + pts.length * 13) | 0);
+    var nz = it._nz;
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = pat; ctx.fillStyle = pat;
-    ctx.globalAlpha = 1; ctx.lineWidth = w;
-    ctx.beginPath(); ctx.moveTo(pts[i0][0], pts[i0][1]);
-    for (var k = i0 + 1; k <= i1; k++) ctx.lineTo(pts[k][0], pts[k][1]);
-    ctx.stroke();
-    // fuzzy second pass, slightly off, thinner: gives the dragged-chalk edge
-    ctx.globalAlpha = .5; ctx.lineWidth = w * .5;
-    ctx.beginPath(); ctx.moveTo(pts[i0][0] + .5, pts[i0][1] - .4);
-    for (var j = i0 + 1; j <= i1; j++) ctx.lineTo(pts[j][0] + .5, pts[j][1] - .4);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+    ctx.strokeStyle = pat; ctx.fillStyle = pat; ctx.globalAlpha = 1;
+    // draw in short runs so the width can change smoothly; the round caps hide the joins
+    var k = i0;
+    while (k < i1) {
+      var e = Math.min(i1, k + 3), mid = (cum[k] + cum[e]) / 2;
+      ctx.lineWidth = w * (.94 + .16 * nz(mid / 38));
+      ctx.beginPath(); ctx.moveTo(pts[k][0], pts[k][1]);
+      for (var j = k + 1; j <= e; j++) ctx.lineTo(pts[j][0], pts[j][1]);
+      ctx.stroke();
+      k = e;
+    }
   };
 
   /* ───────── sprites (text and formulas) ───────── */
@@ -174,33 +162,24 @@
         if (!l.s) return;
         x.save();
         var bx = (l.rtl ? l.x + l.w : l.x) - minX + pad, by = l.y - minY + pad + it.lh * .64;
-        x.translate(bx * S, by * S); x.rotate((r() - .5) * .006);
+        // a hand never writes perfectly level: each line leans and drifts a touch
+        x.translate(bx * S, (by + (r() - .5) * it.size * .05) * S); x.rotate((r() - .5) * .014);
         x.font = it.weight + ' ' + (it.size * S) + 'px ' + fam; x.direction = l.rtl ? 'rtl' : 'ltr'; x.textAlign = l.rtl ? 'right' : 'left'; x.textBaseline = 'alphabetic';
-        x.shadowColor = 'rgba(246,243,230,.38)'; x.shadowBlur = 2.2 * S;
         x.globalAlpha = 1; x.fillText(l.s, 0, 0);
-        x.shadowBlur = 0; x.globalAlpha = .45; x.fillText(l.s, .7 * S / 1.2, -.5 * S / 1.2);
         x.restore();
       });
     } else {
       var lay = it.lay;
       lay.ops.forEach(function (o) {
         if (o.k === 't') {
-          x.font = '500 ' + (o.size * S) + 'px ' + KB.FAM.body; x.direction = 'ltr'; x.textAlign = 'left'; x.textBaseline = 'alphabetic';
-          x.globalAlpha = .94; x.fillText(o.s, (o.x + pad) * S, (o.y + lay.asc + pad) * S);
-          x.globalAlpha = .4; x.fillText(o.s, (o.x + pad) * S + .6, (o.y + lay.asc + pad) * S - .5);
+          x.font = '500 ' + (o.size * S) + 'px ' + KB.FAM.math; x.direction = 'ltr'; x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+          x.globalAlpha = 1; x.fillText(o.s, (o.x + pad) * S, (o.y + lay.asc + pad) * S);
         } else {
-          x.lineWidth = o.w * S; x.lineCap = 'round'; x.lineJoin = 'round'; x.globalAlpha = .94;
+          x.lineWidth = o.w * S; x.lineCap = 'round'; x.lineJoin = 'round'; x.globalAlpha = 1;
           x.beginPath(); o.pts.forEach(function (p, i) { var px = (p[0] + pad) * S, py = (p[1] + lay.asc + pad) * S; if (i) x.lineTo(px, py); else x.moveTo(px, py); }); x.stroke();
         }
       });
     }
-    // rough the edges and speckle the body: chalk never covers a board evenly
-    if (!this._erode) {
-      var et = document.createElement('canvas'); et.width = et.height = 128; var ex = et.getContext('2d'), eimg = ex.createImageData(128, 128), ed = eimg.data, er = KB.rng(4242);
-      for (var q = 0; q < ed.length; q += 4) { var v = er(); ed[q] = ed[q + 1] = ed[q + 2] = 0; ed[q + 3] = v < .09 ? 150 + er() * 105 : (v < .2 ? 40 + er() * 60 : 0); }
-      ex.putImageData(eimg, 0, 0); this._erode = et;
-    }
-    x.save(); x.globalCompositeOperation = 'destination-out'; x.globalAlpha = .85; x.fillStyle = x.createPattern(this._erode, 'repeat'); x.fillRect(0, 0, c.width, c.height); x.restore();
     it._r = { S: S, canvas: c, ox: minX - pad, oy: minY - pad, pad: pad };
     return it._r;
   };
@@ -288,8 +267,8 @@
     self.setLogical(ctx);
     ctx.save();
     ctx.beginPath(); ctx.rect(it.x - 1, it.y + prev - 1, it.w + 2, hh - prev + 2); ctx.clip();
-    ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 3;
-    ctx.fillStyle = '#f4f1e4'; ctx.fillRect(it.x - 3, it.y - 3, it.w + 6, it.h + 6);     // a little paper border
+    ctx.shadowColor = 'rgba(31,42,55,.22)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(it.x - 3, it.y - 3, it.w + 6, it.h + 6);     // a little paper border
     ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
     ctx.globalAlpha = .97;
     ctx.drawImage(img, sx, sy, sw, sh, it.x, it.y, it.w, it.h);
@@ -298,27 +277,26 @@
     return p < 1 ? [it.x + it.w * (.15 + .7 * ((hh / 40) % 1)), it.y + hh] : null;
   };
 
-  /* ───────── fx: chalk tip, dust, eraser, pointer ───────── */
-  P.dust = function (x, y) {
-    if (this.particles.length > 70) return;
-    var r = Math.random;
-    for (var i = 0; i < 2; i++) this.particles.push({ x: x + (r() - .5) * 5, y: y + (r() - .5) * 3, vx: (r() - .5) * 14, vy: 6 + r() * 20, life: .8 + r() * .7, age: 0, s: .8 + r() * 1.3 });
-  };
+  /* ───────── fx: marker tip, eraser, pointer ───────── */
+  P.dust = function () { };            // a marker leaves no dust (kept so older callers still work)
   P.drawFx = function (dt) {
     var c = this.cx.fx, S = this.S, any = false;
     c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, this.pxW, this.pxH);
     c.setTransform(S, 0, 0, S, 0, 0);
     if (this.pen && this.playing) {
-      var g = c.createRadialGradient(this.pen[0], this.pen[1], 0, this.pen[0], this.pen[1], 13);
-      g.addColorStop(0, 'rgba(255,253,240,.85)'); g.addColorStop(.35, 'rgba(255,253,240,.28)'); g.addColorStop(1, 'rgba(255,253,240,0)');
-      c.fillStyle = g; c.beginPath(); c.arc(this.pen[0], this.pen[1], 13, 0, TAU); c.fill();
-      this.dust(this.pen[0], this.pen[1] + 3); any = true;
+      // the marker's tip: a small soft shadow and a dark nib where the ink is going down
+      var px = this.pen[0], py = this.pen[1];
+      var g = c.createRadialGradient(px, py, 0, px, py, 12);
+      g.addColorStop(0, 'rgba(31,42,55,.18)'); g.addColorStop(1, 'rgba(31,42,55,0)');
+      c.fillStyle = g; c.beginPath(); c.arc(px, py, 12, 0, TAU); c.fill();
+      c.fillStyle = 'rgba(31,42,55,.75)'; c.beginPath(); c.arc(px, py, 2.6, 0, TAU); c.fill();
+      any = true;
     }
     var live = [];
     for (var i = 0; i < this.particles.length; i++) {
       var p = this.particles[i]; p.age += dt; if (p.age >= p.life) continue;
       p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 40 * dt;
-      c.fillStyle = 'rgba(246,243,230,' + (.5 * (1 - p.age / p.life)) + ')'; c.beginPath(); c.arc(p.x, p.y, p.s, 0, TAU); c.fill();
+      c.fillStyle = 'rgba(31,42,55,' + (.2 * (1 - p.age / p.life)) + ')'; c.beginPath(); c.arc(p.x, p.y, p.s, 0, TAU); c.fill();
       live.push(p);
     }
     this.particles = live; if (live.length) any = true;
@@ -430,7 +408,7 @@
   P.load = function (lesson) {
     var self = this;
     this.lesson = lesson;
-    var fonts = ['500 30px Vazirmatn', '700 30px Vazirmatn', '700 30px Amiri', '400 30px Amiri'];
+    var fonts = ['500 30px Marhey', '700 30px Marhey', '500 30px Vazirmatn', '700 30px Vazirmatn'];
     var wait = Promise.race([Promise.all(fonts.map(function (f) { return document.fonts ? document.fonts.load(f, 'ابپ۱۲۳abc') : Promise.resolve(); })), new Promise(function (r) { setTimeout(r, 2500); })]);
     return wait.then(function () {
       self.chooseProfile(); self.profile = self.nextProfile; self.sizeCanvases(); self.paintBg();
@@ -582,8 +560,8 @@
     var ps = KB.clamp((this.dpr / this.S) * .62, 1, 2.4);                // the pointer and its label stay readable on a small phone board
     var sc = (1 + .28 * Math.sin(Math.PI * ease(q))) * ps;
     c.save(); c.translate(pos[0], pos[1]); c.rotate(rot); c.scale(sc, sc);
-    c.shadowColor = 'rgba(244,216,110,.75)'; c.shadowBlur = 16;
-    c.fillStyle = '#f4d86e'; c.strokeStyle = 'rgba(8,28,22,.9)'; c.lineWidth = 2.2; c.lineJoin = 'round';
+    c.shadowColor = 'rgba(31,42,55,.28)'; c.shadowBlur = 8; c.shadowOffsetY = 2;
+    c.fillStyle = '#f5b400'; c.strokeStyle = 'rgba(31,42,55,.95)'; c.lineWidth = 2.2; c.lineJoin = 'round';
     c.beginPath(); c.moveTo(0, 0); c.lineTo(-30, -13); c.lineTo(-22, 0); c.lineTo(-30, 13); c.closePath(); c.fill(); c.shadowBlur = 0; c.stroke();
     c.restore();
     if (flying && Math.random() < .5) this.dust(pos[0], pos[1]);
@@ -593,7 +571,7 @@
       var tw = c.measureText(p.label).width + 26 * ps, th = fs + 18 * ps;
       var bx = KB.clamp(pos[0] + 14 * ps, 6, W - tw - 6), by = KB.clamp(pos[1] + 26 * ps, 6, H - th - 6);
       var a = KB.clamp((now - p.t0 - p.fly) / .25, 0, 1);
-      c.globalAlpha = a; c.fillStyle = 'rgba(244,216,110,.96)'; c.strokeStyle = 'rgba(8,28,22,.85)'; c.lineWidth = 2;
+      c.globalAlpha = a; c.fillStyle = 'rgba(255,214,77,.97)'; c.strokeStyle = 'rgba(31,42,55,.85)'; c.lineWidth = 2;
       var r = 12; c.beginPath(); c.moveTo(bx + r, by); c.lineTo(bx + tw - r, by); c.quadraticCurveTo(bx + tw, by, bx + tw, by + r); c.lineTo(bx + tw, by + th - r); c.quadraticCurveTo(bx + tw, by + th, bx + tw - r, by + th); c.lineTo(bx + r, by + th); c.quadraticCurveTo(bx, by + th, bx, by + th - r); c.lineTo(bx, by + r); c.quadraticCurveTo(bx, by, bx + r, by); c.closePath(); c.fill(); c.stroke();
       c.fillStyle = '#10241d'; c.textBaseline = 'middle'; c.textAlign = 'center'; c.direction = KB.RTL_RE.test(p.label) ? 'rtl' : 'ltr';
       c.fillText(p.label, bx + tw / 2, by + th / 2 + 1); c.restore();
@@ -621,10 +599,12 @@
     ink.restore();
     // eraser block
     c.save(); c.translate(x + ew / 2, y + eh / 2); c.rotate(dir * .05);
-    c.fillStyle = '#e7dcc0'; c.strokeStyle = '#3a2b17'; c.lineWidth = 1.6;
+    c.shadowColor = 'rgba(31,42,55,.25)'; c.shadowBlur = 10; c.shadowOffsetY = 3;
+    c.fillStyle = '#e4e8ed'; c.strokeStyle = '#1f2a37'; c.lineWidth = 1.6;
     var r = 9; c.beginPath(); c.moveTo(-ew / 2 + r, -eh / 2); c.lineTo(ew / 2 - r, -eh / 2); c.quadraticCurveTo(ew / 2, -eh / 2, ew / 2, -eh / 2 + r); c.lineTo(ew / 2, eh / 2 - r); c.quadraticCurveTo(ew / 2, eh / 2, ew / 2 - r, eh / 2); c.lineTo(-ew / 2 + r, eh / 2); c.quadraticCurveTo(-ew / 2, eh / 2, -ew / 2, eh / 2 - r); c.lineTo(-ew / 2, -eh / 2 + r); c.quadraticCurveTo(-ew / 2, -eh / 2, -ew / 2 + r, -eh / 2); c.fill(); c.stroke();
-    c.fillStyle = '#4a3a22'; c.fillRect(-ew / 2 + 3, -eh / 2 + 3, ew - 6, eh * .34);
-    c.fillStyle = 'rgba(255,255,255,.18)'; c.fillRect(-ew / 2 + 6, eh * .08, ew - 12, 3);
+    c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; c.stroke();
+    c.fillStyle = '#2f5fa8'; c.fillRect(-ew / 2 + 3, -eh / 2 + 3, ew - 6, eh * .5);      // the handle
+    c.fillStyle = 'rgba(255,255,255,.28)'; c.fillRect(-ew / 2 + 7, -eh / 2 + 6, ew - 14, 2.5);
     c.restore();
     if (u > .05 && Math.random() < .6) this.dust(dir < 0 ? x : x + ew, y + eh * Math.random());
   };
