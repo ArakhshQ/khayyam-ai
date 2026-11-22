@@ -141,7 +141,7 @@
     };
     var rid = e.response_id || '';
     if (!this.item || this.item.id !== e.item_id) this.item = { id: e.item_id, ci: e.content_index || 0, t0: t, dur: 0 };
-    this.item.dur += buf.duration;
+    this.item.dur += buf.duration; this.audioSec = (this.audioSec || 0) + buf.duration;
     if (!this.startedFor[rid]) {
       this.startedFor[rid] = true;
       setTimeout(function () { if (!self.closed) self.emit({ type: 'output_audio_buffer.started', response_id: rid }); }, Math.max(0, (t - now) * 1000));
@@ -166,7 +166,7 @@
     var now = Date.now(), win = this.gapWin = this.gapWin.filter(function (g) { return now - g[0] < 5000; }), mx = 0;
     win.forEach(function (g) { if (g[1] > mx) mx = g[1]; });
     return { underruns: this.underruns, gapMax: mx, queuedMs: Math.max(0, Math.round((this.next - this.ac.currentTime) * 1000)),
-             bufferedKB: Math.round((this.ws.bufferedAmount || 0) / 1024), sent: this.sentChunks, dropped: this.dropped, chunks: this.chunks, state: this.ac.state };
+             bufferedKB: Math.round((this.ws.bufferedAmount || 0) / 1024), audioSec: this.audioSec || 0, sent: this.sentChunks, dropped: this.dropped, chunks: this.chunks, state: this.ac.state };
   };
 
   C.close = function () {

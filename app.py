@@ -3773,6 +3773,12 @@ def _ensure_voice_storage():
 # UTC day and calendar-month quotas shared by Chat, Tutor, Listen, Dictation.
 VOICE_WARNING_SECONDS = 120
 VOICE_MODEL=os.getenv('REALTIME_MODEL','gpt-realtime-2.1-mini')
+# What the transcriber is told: the language, and the school words students say as loanwords (English or Russian) so that, for
+# example, «پولینوم» is written as such and not as «پول نو». Kept short: it is a hint, not a dictionary.
+VOICE_TRANSCRIBE_PROMPT = ("Afghan Dari (دری افغانستان) in Persian script, with occasional English words. A student talks to a teacher about school subjects. "
+    "Students often say school terms as English or Russian loanwords: پولینوم / پولینومیال (polynomial, چندجمله‌ای)، معادله (equation)، فکتور (factor)، "
+    "فرمول، الجبر، هندسه، مثلث، زاویه، کسر، اعشاریه، فیصدی، تابع (function)، گراف، مشتق، انتگرال، لوگاریتم، فزیک، کیمیا، بیولوژی، انرژی، قوه، اتوم، مالیکول، "
+    "پروگرامینگ، پایتون، کمپیوتر، انگلیسی، گرامر. Transcribe the words actually spoken; do not translate or invent text.")
 
 def _voice_now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -4103,7 +4109,7 @@ def create_live_voice_session():
                 "output": {"voice": os.getenv('KHAYYAM_VOICE','cedar')},
                 "input": {
                     "transcription": {"model": os.getenv('REALTIME_TRANSCRIBE_MODEL','gpt-live-transcribe'),
-                                      "prompt": "The speaker may use Afghan Dari (دری افغانستان), Persian script, and occasional English words. Transcribe the words actually spoken; do not translate or invent text."},
+                                      "prompt": VOICE_TRANSCRIBE_PROMPT},
                     "turn_detection": {
                         "type": "server_vad", "create_response": not manual_turns,
                         "interrupt_response": not manual_turns
@@ -4120,7 +4126,7 @@ def create_live_voice_session():
         try:
             td = payload["session"]["audio"]["input"]["turn_detection"]
             td["threshold"] = min(.95, max(.2, float(os.getenv("VOICE_VAD_THRESHOLD", "0.6"))))
-            td["silence_duration_ms"] = min(2000, max(200, int(os.getenv("VOICE_VAD_SILENCE_MS", "600"))))
+            td["silence_duration_ms"] = min(2000, max(200, int(os.getenv("VOICE_VAD_SILENCE_MS", "800"))))      # 600 cut students off at a natural pause
             td["prefix_padding_ms"] = min(1000, max(0, int(os.getenv("VOICE_VAD_PREFIX_MS", "300"))))
             tl = os.getenv("REALTIME_TRANSCRIBE_LANG", "fa").strip().lower()     # hint for the written transcript only ("" = automatic)
             if tl:

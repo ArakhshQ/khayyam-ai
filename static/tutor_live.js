@@ -26,7 +26,7 @@
     this.pc = null; this.dc = null; this.mic = null; this.audio = null;
     this.receipt = null; this.deadline = 0; this.warned = false; this.timer = 0;
     this.active = false; this.responding = false; this.userSpeaking = false; this.needReply = false; this.ending = false; this.closed = false;
-    this.pendingAsk = 0; this.askWhy = ''; this.lastStop = 0;
+    this.pendingAsk = 0; this.askWhy = ''; this.lastStop = 0; this.tools = 0; this.slowTools = 0; this.boardDebt = false; this.holdT = 0;
     this.usage = { in_text: 0, in_audio: 0, in_image: 0, cin_text: 0, cin_audio: 0, cin_image: 0, out_text: 0, out_audio: 0, responses: 0 }; this.talkMs = 0; this.talkAt = 0; this.startedAt = 0; this.usageT = 0;
     this.cur = null; this.queue = []; this.resps = []; this.spEnd = 0; this.pumpT = 0; this.transcript = []; this.muted = false; this.endT = 0;
   }
@@ -78,6 +78,7 @@
       });
     }).then(function (s) {
       if (s.__status !== 200 || !s.value || !s.receipt) { var er = new Error('session ' + s.__status + ': ' + (s.detail || s.error || '')); er.stage = 'session'; er.status = s.__status; throw er; }
+      self.model = s.model || '';
       self.manual = s.manual_turns === true;           // the page decides what counts as the student speaking (noise and echo do not start a reply)
       self.receipt = s.receipt; self.deadline = Number(s.allowance_deadline || 0) * 1000; self.warnAt = Number(s.warning_seconds || 120);
       self.timer = setInterval(function () { self.tick(); }, 1000);
@@ -107,6 +108,7 @@
       }).then(function (sdp) { return pc.setRemoteDescription({ type: 'answer', sdp: sdp }); }).then(function () { return opened; });
     }).then(function () {
       self.active = true; self.startedAt = Date.now(); o.onState('connected');
+      self.log('connect', (self.ws ? 'websocket' : 'webrtc') + (self.model ? ' ' + self.model : ''));
       if (FLAGS.debug) self.debugStats();
       self.needReply = false; self.classOn = !!o.resumed;
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
@@ -233,12 +235,24 @@
     this.send({ type: 'response.create' });
   };
   // is the student really talking now? (a noise can hold the voice detector "on" for a long time: do not wait on it for ever)
+  // tools of the last reply still running? (with a time limit, so a request that never comes back can never block the class)
+  // how the sound of one reply arrived (WebSocket only): a reply whose audio takes much longer to arrive than to play is the network
+  P.netNote = function (cur) {
+    if (!this.ws || !this.ws.stats || cur.a0 == null) return '';
+    try {
+      var st = this.ws.stats(), sec = st.audioSec - cur.a0, took = (Date.now() - cur.t0) / 1000;
+      if (sec < .3) return '';
+      return ' | audio ' + sec.toFixed(1) + 's arrived in ' + took.toFixed(1) + 's' + (took > sec * 1.15 + 1.5 ? ' (SLOW LINK)' : '') +
+        (st.underruns - cur.u0 ? ', stutters ' + (st.underruns - cur.u0) : '') + (st.bufferedKB > 40 ? ', upload queue ' + st.bufferedKB + 'KB' : '') + (st.dropped ? ', mic dropped ' + st.dropped : '');
+    } catch (err) { return ''; }
+  };
+  P.toolBusy = function () { return this.tools > 0 && Date.now() - (this.toolsAt || 0) < (this.slowTools ? 90000 : 20000); };
   P.speakingNow = function () { return this.userSpeaking && Date.now() - this.talkAt < 8000; };
   P.watchdog = function () {
     if (!this.active || this.closed || this.ending) return;
     var now = Date.now();
     if (this.pendingAsk && !this.responding && now - this.pendingAsk > 8000) { this.log('ask-lost', this.askWhy); this.pendingAsk = 0; this.needReply = true; }
-    if (this.needReply && !this.responding && !this.pendingAsk && !this.speakingNow() && now - this.lastStop > 900) { this.log('rescue', 'a reply was waiting'); this.ask('rescue'); }
+    if (this.needReply && !this.responding && !this.pendingAsk && !this.toolBusy() && !this.speakingNow() && now - this.lastStop > 900) { this.log('rescue', 'a reply was waiting'); this.ask('rescue'); }
   };
 
   /* ───────── events from the model ───────── */
@@ -246,7 +260,8 @@
     var self = this, t = e.type;
     if (t === 'response.created') {
       this.responding = true; this.pendingAsk = 0;
-      this.cur = { chars: 0, begin: 0, calls: [], text: '', items: [], started: false, t0: Date.now(), why: this.askWhy }; this.askWhy = ''; this.o.onState('speaking');
+      this.cur = { chars: 0, begin: 0, calls: [], text: '', items: [], started: false, t0: Date.now(), why: this.askWhy }; this.askWhy = '';
+      if (this.ws && this.ws.stats) { try { var st0 = this.ws.stats(); this.cur.a0 = st0.audioSec; this.cur.u0 = st0.underruns; } catch (err) {} } this.o.onState('speaking');
     } else if (t === 'output_audio_buffer.started') {
       this.audioStarted();
     } else if (t === 'response.output_audio_transcript.delta') {
@@ -270,11 +285,12 @@
       this.responding = false;
       var cur = this.cur; this.cur = null;
       if (cur) this.log('done', ((e.response && e.response.status) || '?') + ' ' + (Date.now() - cur.t0) + 'ms' + (cur.why ? ' for ' + cur.why : '') +
-        (cur.calls.length ? ' calls:' + cur.calls.map(function (c) { return c.item.name; }).join(',') : '') + (cur.cut ? ' (cut)' : ''));
+        (cur.calls.length ? ' calls:' + cur.calls.map(function (c) { return c.item.name; }).join(',') : '') + (cur.cut ? ' (cut)' : '') + this.netNote(cur));
       this.noteUsage(e.response && e.response.usage);
       this.afterResponse(cur, e.response);
     } else if (t === 'input_audio_buffer.speech_started') {
       this.userSpeaking = true; this.talkAt = Date.now();
+      if (this.holdT) { clearTimeout(this.holdT); this.holdT = 0; this.log('hold', 'student goes on: answer the whole sentence'); }
       if (this.manual) { this.sp0 = Date.now(); this.o.onState('listening'); return; }      // maybe only noise: the tutor keeps going until it is clear this is the student
       this.nudged = false; this.flush(); this.o.onState('listening');
     } else if (t === 'input_audio_buffer.speech_stopped') {
@@ -294,7 +310,7 @@
         clearTimeout(this.tNoTx);
         if (!this.isStudent(tx)) { this.log('ignored', tx); if (e.item_id) this.send({ type: 'conversation.item.delete', item_id: e.item_id }); this.afterNoise(); return; }
         this.log('student', tx); this.dirStudent(tx);
-        this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); this.realTurn(); return;
+        this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); this.turnSoon(tx); return;
       }
       if (tx) { this.transcript.push({ role: 'user', text: tx }); this.o.onUserText(tx); }
     } else if (t === 'output_audio_buffer.stopped' || t === 'output_audio_buffer.cleared') {
@@ -342,11 +358,13 @@
     var self = this, calls = cur ? cur.calls : [];
     if (!calls.length) {
       if (this.needReply && !this.speakingNow()) { this.ask('waiting'); return; }
-      if (this.needsBoard(cur)) this.boardNudge();
+      if (this.needsBoard(cur)) { this.boardDebt = true; this.log('board-debt', 'explained without the board: reminded on the next turn'); }
       return;
     }
     if (calls.some(function (c) { return c.item.name === 'board'; })) { this.nudged = false; this.classOn = true; }
     var WORK = { look: 'look', find_poem: 'poem', start_class: 'start', web_search: 'search', make_picture: 'picture', expert: 'expert', make_quiz: 'quiz', make_test: 'quiz' };
+    var SLOW = { make_quiz: 1, make_test: 1, expert: 1, make_picture: 1, web_search: 1 }, slow = calls.some(function (c) { return SLOW[c.item.name]; });
+    this.tools++; this.toolsAt = Date.now(); if (slow) this.slowTools++;
     var jobs = calls.map(function (c) {
       var w = WORK[c.item.name], t0 = Date.now(), p = self.runCall(c, cur);
       p.then(function () { self.log('tool', c.item.name + ' ' + (Date.now() - t0) + 'ms'); }, function () { self.log('tool', c.item.name + ' failed'); });
@@ -354,6 +372,7 @@
       return p;
     });
     Promise.all(jobs).then(function (outs) {
+      self.tools = Math.max(0, self.tools - 1); if (slow) self.slowTools = Math.max(0, self.slowTools - 1);
       // the teacher already spoke in this reply: after the tool result it tended to start over (the greeting twice). Say so, once.
       var spoke = cur && cur.chars > 40 && !cur.cut;
       outs.forEach(function (o, i) {
@@ -361,7 +380,11 @@
         self.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: o.call_id, output: JSON.stringify(o.output) } });
       });
       if (self.ending) return;                         // saying goodbye: nothing more to ask
-      if (outs.length && outs.every(function (o) { return o.quiet; })) return;      // a quiz card is on screen: the teacher waits in silence
+      if (outs.length && outs.every(function (o) { return o.quiet; })) { if (self.needReply && !self.speakingNow()) self.ask('waiting'); return; }      // a quiz card is on screen: the teacher waits in silence
+      // the teacher spoke, drew, and ended on a question: the turn is complete, the student answers next. (Asking the model to go on
+      // here made it say the question again: «حالا بگویید کدام واژه را می‌شناسید؟» twice.)
+      var boardOnly = calls.every(function (c) { return c.item.name === 'board'; }), okAll = outs.every(function (o) { return o.output && o.output.ok !== false; });
+      if (boardOnly && okAll && cur && !cur.cut && /[؟?]\s*$/.test(String(cur.text || '').trim()) && !self.needReply) { self.log('turn-done', 'asked the student: waiting for the answer'); return; }
       if (self.responding || self.speakingNow()) { self.needReply = true; return; }
       self.ask('after ' + calls.map(function (c) { return c.item.name; }).join(','));
     });
@@ -372,7 +395,7 @@
      Before each student turn the teacher gets one short context note. The note guides but does not command:
      it tells the tutor where they are, what the student said, and whether a quiz is due.
      The previous note is deleted each time so they do not pile up. */
-  var DIR_SAME = 0.45, DIR_NUDGE = 10, DIR_FORCE = 16;
+  var DIR_SAME = 0.45, DIR_QUIZ = 3, DIR_NUDGE = 8, DIR_FORCE = 14;      // counted in the student's turns on one step
   P.dirState = function () { return this._dir || (this._dir = { step: -1, outline: null, turns: 0, qs: [], lastQ: '', asked: 0, stuAfter: 0, lastStu: '', noteId: '', n: 0, moved: '', forcing: false, quizDone: false, quizResult: '' }); };
   P.dirPlan = function (d) {
     var D = this.dirState();
@@ -393,16 +416,16 @@
   P.dirTutor = function (text) {
     if (!this.classOn) return;
     var D = this.dirState(), q = lastQuestion(text);
-    D.turns++;
+    D.open = !!q;                                       // the teacher is waiting for an answer
     if (q) {
       var again = D.qs.some(function (p) { return similar(p, q) >= DIR_SAME; });
       D.asked = again ? D.asked + 1 : 1; D.lastQ = q; D.stuAfter = 0;
       D.qs.push(q); if (D.qs.length > 8) D.qs.shift();
       if (again) this.log('repeat-question', q);
-    }
-    this.dirForce();
+    } else if (D.stuAfter > 0) { D.lastQ = ''; D.stuAfter = 0; }      // the teacher answered the student without a new question: that exchange is closed
+    if (!q) this.dirForce();                           // never move the class on while a question is waiting
   };
-  P.dirStudent = function (tx) { var D = this.dirState(); D.stuAfter++; D.lastStu = String(tx || '').slice(0, 90); };
+  P.dirStudent = function (tx) { var D = this.dirState(); D.stuAfter++; D.turns++; D.lastStu = String(tx || '').slice(0, 90); };
   P.dirForce = function () {
     var D = this.dirState(), me = this;
     if (D.forcing || !D.outline || D.turns < DIR_FORCE || D.step < 0 || D.step + 1 >= D.outline.length) return;
@@ -424,16 +447,18 @@
     if (D.moved) { s += ' The page moved the class to this new step. Start teaching it.'; D.moved = ''; }
     // student just answered: react first
     if (D.lastQ && D.stuAfter > 0) {
-      s += ' The student answered «' + D.lastStu + '» to your question «' + D.lastQ + '». REACT TO THEIR ANSWER FIRST: say whether they are right or wrong, explain if wrong with a different example.';
+      s += ' The student answered «' + D.lastStu + '» to your question «' + D.lastQ + '». REACT TO THEIR ANSWER FIRST: say whether they are right or wrong, explain if wrong with a different example. In this reply do not start a quiz and do not move to a new step.';
       if (D.asked >= 2) s += ' You already asked this question ' + D.asked + ' times — do not ask it again. Give the answer in one sentence and continue.';
     }
     // repeat detection (even without student answer)
     else if (D.asked >= 2) { s += ' You already asked the same question ' + D.asked + ' times. Stop asking it. Give the answer and explain differently.'; }
-    // quiz guidance
-    if (!D.quizDone && D.turns >= 3) { s += ' The student has not had a quiz on this step yet. When they show basic understanding, call make_quiz before moving on.'; }
-    if (D.quizDone && !D.moved) { s += ' A quiz was completed on this step. If the student understood, call progress with step=' + (i + 1) + ' to move on.'; }
-    // gentle nudge after a while (not a command to wrap up)
-    if (D.turns >= DIR_NUDGE && !D.quizDone) { s += ' You have been on this step for ' + D.turns + ' turns. Consider giving the quiz now and moving on.'; }
+    if (this.boardDebt) { s += ' Your last explanation was not shown on the board: show it on the board in this reply (with your words, not after them).'; this.boardDebt = false; }
+    // quiz guidance: only ever at a natural break
+    if (!D.quizDone && D.turns >= DIR_QUIZ) {
+      s += ' No quiz yet on this step. Give one (make_quiz) only at a natural break: after you have reacted to the student and nothing is left open. If something is still open, finish it first; if it is long, say you will do a short quiz now and come back to it after, and pass it as "pending".';
+      if (D.turns >= DIR_NUDGE) s += ' This step has taken ' + D.turns + ' turns: take that natural break soon.';
+    }
+    if (D.quizDone && !D.moved) { s += ' A quiz was completed on this step (' + D.quizResult + '). Once its mistakes are cleared up, call progress with step=' + (i + 1) + ' and begin the next step.'; }
     s += ' Do not read this note aloud.';
     return s;
   };
@@ -458,6 +483,9 @@
   var JUNK = /^(thank you|thanks|thanks for watching|bye|you|okay|ok|yeah|uh|um|hmm|mm|ah|oh|\.+)$/i;
   P.isEcho = function (tx) {
     var w = words(tx); if (w.length < 2) return false;
+    // an echo can only happen while the tutor's voice is playing (or just after). Otherwise an answer that uses the question's
+    // own words («دو جمله داریم» to «چند جمله داریم؟») is the student, not an echo: it used to be thrown away.
+    if (!this.responding && Date.now() > this.spEnd + 1500) return false;
     var recent = {}, n = 0;
     this.transcript.slice(-4).forEach(function (t) { if (t.role === 'assistant') words(t.text).forEach(function (x) { recent[x] = 1; }); });
     if (this.cur && this.cur.text) words(this.cur.text).forEach(function (x) { recent[x] = 1; });
@@ -487,13 +515,31 @@
       this.flush(); this.dirInject(); this.needReply = true; this.log('wait', 'teacher still preparing: answer after it');
       return;
     }
+    if (!this.responding && this.toolBusy() && !this.slowTools) {
+      // the last reply's drawing is still being put on the board: answer right after it, not in a second reply at the same time
+      this.flush(); this.dirInject(); this.needReply = true; this.log('wait', 'drawing in progress: answer after it');
+      return;
+    }
     this.flush(); this.stopSpeaking();
     this.dirInject();                                  // where the class is, before the teacher answers
     this.ask('student');
   };
+  // A sentence that clearly is not finished («می‌خواهم در مورد», «اگر», «و») gets a moment: if the student goes on, the whole
+  // sentence is answered together (the teacher answered «سلام میخواهم در مورد» before the topic was said).
+  var UNFINISHED = /(^|\s)(در مورد|درباره|دربارهٔ|در باره|راجع به|مثلا|مثلاً|یعنی|اگر|چون|که|و|یا|با|از|به|برای|در|تا|را|می‌خواهم|میخواهم|می خواهم|میخوام|می‌خوام|بخش|قسمت|اینکه|این که|ولی|اما|about|the|and|or|to|of|in|with|for|like)\s*[,،.…]*\s*$/i;
+  P.turnSoon = function (tx) {
+    var me = this;
+    if (this.holdT) { clearTimeout(this.holdT); this.holdT = 0; }
+    if (UNFINISHED.test(String(tx || '').trim()) && words(tx).length < 12) {
+      this.log('hold', 'sentence not finished: waiting a moment');
+      this.holdT = setTimeout(function () { me.holdT = 0; if (!me.speakingNow()) me.realTurn(); }, 1600);
+      return;
+    }
+    this.realTurn();
+  };
   // a noise was ignored: if something was waiting for a quiet moment (a tool result), carry on
   P.afterNoise = function () {
-    if (this.userSpeaking || this.responding) return;
+    if (this.userSpeaking || this.responding || this.toolBusy()) return;
     if (this.needReply) this.ask('after noise');
   };
 
@@ -544,7 +590,10 @@
       if (!self.o.onQuiz) return Promise.resolve({ call_id: it.call_id, output: { ok: false, error: 'ask the questions aloud instead' } });
       return post('/api/class/' + id + (it.name === 'make_test' ? '/test' : '/quiz'), { topic: args.topic, count: args.count }).then(function (d) {
         if (!d.ok || !d.quiz) return { call_id: it.call_id, output: { ok: false, error: d.error || 'could not make the quiz now; ask the questions aloud instead' } };
-        self.o.onQuiz(d.quiz, function (res) { self.quizDone(d.quiz, res); });
+        var pending = String(args.pending || '').trim().slice(0, 300);
+        var show = function () { if (!self.closed) self.o.onQuiz(d.quiz, function (res) { self.quizDone(d.quiz, res, pending); }); };
+        var left = self.spEnd - Date.now();
+        if (left > 0) setTimeout(show, left + 400); else show();        // the student hears "a short quiz now" before the card comes up
         return { call_id: it.call_id, quiet: true, output: { ok: true, note: 'The ' + (d.quiz.kind === 'test' ? 'final test' : 'quiz (' + d.quiz.level + ')') + ' is on screen with ' + d.quiz.questions.length + ' questions. Say nothing more now and wait: you will get the result as a message.' } };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not make the quiz now; ask the questions aloud instead' } }; });
     }
@@ -609,10 +658,8 @@
     if (!groups.length) groups = [{ when: '', ops: [] }];
     var from = { i: 0 }, errors = [], dropped = [], pv = null, kept = false, wiped = false, wipedP = false, queued = 0, held = 0;
     var spoke = !!(r && r.begin);
-    var chain = Promise.resolve();
-    groups.forEach(function (g, k) {
-      chain = chain.then(function () {
-        return post('/api/class/' + id + '/draw', { ops: g.ops, clear: k === 0 && args.clear === true }).then(function (d) {
+    // one request for the whole cue sheet (it used to be one round trip per cue: 2-8 s before the board could move)
+    var handle = function (d, k, g) {
           if (!d.ok) { errors.push(d.error || 'could not draw'); return; }
           if (d.from == null) { kept = true; return; }
           var q = { from: d.from, beat: d.beat, at: Date.now(), hold: false };
@@ -628,9 +675,16 @@
             (p1.dropped || []).forEach(function (x) { dropped.push(x); });
           }
           self.pump();
-        });
-      }).catch(function () { errors.push('connection problem, try once more'); });
-    });
+    };
+    var chain = post('/api/class/' + id + '/draw', { groups: groups.map(function (g, k) { return { ops: g.ops, clear: k === 0 && args.clear === true }; }) }).then(function (d) {
+      if (d && Array.isArray(d.results)) { d.results.forEach(function (x, k) { handle(x, k, groups[k]); }); return; }
+      // a server without "groups": one request per cue, as before
+      var seq = Promise.resolve();
+      groups.forEach(function (g, k) {
+        seq = seq.then(function () { return post('/api/class/' + id + '/draw', { ops: g.ops, clear: k === 0 && args.clear === true }).then(function (x) { handle(x, k, g); }); });
+      });
+      return seq;
+    }).catch(function () { errors.push('connection problem, try once more'); });
     return chain.then(function () {
       var out = { ok: queued > 0 || kept };
       if (!out.ok) { out.error = errors[0] || 'nothing was drawn'; return { call_id: it.call_id, output: out }; }
@@ -702,7 +756,7 @@
     this.ask('nudge'); return true;
   };
   // the student finished a quiz card: the teacher gets the score and the mistakes
-  P.quizDone = function (quiz, res) {
+  P.quizDone = function (quiz, res, pending) {
     if (!this.active) return;
     var wrong = [], skipped = 0, answers = (res && res.answers) || [];
     quiz.questions.forEach(function (q, i) {
@@ -716,7 +770,8 @@
     var next = isTest
       ? ' React warmly in ONE short sentence. Then take the weakest topic(s) from the mistakes and re-teach ONE of them on the board with a fresh example (clear first if needed), then offer to continue with the next class or to practice the weak part. Do not read the whole list.'
       : ' React in ONE short warm sentence. If there were mistakes, show the main one on the board with a small example (clear first if needed), then give one new tiny practice step. If all correct, praise briefly and move to the next idea with a new example on the board.';
-    var note = head + (wrong.length ? ' Mistakes: ' + wrong.join('; ') + '.' : ' All correct.') + next;
+    var note = head + (wrong.length ? ' Mistakes: ' + wrong.join('; ') + '.' : ' All correct.') +
+      (pending ? ' BEFORE THE QUIZ YOU LEFT THIS OPEN: «' + pending + '». Come back to it now (briefly, on the board) together with the quiz mistakes; do not forget it.' : '') + next;
     this.dirQuiz(ok + '/' + n + (wrong.length ? ' weak' : ' perfect'));
     this.log('quiz-result', ok + '/' + n);
     this.nudged = false;

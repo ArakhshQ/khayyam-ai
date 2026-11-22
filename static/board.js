@@ -417,12 +417,15 @@
     });
   };
   P.rebuild = function (keepPlace) {
-    var idx = keepPlace ? this.sceneIdx : 0, was = this.playing, ended = keepPlace && !!this.sceneEnded;
+    var idx = keepPlace ? this.sceneIdx : 0, was = this.playing, ended = keepPlace && !!this.sceneEnded, wasEnd = keepPlace && !!this.atEnd;
     this.sizeCanvases(); this.paintBg();
     this.model = KB.buildModel(this.lesson, this.profile);
     this.pause();
     this.gotoScene(Math.min(idx, Math.max(0, this.model.scenes.length - 1)), false);
     if (ended && !was) this.completeScene();          // a scene that was finished stays finished when the screen is resized (nothing vanishes)
+    // a live board waiting at its end for the teacher's next drawing keeps waiting after a resize. (This flag was lost before, so
+    // after a quiz, the chat drawer, the sidebar folding or a phone turning, new drawings queued up behind and never showed.)
+    if (wasEnd) { this.atEnd = true; if (this.sceneIdx < this.model.scenes.length - 1) { this.atEnd = false; this.gotoScene(this.sceneIdx + 1, true); } }
     if (was) this.play();
   };
   // draw everything of the current scene at once

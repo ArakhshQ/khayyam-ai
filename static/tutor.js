@@ -698,6 +698,8 @@
         quizToBoard();
         board.setTimeline(from, [beat]);
         if (board.sceneIdx >= from || board.model.scenes.length === 1) board.gotoScene(from, true);
+        // a live board always follows the teacher: if it stopped somewhere behind (nothing playing), go on to the next drawing
+        else if (!board.playing && board.sceneEnded && board.sceneIdx < from) board.gotoScene(board.sceneIdx + 1, true);
       },
       getPlan: function () { return cls && cls.outline && cls.outline.length > 1 ? { step: cls.step || 0, outline: cls.outline } : null; },
       onProgress: function (d) {

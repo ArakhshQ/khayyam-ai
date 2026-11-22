@@ -63,6 +63,10 @@
   box-shadow: 0 0 0 1px rgba(31, 42, 55, .10), 0 0 0 5px #eef0f2, 0 0 0 6px rgba(31, 42, 55, .12), 0 24px 44px -24px rgba(20, 40, 50, .45);
 }
 .board-empty[hidden] { display: none; }
+/* until the class starts only the welcome panel shows: the real board (sizing itself underneath) and the pen tools stay hidden,
+   so the student never sees two boards on top of each other */
+.board-empty:not([hidden]) ~ .kb-wrap { visibility: hidden; }
+.board-stage:has(> .board-empty:not([hidden])) .stu-tools { display: none; }
 .board-mark { width: 74px; height: 74px; color: var(--emerald); margin-bottom: 8px; animation: markFloat 7s ease-in-out infinite; }
 @keyframes markFloat { 50% { transform: translateY(-6px) rotate(6deg); } }
 .board-empty h2 { font-family: var(--font-display); font-size: clamp(28px, 3.6vw, 40px); line-height: 1.6; font-weight: 700; color: #1f2a37; }
