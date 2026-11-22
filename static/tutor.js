@@ -762,6 +762,13 @@
     quizActive = false; var sw = $('view-switch'); if (sw) sw.hidden = true;
     if ($('classroom')) window.setView('board');
   }
+  // Maths inside a Dari sentence is reordered by the right-to-left layout: «(5x + 6) - (2x + 1)» showed as «(6 + 5x) - (1 + 2x)»
+  // and «5x - 2x = 3x» as «3x = 5x - 2x», so a right answer looked wrong. Each run of maths is isolated as left-to-right text.
+  var MATH_RUN = /[(\[]*[0-9A-Za-z\u06F0-\u06F9][0-9A-Za-z\u06F0-\u06F9\s+\-\u2212*\/=^().,\u00D7\u00F7\u221A\u00B2\u00B3<>\u2264\u2265]*[0-9A-Za-z\u06F0-\u06F9)\]\u00B2\u00B3]|[0-9A-Za-z\u06F0-\u06F9]/g;
+  function bidi(s) {
+    return String(s == null ? '' : s).replace(MATH_RUN, function (m) { return /[A-Za-z0-9+\-\u2212*\/=^\u00D7\u00F7]/.test(m) ? '\u2066' + m + '\u2069' : m; });
+  }
+  window.__bidi = bidi;
   function showQuiz(quiz, done) {
     var box = $('quizcard'); if (!box || !quiz || !quiz.questions || !quiz.questions.length) return;
     var qs = quiz.questions, i = 0, answers = [], finished = false, srv = null;
@@ -812,26 +819,26 @@
     function render() {
       box.textContent = ''; box.hidden = false;
       head();
-      var q = qs[i]; box.appendChild(el('div', 'qz-q', q.q));
+      var q = qs[i]; box.appendChild(el('div', 'qz-q', bidi(q.q)));
       if (live && live.active && live.quizAt) live.quizAt(q, i + 1, qs.length);      // so the teacher knows which question they are on
       var opts = el('div', 'qz-opts'), btns = [], acts = el('div', 'qz-acts'), hintBox = el('div', 'qz-hint'); hintBox.hidden = true;
       function reveal(k) {                    // k = chosen index, or -1 when skipped
         answers[i] = k;
         btns.forEach(function (bb, kk) { bb.disabled = true; if (kk === q.answer) bb.classList.add('right'); else if (kk === k) bb.classList.add('wrong'); });
         acts.remove(); hintBox.hidden = true;
-        box.appendChild(el('div', 'qz-why', (k === q.answer ? 'درست ✓ ' : k < 0 ? 'پاسخ درست این بود. ' : 'درست نیست. ') + (q.why || '')));
+        box.appendChild(el('div', 'qz-why', (k === q.answer ? 'درست ✓ ' : k < 0 ? 'پاسخ درست این بود. ' : 'درست نیست. ') + bidi(q.why || '')));
         var nb = el('button', 'qz-next', i + 1 < qs.length ? 'بعدی' : 'دیدن نتیجه'); nb.type = 'button';
         nb.onclick = function () { if (i + 1 < qs.length) { i++; render(); } else finish(); };
         box.appendChild(nb);
         var dots = box.querySelectorAll('.qz-dots i'); if (dots[i]) dots[i].className = k === q.answer ? 'ok' : 'no';
       }
       q.options.forEach(function (t, k) {
-        var b = el('button', 'qz-opt', t); b.type = 'button'; btns.push(b);
+        var b = el('button', 'qz-opt', bidi(t)); b.type = 'button'; btns.push(b);
         b.onclick = function () { if (answers[i] !== undefined) return; reveal(k); };
         opts.appendChild(b);
       });
       box.appendChild(opts);
-      if (q.hint) { var hb = el('button', 'qz-act', 'کمک'); hb.type = 'button'; hb.onclick = function () { hintBox.textContent = q.hint; hintBox.hidden = false; hb.disabled = true; }; acts.appendChild(hb); }
+      if (q.hint) { var hb = el('button', 'qz-act', 'کمک'); hb.type = 'button'; hb.onclick = function () { hintBox.textContent = bidi(q.hint); hintBox.hidden = false; hb.disabled = true; }; acts.appendChild(hb); }
       if (live && live.active) { var ab = el('button', 'qz-act', 'از استاد بپرسم'); ab.type = 'button'; ab.onclick = function () { if (live.explainQuestion(q, i + 1)) { ab.disabled = true; ab.textContent = 'استاد توضیح می‌دهد…'; quizToBoard(); } }; acts.appendChild(ab); }
       var sb = el('button', 'qz-act skip', 'رد کردن'); sb.type = 'button'; sb.onclick = function () { if (answers[i] === undefined) reveal(-1); }; acts.appendChild(sb);
       box.appendChild(acts); box.appendChild(hintBox);

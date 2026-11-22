@@ -22,6 +22,7 @@ from flask import current_app, jsonify, request
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 import board_check as BC
+import quiz_check
 import chat_tools
 import gemini
 import media as media_store
@@ -404,10 +405,11 @@ def parse_quiz(text, n=6, min_q=5):
         if len(opts) != 4 or not all(opts) or len({o.strip() for o in opts}) != 4 or not 0 <= ans <= 3:
             continue
         out.append({'q': qt, 'options': opts, 'answer': ans, 'why': _short(q.get('why'), 260),
-                    'hint': _short(q.get('hint'), 220), 'topic': _short(q.get('topic'), 60)})
+                    'hint': _short(q.get('hint'), 220), 'topic': _short(q.get('topic'), 60),
+                    'check': _short(q.get('check'), 100)})          # internal: the maths that proves the key (removed before the student sees it)
     if len(out) < max(2, min_q):
         return None
-    return {'title': _short(d.get('title'), 80) or 'تمرین', 'questions': out[:max(2, n)]}
+    return {'title': _short(d.get('title'), 80) or 'تمرین', 'questions': out[:max(2, n) + 2]}      # a few spare ones, in case checking drops some
 
 
 QUIZ_LEVELS = ['easy', 'medium', 'hard']
@@ -1344,10 +1346,14 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
                      "first 'Answer:' with the final answer, then 'Steps:' with the numbered steps (each one short: the calculation and what it means), then 'Watch out:' with the usual mistake, if any. "
                      "Check every number twice. If the problem is unclear or has no single answer, say so in one line.")
     QUIZ_SYSTEM = ("You write multiple-choice quizzes for a school student in Afghanistan, like Khan Academy exercises. Return one JSON object only: "
-                   '{"title": "short Dari title", "questions": [{"q": "question in Dari", "options": ["A","B","C","D"], "answer": 0, "topic": "2-4 word Dari topic", '
+                   '{"title": "short Dari title", "questions": [{"q": "question in Dari", "solve": "your working, short, in numbers/English", '
+                   '"check": "for maths: ONE plain expression whose value is the answer, e.g. (5x+6)-(2x+1) or 12*3/4; otherwise empty", '
+                   '"options": ["A","B","C","D"], "answer": 0, "topic": "2-4 word Dari topic", '
                    '"hint": "one short Dari sentence that explains the idea needed WITHOUT giving the answer", "why": "one or two short Dari sentences explaining the right answer"}]}. '
-                   "4 short options each, exactly one correct, 'answer' is its index 0-3 (vary the position). Questions are ONLY about what this class teaches. "
-                   "Use everyday Afghan examples (nān, afghani, bazaar, موتر). Write numbers, formulas and terms exactly; double-check every calculation and that exactly one option is right. "
+                   "FOR EVERY QUESTION, FIRST solve it in \"solve\" step by step, THEN write the options: exactly one option equals your result, written the same simple way "
+                   "(for maths, options are plain values or expressions like 3x + 5, no words around them); the other three are typical student mistakes (a sign error, a wrong operation), "
+                   "each clearly wrong. 'answer' is the index 0-3 of the right one (vary the position). Your answers are checked automatically: a question with a wrong key is thrown away. "
+                   "Questions are ONLY about what this class teaches. Use everyday Afghan examples (nān, afghani, bazaar, موتر). "
                    "Natural Afghan Dari, «صنف» not «کلاس», «موتر» not «ماشین». No markdown.")
 
     def _class_context(cid):
@@ -1401,7 +1407,41 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         quiz = parse_quiz(reply, n, min_q)
         if not quiz:
             return None, 'could not make a good one now; ask the questions aloud instead'
+        quiz = _verify_quiz(quiz, n, min_q, label)
+        if not quiz:
+            return None, 'could not make a quiz with checked answers now; ask the questions aloud instead'
         return quiz, ''
+
+    def _verify_quiz(quiz, n, min_q, label):
+        """Throw away every question whose answer key is not right (see quiz_check.py). Maths is proved with sympy; the rest is
+        solved again by an independent call that does not see the key. Returns the quiz with at most n checked questions, or None."""
+        qs = quiz['questions']
+        state = [quiz_check.check_question(q) for q in qs]
+        unknown = [i for i, st in enumerate(state) if st == 'unknown']
+        if unknown and _llm_slot():
+            try:
+                reply, _sw, _reset, _m = metered('tutor', quiz_check.SOLVER_SYSTEM, [{'role': 'user', 'content': quiz_check.solver_prompt([(i, qs[i]) for i in unknown])}],
+                                                 current_user.id, tier_of(current_user), temperature=0, max_output=max(400, 60 * len(unknown)), level='complex', json_mode=True,
+                                                 intent_label=label + '/check')
+                picks = quiz_check.solver_picks(parse_model_json(reply)) if reply else {}
+                if picks:
+                    for i in unknown:
+                        state[i] = 'ok' if picks.get(i) == qs[i]['answer'] else 'bad'
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('%s check failed', label)
+            finally:
+                _LLM_SLOTS.release()
+        good = [q for q, st in zip(qs, state) if st != 'bad']     # 'unknown' left only if the solver was not available
+        dropped = len(qs) - len(good)
+        if dropped:
+            app.logger.warning('%s: %d of %d questions dropped (wrong or unclear answer key)', label, dropped, len(qs))
+        for q in good:
+            q.pop('check', None)
+        if len(good) < max(3, min_q - 2):
+            return None
+        quiz['questions'] = good[:n]
+        return quiz
 
     @app.route('/api/class/<int:cid>/expert', methods=['POST'])
     @limiter.limit('20 per hour')
