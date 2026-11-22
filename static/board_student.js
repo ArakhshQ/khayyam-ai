@@ -1,7 +1,7 @@
 /* Khayyam whiteboard: the student's side.
    The student can (1) POINT: a gold marker follows the mouse or finger, and a stroke around or under something on the board selects it
    (it shows as a yellow highlighter); (2) WRITE with a pen (finger, stylus, mouse) in a colour they choose: the line gets thicker
-   and thinner like real ink (stylus pressure, or the speed of the hand); (3) TYPE text onto the board, in the same marker hand as the teacher.
+   and thinner like real ink (stylus pressure, or the speed of the hand); (3) TYPE text onto the board, in the same font as the teacher's writing.
    Everything lives on its own canvas above the teacher's, so the lesson itself is never changed.
    The board can describe what a selection covers in exact terms (text lines, formulas, parts of a picture), and can take a snapshot,
    so the teacher is told precisely what the student means: no guessing from pixels alone.

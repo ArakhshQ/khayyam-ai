@@ -408,7 +408,7 @@
   P.load = function (lesson) {
     var self = this;
     this.lesson = lesson;
-    var fonts = ['500 30px Marhey', '700 30px Marhey', '500 30px Vazirmatn', '700 30px Vazirmatn'];
+    var fonts = ['400 30px Amiri', '700 30px Amiri', '500 30px Vazirmatn', '700 30px Vazirmatn'];
     var wait = Promise.race([Promise.all(fonts.map(function (f) { return document.fonts ? document.fonts.load(f, 'ابپ۱۲۳abc') : Promise.resolve(); })), new Promise(function (r) { setTimeout(r, 2500); })]);
     return wait.then(function () {
       self.chooseProfile(); self.profile = self.nextProfile; self.sizeCanvases(); self.paintBg();

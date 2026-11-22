@@ -85,7 +85,9 @@
     this.capNodes.push(src, mute);
     function onChunk(i16) {
       if (self.closed || self.ws.readyState !== 1) return;
-      if (self.ws.bufferedAmount > 600000) { self.dropped++; return; }        // the link is stuck: do not build up many seconds of old speech
+      // the link is slow: drop mic audio rather than queue it. Everything else we send ("answer now", notes) waits behind this
+      // queue, so a long one (it was ~9 s) made the teacher answer late. ~200 KB is about 3 s of speech.
+      if (self.ws.bufferedAmount > 200000) { self.dropped++; return; }
       self.ws.send('{"type":"input_audio_buffer.append","audio":"' + toB64(i16) + '"}'); self.sentChunks++;
     }
     function fallback() {

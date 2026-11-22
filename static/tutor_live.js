@@ -26,6 +26,7 @@
     this.pc = null; this.dc = null; this.mic = null; this.audio = null;
     this.receipt = null; this.deadline = 0; this.warned = false; this.timer = 0;
     this.active = false; this.responding = false; this.userSpeaking = false; this.needReply = false; this.ending = false; this.closed = false;
+    this.pendingAsk = 0; this.askWhy = ''; this.lastStop = 0;
     this.usage = { in_text: 0, in_audio: 0, in_image: 0, cin_text: 0, cin_audio: 0, cin_image: 0, out_text: 0, out_audio: 0, responses: 0 }; this.talkMs = 0; this.talkAt = 0; this.startedAt = 0; this.usageT = 0;
     this.cur = null; this.queue = []; this.resps = []; this.spEnd = 0; this.pumpT = 0; this.transcript = []; this.muted = false; this.endT = 0;
   }
@@ -111,7 +112,7 @@
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
       if (o.firstPicture) self.putPicture(o.firstPicture);
       if (o.resumed) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[ادامهٔ صنف] The student is back and presses continue. This is the same class as before, not a new one: greet them and carry on from what is in your notes and on the board. Do not ask what they want to learn.' }] } });
-      self.send({ type: 'response.create' });          // the teacher speaks first
+      self.ask('start');                               // the teacher speaks first
     });
   };
 
@@ -214,17 +215,38 @@
       var ran = Date.now() - this.startedAt, k = this.breaksSent || 0;
       if (k < BREAKS.length && ran >= BREAKS[k]) { this.breaksSent = k + 1; this.breakNote(Math.round(BREAKS[k] / 60000)); }
     }
+    this.watchdog();
     if (!this.deadline) return;
     var left = Math.max(0, Math.ceil((this.deadline - Date.now()) / 1000));
     if (!this.warned && left <= this.warnAt && left > 0) { this.warned = true; this.o.onQuota('warn', Math.ceil(left / 60)); }
     if (!left && !this.closed) this.o.onQuota('end', 0);
   };
 
+  /* ───────── asking the teacher to answer ─────────
+     Every reply goes through ask(). The model refuses a new reply while one is still being made or cancelled, so: never ask
+     twice at once (pendingAsk), remember to ask again when the current one ends (needReply), and if a request is lost or
+     refused, ask again (watchdog). Before, a refused request was silently dropped and the student's words went unanswered. */
+  P.ask = function (why) {
+    if (!this.active || this.closed) return;
+    if (this.responding || this.pendingAsk) { this.needReply = true; return; }
+    this.needReply = false; this.pendingAsk = Date.now(); this.askWhy = why || '';
+    this.send({ type: 'response.create' });
+  };
+  // is the student really talking now? (a noise can hold the voice detector "on" for a long time: do not wait on it for ever)
+  P.speakingNow = function () { return this.userSpeaking && Date.now() - this.talkAt < 8000; };
+  P.watchdog = function () {
+    if (!this.active || this.closed || this.ending) return;
+    var now = Date.now();
+    if (this.pendingAsk && !this.responding && now - this.pendingAsk > 8000) { this.log('ask-lost', this.askWhy); this.pendingAsk = 0; this.needReply = true; }
+    if (this.needReply && !this.responding && !this.pendingAsk && !this.speakingNow() && now - this.lastStop > 900) { this.log('rescue', 'a reply was waiting'); this.ask('rescue'); }
+  };
+
   /* ───────── events from the model ───────── */
   P.onEvent = function (e) {
     var self = this, t = e.type;
     if (t === 'response.created') {
-      this.responding = true; this.cur = { chars: 0, begin: 0, calls: [], text: '', items: [], started: false }; this.o.onState('speaking');
+      this.responding = true; this.pendingAsk = 0;
+      this.cur = { chars: 0, begin: 0, calls: [], text: '', items: [], started: false, t0: Date.now(), why: this.askWhy }; this.askWhy = ''; this.o.onState('speaking');
     } else if (t === 'output_audio_buffer.started') {
       this.audioStarted();
     } else if (t === 'response.output_audio_transcript.delta') {
@@ -234,13 +256,21 @@
         this.spEnd = Math.max(this.spEnd, this.cur.begin + (this.cur.chars / CPS) * 1000);
       }
     } else if (t === 'response.output_audio_transcript.done') {
-      if (e.transcript && e.transcript.trim()) { this.transcript.push({ role: 'assistant', text: e.transcript.trim() }); this.o.onAiText(e.transcript.trim()); this.log('tutor', e.transcript.trim()); this.dirTutor(e.transcript.trim()); }
+      if (e.transcript && e.transcript.trim()) {
+        var said = e.transcript.trim();
+        this.transcript.push({ role: 'assistant', text: said });
+        // cut off before a single word was played: the student heard nothing, so it does not go in the chat either
+        if (this.cur && this.cur.cut && !this.cur.started) { this.log('tutor-unheard', said); }
+        else { this.o.onAiText(said); this.log('tutor', said); this.dirTutor(said); }
+      }
     } else if (t === 'response.output_item.done') {
       var it = e.item;
       if (it && it.type === 'function_call' && this.cur) this.cur.calls.push({ item: it, atChars: this.cur.chars, resp: this.cur });
     } else if (t === 'response.done') {
       this.responding = false;
       var cur = this.cur; this.cur = null;
+      if (cur) this.log('done', ((e.response && e.response.status) || '?') + ' ' + (Date.now() - cur.t0) + 'ms' + (cur.why ? ' for ' + cur.why : '') +
+        (cur.calls.length ? ' calls:' + cur.calls.map(function (c) { return c.item.name; }).join(',') : '') + (cur.cut ? ' (cut)' : ''));
       this.noteUsage(e.response && e.response.usage);
       this.afterResponse(cur, e.response);
     } else if (t === 'input_audio_buffer.speech_started') {
@@ -248,7 +278,7 @@
       if (this.manual) { this.sp0 = Date.now(); this.o.onState('listening'); return; }      // maybe only noise: the tutor keeps going until it is clear this is the student
       this.nudged = false; this.flush(); this.o.onState('listening');
     } else if (t === 'input_audio_buffer.speech_stopped') {
-      this.userSpeaking = false; if (this.talkAt) { this.talkMs += Date.now() - this.talkAt; this.talkAt = 0; }
+      this.userSpeaking = false; this.lastStop = Date.now(); if (this.talkAt) { this.talkMs += Date.now() - this.talkAt; this.talkAt = 0; }
       if (this.manual) {
         var dur = Date.now() - (this.sp0 || Date.now()), me = this;
         this.o.onState(this.responding ? 'speaking' : 'idle');
@@ -274,7 +304,9 @@
     } else if (t === 'error') {
       var m = e.error && e.error.message || '';
       if (global.console) console.warn('realtime error', e.error);
-      if (!/active response|cancel|no active|item.*(not found|does not exist)|conversation\.item\.delete/i.test(m)) this.o.onError('خطایی در گفتگوی صوتی رخ داد.');
+      if (/active response/i.test(m)) { this.pendingAsk = 0; this.needReply = true; this.log('busy', 'a reply was still running: will ask again when it ends'); return; }
+      this.log('error', m);
+      if (!/cancel|no active|item.*(not found|does not exist)|conversation\.item\.delete/i.test(m)) this.o.onError('خطایی در گفتگوی صوتی رخ داد.');
     }
   };
 
@@ -293,6 +325,7 @@
     for (i = 0; i < this.resps.length; i++) if (!this.resps[i].started) { r = this.resps[i]; break; }
     if (!r) return;
     r.started = true;
+    if (r.t0) this.log('voice', 'heard ' + (Date.now() - r.t0) + 'ms after the reply was asked');
     var d = Date.now() - r.begin;
     if (Math.abs(d) < 120) return;
     r.begin += d; r.items.forEach(function (q) { q.at += d; });
@@ -308,25 +341,29 @@
   P.afterResponse = function (cur, resp) {
     var self = this, calls = cur ? cur.calls : [];
     if (!calls.length) {
-      if (this.needReply && !this.userSpeaking) { this.needReply = false; this.send({ type: 'response.create' }); return; }
+      if (this.needReply && !this.speakingNow()) { this.ask('waiting'); return; }
       if (this.needsBoard(cur)) this.boardNudge();
       return;
     }
     if (calls.some(function (c) { return c.item.name === 'board'; })) { this.nudged = false; this.classOn = true; }
     var WORK = { look: 'look', find_poem: 'poem', start_class: 'start', web_search: 'search', make_picture: 'picture', expert: 'expert', make_quiz: 'quiz', make_test: 'quiz' };
     var jobs = calls.map(function (c) {
-      var w = WORK[c.item.name], p = self.runCall(c, cur);
+      var w = WORK[c.item.name], t0 = Date.now(), p = self.runCall(c, cur);
+      p.then(function () { self.log('tool', c.item.name + ' ' + (Date.now() - t0) + 'ms'); }, function () { self.log('tool', c.item.name + ' failed'); });
       if (w && self.o.onWork) { self.o.onWork(w, true); var off = function () { self.o.onWork(w, false); }; p.then(off, off); }
       return p;
     });
     Promise.all(jobs).then(function (outs) {
-      outs.forEach(function (o) {
+      // the teacher already spoke in this reply: after the tool result it tended to start over (the greeting twice). Say so, once.
+      var spoke = cur && cur.chars > 40 && !cur.cut;
+      outs.forEach(function (o, i) {
+        if (spoke && i === 0 && !o.quiet && o.output && typeof o.output === 'object') o.output.already_said = 'You already said your words aloud. Do not repeat them; continue from there.';
         self.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: o.call_id, output: JSON.stringify(o.output) } });
       });
       if (self.ending) return;                         // saying goodbye: nothing more to ask
       if (outs.length && outs.every(function (o) { return o.quiet; })) return;      // a quiz card is on screen: the teacher waits in silence
-      if (self.responding) { self.needReply = true; return; }
-      if (!self.userSpeaking) { self.needReply = false; self.send({ type: 'response.create' }); } else self.needReply = true;
+      if (self.responding || self.speakingNow()) { self.needReply = true; return; }
+      self.ask('after ' + calls.map(function (c) { return c.item.name; }).join(','));
     });
   };
 
@@ -441,14 +478,23 @@
   P.realTurn = function () {
     clearTimeout(this.tNoTx);
     if (!this.active || this.ending) return;
-    this.nudged = false; this.flush(); this.stopSpeaking(); this.o.onState('thinking');
+    this.nudged = false; this.o.onState('thinking');
+    var cur = this.cur;
+    if (this.responding && cur && !cur.begin && !cur.started) {
+      // the teacher is still preparing an answer and has not said a word (often a board drawing). Cancelling it would throw that
+      // work away and start again, so a student who repeats themselves while waiting made it slower each time. Let it finish,
+      // then answer what was just said.
+      this.flush(); this.dirInject(); this.needReply = true; this.log('wait', 'teacher still preparing: answer after it');
+      return;
+    }
+    this.flush(); this.stopSpeaking();
     this.dirInject();                                  // where the class is, before the teacher answers
-    if (this.responding) this.needReply = true; else this.send({ type: 'response.create' });
+    this.ask('student');
   };
   // a noise was ignored: if something was waiting for a quiet moment (a tool result), carry on
   P.afterNoise = function () {
     if (this.userSpeaking || this.responding) return;
-    if (this.needReply) { this.needReply = false; this.send({ type: 'response.create' }); }
+    if (this.needReply) this.ask('after noise');
   };
 
   // The teacher spoke a real stretch in a class without changing the board: ask once for the picture/example that goes with it.
@@ -465,7 +511,7 @@
     this.nudged = true;
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text:
       '[یادداشت سیستم] You spoke but the board did not change. Do NOT repeat or re-say anything. Now call board once with a cue sheet: a picture or a small worked example for what you just said (a few words, numbers, a drawing). Then say at most ONE short sentence, and ask a tiny practice question.' }] } });
-    this.send({ type: 'response.create' });
+    this.ask('board nudge');
     return true;
   };
 
@@ -633,8 +679,8 @@
   P.sendPicture = function (pic) {
     if (!this.active) return false;
     this.stopSpeaking();
-    this.putPicture(pic);
-    if (this.responding) this.needReply = true; else this.send({ type: 'response.create' });
+    this.putPicture(pic); this.log('picture', pic.title || '');
+    this.ask('picture');
     return true;
   };
   // something the student did on the board (marked, wrote, typed): the teacher gets a note and pictures.
@@ -646,13 +692,14 @@
     (images || []).forEach(function (u) { if (u) content.push({ type: 'input_image', image_url: u }); });
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: content } });
     this.transcript.push({ role: 'user', text: label || '[تخته]' });
-    if (respond) { this.stopSpeaking(); if (this.responding) this.needReply = true; else this.send({ type: 'response.create' }); }
+    this.log('board-note', (label || '[تخته]') + (respond ? '' : ' (quiet)'));
+    if (respond) { this.stopSpeaking(); this.ask('board note'); }
     return true;
   };
   // the student marked something and then said nothing: the teacher asks which part they mean
   P.nudge = function () {
-    if (!this.active || this.responding || this.userSpeaking) return false;
-    this.send({ type: 'response.create' }); return true;
+    if (!this.active || this.responding || this.speakingNow()) return false;
+    this.ask('nudge'); return true;
   };
   // the student finished a quiz card: the teacher gets the score and the mistakes
   P.quizDone = function (quiz, res) {
@@ -694,12 +741,16 @@
     if (!this.active) return false;
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + text + SHORT_REMINDER }] } });
     this.nudged = false; this.classOn = this.classOn || !!this.o.resumed;
-    this.transcript.push({ role: 'user', text: text });
+    this.transcript.push({ role: 'user', text: text }); this.log('typed', text);
     this.stopSpeaking();
-    if (this.responding) this.needReply = true; else this.send({ type: 'response.create' });
+    this.ask('typed');
     return true;
   };
   P.stopSpeaking = function () {
+    var playing = Date.now() < this.spEnd, last = this.resps[this.resps.length - 1];
+    if (this.cur) this.cur.cut = true;
+    if (playing && last) last.cut = true;
+    if (this.responding || playing) this.log('cut', this.responding ? 'reply stopped' : 'sound stopped');
     if (this.responding) this.send({ type: 'response.cancel' });
     this.send({ type: 'output_audio_buffer.clear' });
     this.flush();

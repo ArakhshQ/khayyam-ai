@@ -17,9 +17,8 @@
   ZONES.wide.left = ZONES.wide.b; ZONES.wide.right = ZONES.wide.a; ZONES.tall.left = ZONES.tall.b; ZONES.tall.right = ZONES.tall.a;
   ZONES.wide.first = ZONES.wide.a; ZONES.wide.second = ZONES.wide.b; ZONES.tall.first = ZONES.tall.a; ZONES.tall.second = ZONES.tall.b;
 
-  // Board writing is in a marker hand (Marhey: Dari/Persian and Latin, like a teacher's whiteboard writing);
-  // formulas stay in clean Vazirmatn so fractions, powers and roots line up exactly.
-  var FAM = { body: 'Marhey, Vazirmatn, system-ui, sans-serif', display: 'Marhey, Vazirmatn, system-ui, sans-serif', math: 'Vazirmatn, system-ui, sans-serif' };
+  // Board writing is in Amiri, the site's font for large text; formulas stay in Vazirmatn so fractions, powers and roots line up exactly.
+  var FAM = { body: 'Amiri, Vazirmatn, serif', display: 'Amiri, Vazirmatn, serif', math: 'Vazirmatn, system-ui, sans-serif' };
   var RTL_RE = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
   var SPEECH_CPS = 12.5;
 

@@ -1,11 +1,6 @@
 /* Tutor classroom: lessons on the right, a white board in the middle, the conversation on the left.
    In a live voice class on a wide screen the board takes the whole room ("focus") and the conversation slides in as a drawer. */
 
-/* the board's marker hand (Dari/Persian and Latin); formulas stay in Vazirmatn */
-@font-face { font-family: 'Marhey'; src: url('/static/fonts/marhey-arabic-500-normal.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; unicode-range: U+0600-06BF, U+06C1-06FF, U+0750-077F, U+FB50-FDFF, U+FE70-FEFC, U+200C-200E; }
-@font-face { font-family: 'Marhey'; src: url('/static/fonts/marhey-arabic-700-normal.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: swap; unicode-range: U+0600-06BF, U+06C1-06FF, U+0750-077F, U+FB50-FDFF, U+FE70-FEFC, U+200C-200E; }
-@font-face { font-family: 'Marhey'; src: url('/static/fonts/marhey-latin-500-normal.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+20AC, U+2122, U+2212; }
-@font-face { font-family: 'Marhey'; src: url('/static/fonts/marhey-latin-700-normal.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+20AC, U+2122, U+2212; }
 
 .class-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--paper); }
 .class-top .chat-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -70,7 +65,7 @@
 .board-empty[hidden] { display: none; }
 .board-mark { width: 74px; height: 74px; color: var(--emerald); margin-bottom: 8px; animation: markFloat 7s ease-in-out infinite; }
 @keyframes markFloat { 50% { transform: translateY(-6px) rotate(6deg); } }
-.board-empty h2 { font-family: Marhey, var(--font-display); font-size: clamp(28px, 3.6vw, 40px); line-height: 1.6; font-weight: 700; color: #1f2a37; }
+.board-empty h2 { font-family: var(--font-display); font-size: clamp(28px, 3.6vw, 40px); line-height: 1.6; font-weight: 700; color: #1f2a37; }
 .board-empty p { max-width: 460px; font-size: 16.5px; line-height: 2.05; color: var(--ink-soft); }
 
 .caption { min-height: 56px; padding: 6px 12px 2px; text-align: center; font-size: 17px; line-height: 2; color: var(--ink); }
@@ -229,7 +224,7 @@
 .stu-send { min-height: 38px; padding: 6px 14px; border: 0; border-radius: 11px; background: var(--emerald); color: #fff; font: 700 13.5px/1 inherit; cursor: pointer; animation: stuPulse 1.6s ease-in-out infinite; }
 .stu-send[hidden] { display: none; }
 @keyframes stuPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(15, 92, 73, .45); } 50% { box-shadow: 0 0 0 9px rgba(15, 92, 73, 0); } }
-.kb-typing { z-index: 40; box-sizing: border-box; padding: 4px 8px; border: 2px dashed rgba(31, 111, 209, .6); border-radius: 8px; background: rgba(255, 255, 255, .96); color: #1f6fd1; font-family: Marhey, Vazirmatn, system-ui, sans-serif; font-weight: 500; line-height: 1.5; resize: none; outline: none; overflow: hidden; box-shadow: 0 6px 18px -10px rgba(20, 40, 50, .4); }
+.kb-typing { z-index: 40; box-sizing: border-box; padding: 4px 8px; border: 2px dashed rgba(31, 111, 209, .6); border-radius: 8px; background: rgba(255, 255, 255, .96); color: #1f6fd1; font-family: Amiri, Vazirmatn, serif; font-weight: 400; line-height: 1.5; resize: none; outline: none; overflow: hidden; box-shadow: 0 6px 18px -10px rgba(20, 40, 50, .4); }
 @media (max-width: 760px) {
   .stu-tools { bottom: 6px; width: max-content; flex-wrap: wrap; justify-content: center; max-width: calc(100% - 16px); gap: 3px; padding: 4px; }
   .stu-btn { min-height: 38px; padding: 6px 9px; font-size: 12.5px; } .stu-btn svg { width: 18px; height: 18px; }

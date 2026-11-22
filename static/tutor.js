@@ -317,7 +317,7 @@
     setDrawer(open == null ? !drawerOpen() : open);
   };
   function syncFocus() {
-    var room = $('classroom'), liveNow = !!room.dataset.live, boardUp = $('board-empty').hidden, dock = $('class-dock');
+    var room = $('classroom'), be = $('board-empty'), liveNow = !!room.dataset.live, boardUp = !be || be.hidden, dock = $('class-dock');
     if (dock) dock.hidden = !(liveNow && boardUp);
     var f = liveNow && boardUp && wideMQ.matches;
     if (f === focusOn) return;
@@ -337,7 +337,7 @@
   try {
     var syncObs = new MutationObserver(syncFocus);
     syncObs.observe($('classroom'), { attributes: true, attributeFilter: ['data-live'] });
-    syncObs.observe($('board-empty'), { attributes: true, attributeFilter: ['hidden'] });
+    if ($('board-empty')) syncObs.observe($('board-empty'), { attributes: true, attributeFilter: ['hidden'] });
     if (wideMQ.addEventListener) wideMQ.addEventListener('change', syncFocus); else if (wideMQ.addListener) wideMQ.addListener(syncFocus);
     // the dock's and the phone's microphone buttons show the same state as the one in the composer
     new MutationObserver(function () {
