@@ -206,6 +206,20 @@
   };
 
   /* ───────── marker-ink tile: almost solid, with faint streaks where the felt tip ran a little dry ───────── */
+  // a Dari line that holds maths (or English, chemistry): draw it piece by piece so each formula keeps its real left-to-right
+  // order. One fillText of the whole line lets the browser reorder it («(5x + 6)» came out as «(6 + 5x)»).
+  // x: right edge of the line; ctx font/fill are already set.
+  KB.fillRtlLine = function (ctx, s, x, y) {
+    var runs = (global.MathDir && global.MathDir.runs(s)) || null;
+    if (!runs || !runs.some(function (r) { return r.math; })) { ctx.direction = 'rtl'; ctx.textAlign = 'right'; ctx.fillText(s, x, y); return; }
+    runs.forEach(function (r) {
+      ctx.direction = r.math ? 'ltr' : 'rtl'; ctx.textAlign = 'left';
+      var w = ctx.measureText(r.t).width;
+      ctx.fillText(r.t, x - w, y);
+      x -= w;
+    });
+    ctx.direction = 'rtl';
+  };
   KB.makeGrain = function (hex) {
     var c = document.createElement('canvas'); c.width = c.height = 144;
     var x = c.getContext('2d'), img = x.createImageData(144, 144), d = img.data, r = KB.rng(90210);

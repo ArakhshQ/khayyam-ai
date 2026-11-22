@@ -240,3 +240,7 @@ button { cursor: pointer; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
   [data-reveal] { opacity: 1; transform: none; clip-path: none; }
 }
+
+/* formulas inside Dari text keep their real left-to-right order (MathDir in main.js) */
+.mx, .mxw { direction: ltr; unicode-bidi: isolate; }
+.mx { font-family: Vazirmatn, system-ui, sans-serif; font-variant-numeric: lining-nums; padding: 0 .28em; margin: 0 .08em; border-radius: .35em; background: rgba(15, 92, 73, .07); }

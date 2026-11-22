@@ -166,6 +166,7 @@ Every reply you give has this shape, and nothing more:
 - The board is your hand; the student mostly WATCHES it, so everything important must be on it. Every stretch of speech that explains something comes with a board call in the SAME reply; a question that only waits for an answer needs none.
 - Speak first, then call board ONCE with a cue sheet for what you just said: 2-6 operations. Give the first operation of each cue a "when": the first 2-4 words of the sentence it belongs to, copied exactly. The page draws that cue when your voice reaches those words. Operations without "when" belong to the cue before. Example: you say «اول سوال را ببینید. این‌جا نوشته شده که دو سیب داریم» and call board with ops [{"op":"point","target":"pic","region":"r1","when":"اول سوال را"},{"op":"mark","target":"pic","region":"r1","style":"underline"},{"op":"point","target":"pic","region":"r2","when":"این‌جا نوشته شده"},{"op":"mark","target":"pic","region":"r2","style":"circle"},{"op":"text","t":"2 + 3","zone":"a"}].
 - Show, do not write sentences: short labels, numbers, formulas, keywords (1-4 words). Picture first, words second, formula last. Give an "id" to anything you may mark or erase later.
+- Formulas, equations and chemical formulas go in their OWN operation (op math, or a text line of their own), never mixed into a Dari sentence.
 - A typed or written question from the student ([نوشتهٔ تایپی شاگرد], [نوشته شاگرد]) is answered ON THE BOARD too.
 - Colours with meaning: black for ordinary writing, yellow for titles and key results, green for correct, red for mistakes, blue, orange and purple to tell things apart.
 
@@ -1352,7 +1353,7 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
                    '"hint": "one short Dari sentence that explains the idea needed WITHOUT giving the answer", "why": "one or two short Dari sentences explaining the right answer"}]}. '
                    "FOR EVERY QUESTION, FIRST solve it in \"solve\" step by step, THEN write the options: exactly one option equals your result, written the same simple way "
                    "(for maths, options are plain values or expressions like 3x + 5, no words around them); the other three are typical student mistakes (a sign error, a wrong operation), "
-                   "each clearly wrong. 'answer' is the index 0-3 of the right one (vary the position). Your answers are checked automatically: a question with a wrong key is thrown away. "
+                   "each clearly wrong. 'answer' is the index 0-3 of the right one (vary the position). Write every expression, equation, unit or chemical formula as ONE plain left-to-right piece (3x + 5, 5x - 2x = 3x, H₂O, 60 km/h), never broken up by Dari words; the page shows each such piece in its real order. Your answers are checked automatically: a question with a wrong key is thrown away. "
                    "Questions are ONLY about what this class teaches. Use everyday Afghan examples (nān, afghani, bazaar, موتر). "
                    "Natural Afghan Dari, «صنف» not «کلاس», «موتر» not «ماشین». No markdown.")
 

@@ -228,7 +228,8 @@
         tl.lines.forEach(function (l, i) {
           var r = rtl(l), w = ctx.measureText(l).width;
           ctx.direction = r ? 'rtl' : 'ltr'; ctx.textAlign = 'left';
-          ctx.fillText(l, r ? it.x + Math.min(w, 1000 - it.x) - w : it.x, it.y + i * tl.lh - it.size * .2);
+          var ly = it.y + i * tl.lh - it.size * .2;
+          if (r) KB.fillRtlLine(ctx, l, it.x + Math.min(w, 1000 - it.x), ly); else ctx.fillText(l, it.x, ly);
         });
       }
       ctx.globalAlpha = 1; ctx.shadowBlur = 0;

@@ -165,7 +165,8 @@
         // a hand never writes perfectly level: each line leans and drifts a touch
         x.translate(bx * S, (by + (r() - .5) * it.size * .05) * S); x.rotate((r() - .5) * .014);
         x.font = it.weight + ' ' + (it.size * S) + 'px ' + fam; x.direction = l.rtl ? 'rtl' : 'ltr'; x.textAlign = l.rtl ? 'right' : 'left'; x.textBaseline = 'alphabetic';
-        x.globalAlpha = 1; x.fillText(l.s, 0, 0);
+        x.globalAlpha = 1;
+        if (l.rtl) KB.fillRtlLine(x, l.s, 0, 0); else x.fillText(l.s, 0, 0);
         x.restore();
       });
     } else {
