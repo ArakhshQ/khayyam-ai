@@ -365,7 +365,12 @@
 
 
 /* ───────── live class: the dock (mic, hand, chat, end), focus mode and the conversation drawer ───────── */
-#classroom[data-live] .board-controls { display: none !important; }
+/* in a live class the bar keeps back / play / next / the steps (hand and end are in the dock; phones swipe instead) */
+#classroom[data-live] .board-controls .ctl.hand, #classroom[data-live] .board-controls .ctl.stop, #classroom[data-live] .board-controls .ctl.speed { display: none; }
+.now-chip { position: absolute; z-index: 33; top: 12px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border: 0; border-radius: 999px;
+  background: var(--emerald); color: #fff; font: 700 13.5px/1 inherit; cursor: pointer; box-shadow: 0 10px 24px -10px rgba(15, 92, 73, .6); }
+.now-chip[hidden] { display: none; }
+.now-chip i { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #fff; color: var(--emerald); font-style: normal; font-size: 12px; display: grid; place-items: center; }
 .class-dock { position: absolute; z-index: 32; inset-inline-end: 10px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 18px; background: rgba(255, 255, 255, .94); border: 1px solid rgba(31, 42, 55, .12); box-shadow: 0 14px 30px -16px rgba(20, 40, 50, .5); backdrop-filter: blur(8px); transition: opacity .35s; }
 .class-dock[hidden] { display: none; }
 .dock-btn { position: relative; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 13px; background: transparent; color: #1f2a37; font: 700 12.5px/1 inherit; cursor: pointer; transition: background .18s, color .18s, transform .15s; }

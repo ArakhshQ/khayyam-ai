@@ -230,7 +230,7 @@
       (function (i) {
         var b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-label', 'بخش ' + faNum(i + 1));
         b.appendChild(document.createElement('i'));
-        b.addEventListener('click', function () { board.gotoScene(i, board.playing); setHand(false); });
+        b.addEventListener('click', function () { lookAround(function () { board.gotoScene(i, board.playing || !!live); }); setHand(false); });
         box.appendChild(b);
       })(i);
     }
@@ -296,7 +296,12 @@
     }
     if (inflight) setWaiting(true); else { setWaiting(true); fetchNext(); }
   }
-  window.boardToggle = function () { if (board) { if (board.playing) board.pause(); else board.play(); setHand(false); } };
+  window.boardToggle = function () {
+    if (!board) return;
+    if (board.playing) board.pause();
+    else { if (reviewing) { reviewing = false; reviewNew = 0; showNowChip(); clearTimeout(reviewT); } board.play(); }      // play: follow the class again from here
+    setHand(false);
+  };
   // phone: the toolbar's hand button shows its state; the class bar is only shown while a live class runs
   try {
     new MutationObserver(function () { document.body.classList.toggle('class-live', !!$('classroom').dataset.live); }).observe($('classroom'), { attributes: true, attributeFilter: ['data-live'] });
@@ -318,6 +323,7 @@
   };
   function syncFocus() {
     var room = $('classroom'), be = $('board-empty'), liveNow = !!room.dataset.live, boardUp = !be || be.hidden, dock = $('class-dock');
+    if (!liveNow && reviewing) { reviewing = false; reviewNew = 0; clearTimeout(reviewT); showNowChip(); }      // the live class ended: no more looking back
     if (dock) dock.hidden = !(liveNow && boardUp);
     var f = liveNow && boardUp && wideMQ.matches;
     if (f === focusOn) return;
@@ -356,13 +362,34 @@
       if (!on || !board || !board.model) return; on = false;
       var t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
       if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.8 || Date.now() - t0 > 900) return;
-      if (dx < 0) board.next(); else board.prev();
+      if (dx < 0) window.boardNext(); else window.boardPrev();
       var ind = $('swipe-ind'), n = stepCount();
       if (ind && n) { ind.textContent = faNum(board.sceneIdx + 1) + ' از ' + faNum(n); ind.hidden = false; clearTimeout(indT); indT = setTimeout(function () { ind.hidden = true; }, 1400); }
     }, { passive: true });
   })();
-  window.boardNext = function () { if (board) board.next(); };
-  window.boardPrev = function () { if (board) board.prev(); };
+  /* ───── looking back during a live class ─────
+     Back / next / the step dots / a swipe during a live class let the student look at earlier writing without being pulled away
+     by each new drawing; a chip shows how many new drawings came and brings them back to now. After a minute without looking
+     around they are brought back by themselves, so nobody is left behind. */
+  var reviewing = false, reviewNew = 0, reviewT = 0;
+  function showNowChip() { var c = $('now-chip'); if (!c) return; c.hidden = !reviewing; $('now-count').textContent = faNum(reviewNew); }
+  function startReview() {
+    if (!live || !board || !board.model) return;
+    reviewing = true; showNowChip();
+    clearTimeout(reviewT); reviewT = setTimeout(function () { window.boardNow(); }, 60000);
+  }
+  window.boardNow = function () {
+    clearTimeout(reviewT); var was = reviewing; reviewing = false; reviewNew = 0; showNowChip();
+    if (was && board && board.model) board.gotoScene(board.model.scenes.length - 1, true);
+  };
+  function lookAround(go) {
+    if (!board) return;
+    go();
+    if (!live) return;
+    if (board.sceneIdx >= stepCount() - 1) window.boardNow(); else startReview();
+  }
+  window.boardNext = function () { lookAround(function () { board.next(); }); };
+  window.boardPrev = function () { lookAround(function () { board.prev(); }); };
   window.boardSpeed = function () {
     if (!board) return;
     var steps = [1, 1.25, 1.5, .75], cur = steps.indexOf(board.speed), v = steps[(cur + 1) % steps.length];
@@ -697,6 +724,8 @@
         leaveLobby(true);
         quizToBoard();
         board.setTimeline(from, [beat]);
+        // the student is looking back at earlier writing: do not pull them away; the chip counts what is new
+        if (reviewing) { reviewNew++; showNowChip(); return; }
         if (board.sceneIdx >= from || board.model.scenes.length === 1) board.gotoScene(from, true);
         // a live board always follows the teacher: if it stopped somewhere behind (nothing playing), go on to the next drawing
         else if (!board.playing && board.sceneEnded && board.sceneIdx < from) board.gotoScene(board.sceneIdx + 1, true);

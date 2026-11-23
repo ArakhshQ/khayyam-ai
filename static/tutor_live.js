@@ -396,11 +396,13 @@
      it tells the tutor where they are, what the student said, and whether a quiz is due.
      The previous note is deleted each time so they do not pile up. */
   var DIR_SAME = 0.45, DIR_QUIZ = 3, DIR_NUDGE = 8, DIR_FORCE = 14;      // counted in the student's turns on one step
-  P.dirState = function () { return this._dir || (this._dir = { step: -1, outline: null, turns: 0, qs: [], lastQ: '', asked: 0, stuAfter: 0, lastStu: '', noteId: '', n: 0, moved: '', forcing: false, quizDone: false, quizResult: '' }); };
+  P.dirState = function () { return this._dir || (this._dir = { step: -1, outline: null, turns: 0, qs: [], lastQ: '', asked: 0, stuAfter: 0, lastStu: '', noteId: '', n: 0, moved: '', forcing: false, quizDone: false, quizResult: '',
+    quizBusy: false, quizTries: 0, quizPassed: false, quizFailedGen: false, review: false, reviewTurns: 0, weak: '', weakSteps: [] }); };
   P.dirPlan = function (d) {
     var D = this.dirState();
     if (d && Array.isArray(d.outline) && d.outline.length) D.outline = d.outline;
-    if (d && typeof d.step === 'number' && d.step !== D.step) { D.step = d.step; D.turns = 0; D.asked = 0; D.stuAfter = 0; D.lastQ = ''; D.quizDone = false; D.quizResult = ''; }
+    if (d && typeof d.step === 'number' && d.step !== D.step) { D.step = d.step; D.turns = 0; D.asked = 0; D.stuAfter = 0; D.lastQ = ''; D.quizDone = false; D.quizResult = '';
+      D.quizTries = 0; D.quizPassed = false; D.quizFailedGen = false; D.review = false; D.reviewTurns = 0; D.weak = ''; }
   };
   P.dirQuiz = function (result) { var D = this.dirState(); D.quizDone = true; D.quizResult = result || 'done'; };
   function lastQuestion(text) {
@@ -423,17 +425,88 @@
       D.qs.push(q); if (D.qs.length > 8) D.qs.shift();
       if (again) this.log('repeat-question', q);
     } else if (D.stuAfter > 0) { D.lastQ = ''; D.stuAfter = 0; }      // the teacher answered the student without a new question: that exchange is closed
-    if (!q) this.dirForce();                           // never move the class on while a question is waiting
+    this.stepGate(text, q);
   };
-  P.dirStudent = function (tx) { var D = this.dirState(); D.stuAfter++; D.turns++; D.lastStu = String(tx || '').slice(0, 90); };
-  P.dirForce = function () {
+  P.dirStudent = function (tx) { var D = this.dirState(); D.stuAfter++; D.turns++; if (D.review) D.reviewTurns++; D.lastStu = String(tx || '').slice(0, 90); };
+
+  /* ───────── the step gate ─────────
+     The page, not the model, makes sure that every step of the outline ends with its quiz, that a step that went badly is
+     reviewed and quizzed again, and that the student's step bar moves when the class moves. (Left to the model, it went on to
+     the next step by talking, without a quiz and without calling progress: the bar stayed at 0 of 5.) */
+  var PASS = 0.7;
+  var MOVE_RE = /(بعدی|می[\u200c\s]?رویم\s+(سر|سراغ|به)|برویم\s+(سر|سراغ|به)|می[\u200c\s]?رسیم\s+به|(قدم|گام|بخش)\s+(دوم|سوم|چهارم|پنجم|ششم|هفتم)|next\s+(step|part|topic))/i;
+  var STOPW = { 'این': 1, 'آن': 1, 'های': 1, 'برای': 1, 'است': 1, 'یک': 1, 'با': 1, 'از': 1, 'در': 1, 'به': 1, 'را': 1, 'که': 1, 'و': 1, 'ها': 1, 'می': 1, 'آنها': 1, 'چند': 1, 'ساده': 1, 'مثال': 1, 'معنی': 1, 'the': 1, 'and': 1 };
+  function contentWords(s) { return words(s).filter(function (w) { return w.length >= 3 && !STOPW[w]; }); }
+  P.stepCleared = function () {
+    var D = this.dirState();
+    if (!D.outline || D.step < 0 || D.step >= D.outline.length - 1) return true;     // the last step ends with the final test instead
+    return D.quizPassed || D.quizTries >= 2 || D.quizFailedGen;
+  };
+  // did the teacher just move on to the next step by talking? (the next step's words + a "next" word, or almost all its words)
+  P.movedOnByTalk = function (text) {
+    var D = this.dirState(); if (!D.outline || D.step + 1 >= D.outline.length) return false;
+    var cw = contentWords(D.outline[D.step + 1]); if (!cw.length) return false;
+    var tw = {}; words(text).forEach(function (w) { tw[w] = 1; });
+    var hits = cw.filter(function (w) { return tw[w] || Object.keys(tw).some(function (t) { return t.length >= 4 && (t.indexOf(w) === 0 || w.indexOf(t) === 0); }); }).length;
+    var ratio = hits / cw.length;
+    return (MOVE_RE.test(text) && ratio >= 0.5) || (ratio >= 0.85 && cw.length >= 2);
+  };
+  P.stepGate = function (text, q) {
+    var D = this.dirState();
+    if (!this.classOn || !D.outline || D.step < 0 || D.quizBusy || D.forcing || this.ending) return;
+    var moved = D.turns >= 2 && this.movedOnByTalk(text);
+    if (this.stepCleared()) {
+      if (moved) this.autoProgress('the teacher moved on');
+      else if (!q && D.turns >= DIR_FORCE + 4) this.autoProgress('step much too long');
+      return;
+    }
+    if (moved) this.stepQuiz('moved on');
+    else if (D.review && !q && D.reviewTurns >= 3) this.stepQuiz('after review');
+    else if (!D.review && !q && D.turns >= DIR_NUDGE) this.stepQuiz('long step');
+  };
+  // the step is done: move the bar (and the teacher's plan) on, as if the teacher had called progress
+  P.autoProgress = function (why) {
     var D = this.dirState(), me = this;
-    if (D.forcing || !D.outline || D.turns < DIR_FORCE || D.step < 0 || D.step + 1 >= D.outline.length) return;
-    D.forcing = true; this.log('auto-advance', 'step ' + D.step + ' -> ' + (D.step + 1));
+    if (D.forcing || D.step + 1 >= D.outline.length) return;
+    D.forcing = true; this.log('auto-progress', why + ': step ' + D.step + ' -> ' + (D.step + 1));
     post('/api/class/' + this.o.classId + '/progress', { step: D.step + 1, note: 'ادامه به گام بعدی' }).then(function (d) {
       D.forcing = false;
       if (d && d.ok) { me.o.onProgress(d); me.dirPlan(d); D.moved = d.where || ''; }
     }).catch(function () { D.forcing = false; });
+  };
+  // fetch a quiz (or the final test) and show it once the teacher's words have been heard
+  P.loadQuiz = function (kind, topic, count, pending) {
+    var self = this;
+    return post('/api/class/' + this.o.classId + (kind === 'test' ? '/test' : '/quiz'), { topic: topic, count: count }).then(function (d) {
+      if (!d.ok || !d.quiz) return { ok: false, error: d.error };
+      var show = function () { if (!self.closed) self.o.onQuiz(d.quiz, function (res) { self.quizDone(d.quiz, res, pending); }); };
+      var left = self.spEnd - Date.now();
+      if (left > 0) setTimeout(show, left + 400); else show();        // the student hears "a short quiz now" before the card comes up
+      return { ok: true, quiz: d.quiz };
+    }).catch(function () { return { ok: false }; });
+  };
+  // the page starts the step's quiz itself. quiet: the teacher is told through a tool result instead of a note
+  P.stepQuiz = function (why, quiet) {
+    var D = this.dirState(), self = this;
+    if (D.quizBusy || !this.active || this.ending || !this.o.onQuiz) return false;
+    D.quizBusy = true;
+    var retry = D.quizTries > 0, title = D.outline[D.step];
+    var topic = title + (retry && D.weak ? ' (again, focus on: ' + D.weak + ')' : '');
+    var open = D.lastQ && D.stuAfter === 0 ? 'your question «' + D.lastQ + '» is still waiting for an answer' : '';
+    this.log('step-quiz', why + ': «' + title + '»' + (retry ? ' (second try)' : ''));
+    if (!quiet) {
+      this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text:
+        '[صنف] Step «' + title + '» ends with its ' + (retry ? 'second, shorter quiz on the mistakes' : 'quiz') + ', and the page is starting it now. In your next reply say ONE short sentence that a short quiz comes now' +
+        (open ? ' (and that you come back to the open question after it)' : '') + '. Ask nothing else and do not start the next step. Then stay quiet: the result comes as a message.' }] } });
+      this.ask('step quiz');
+    }
+    this.loadQuiz('quiz', topic, 5, open).then(function (d) {
+      if (d.ok) return;
+      D.quizBusy = false; D.quizFailedGen = true;
+      self.log('step-quiz', 'could not be made');
+      self.sendBoardNote('[صنف] The quiz could not be made right now. Instead ask the student two short questions about «' + title + '» aloud, one at a time; when they can answer, call progress.', [], true, '[صنف] تمرین ساخته نشد');
+    });
+    return true;
   };
   P.dirNote = function () {
     if (!this.classOn) return '';
@@ -453,12 +526,10 @@
     // repeat detection (even without student answer)
     else if (D.asked >= 2) { s += ' You already asked the same question ' + D.asked + ' times. Stop asking it. Give the answer and explain differently.'; }
     if (this.boardDebt) { s += ' Your last explanation was not shown on the board: show it on the board in this reply (with your words, not after them).'; this.boardDebt = false; }
-    // quiz guidance: only ever at a natural break
-    if (!D.quizDone && D.turns >= DIR_QUIZ) {
-      s += ' No quiz yet on this step. Give one (make_quiz) only at a natural break: after you have reacted to the student and nothing is left open. If something is still open, finish it first; if it is long, say you will do a short quiz now and come back to it after, and pass it as "pending".';
-      if (D.turns >= DIR_NUDGE) s += ' This step has taken ' + D.turns + ' turns: take that natural break soon.';
-    }
-    if (D.quizDone && !D.moved) { s += ' A quiz was completed on this step (' + D.quizResult + '). Once its mistakes are cleared up, call progress with step=' + (i + 1) + ' and begin the next step.'; }
+    // the step's quiz: the page runs it; the note only says where the step stands
+    if (D.review) s += ' REVIEW: the step quiz went badly (' + D.quizResult + '; weak: ' + (D.weak || 'see the mistakes') + '). Go through the mistakes ONE AT A TIME on the board, each with a fresh small example, and let the student try a similar one. Do not start the next step: a second, shorter quiz follows.';
+    else if (D.quizPassed) s += ' This step\'s quiz is done (' + D.quizResult + '). Clear up its mistakes if any, then call progress with step=' + (i + 1) + ' and start the next step.';
+    else if (i + 1 < n && D.turns >= DIR_QUIZ) s += ' This step ends with its quiz: when you are ready to move on, call progress and the page gives the quiz (or call make_quiz at a natural break). Never move on by talking only.';
     s += ' Do not read this note aloud.';
     return s;
   };
@@ -588,14 +659,13 @@
     }
     if (it.name === 'make_quiz' || it.name === 'make_test') {
       if (!self.o.onQuiz) return Promise.resolve({ call_id: it.call_id, output: { ok: false, error: 'ask the questions aloud instead' } });
-      return post('/api/class/' + id + (it.name === 'make_test' ? '/test' : '/quiz'), { topic: args.topic, count: args.count }).then(function (d) {
-        if (!d.ok || !d.quiz) return { call_id: it.call_id, output: { ok: false, error: d.error || 'could not make the quiz now; ask the questions aloud instead' } };
-        var pending = String(args.pending || '').trim().slice(0, 300);
-        var show = function () { if (!self.closed) self.o.onQuiz(d.quiz, function (res) { self.quizDone(d.quiz, res, pending); }); };
-        var left = self.spEnd - Date.now();
-        if (left > 0) setTimeout(show, left + 400); else show();        // the student hears "a short quiz now" before the card comes up
+      var DQ = self.dirState();
+      if (it.name === 'make_quiz' && DQ.quizBusy) return Promise.resolve({ call_id: it.call_id, quiet: true, output: { ok: true, note: 'A quiz is already on its way to the student. Say nothing more now and wait for the result.' } });
+      if (it.name === 'make_quiz') DQ.quizBusy = true;
+      return self.loadQuiz(it.name === 'make_test' ? 'test' : 'quiz', args.topic, args.count, String(args.pending || '').trim().slice(0, 300)).then(function (d) {
+        if (!d.ok) { if (it.name === 'make_quiz') DQ.quizBusy = false; return { call_id: it.call_id, output: { ok: false, error: d.error || 'could not make the quiz now; ask the questions aloud instead' } }; }
         return { call_id: it.call_id, quiet: true, output: { ok: true, note: 'The ' + (d.quiz.kind === 'test' ? 'final test' : 'quiz (' + d.quiz.level + ')') + ' is on screen with ' + d.quiz.questions.length + ' questions. Say nothing more now and wait: you will get the result as a message.' } };
-      }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not make the quiz now; ask the questions aloud instead' } }; });
+      });
     }
     if (it.name === 'start_class') {
       return post('/api/class/' + id + '/progress', { step: 0, note: 'شروع صنف', outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
@@ -609,6 +679,13 @@
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'search failed, try again' } }; });
     }
     if (it.name === 'progress') {
+      var DG = self.dirState();
+      if (typeof args.step === 'number' && DG.outline && args.step > DG.step && !self.stepCleared()) {
+        // moving on before the step's quiz: the page holds the step and starts the quiz (the model forgot it every time before)
+        if (!DG.quizBusy) self.stepQuiz('progress', true);
+        self.log('step-held', 'progress to ' + args.step + ' before the quiz of step ' + DG.step);
+        return Promise.resolve({ call_id: it.call_id, output: { ok: false, held: true, note: 'Not moved yet: every step ends with its quiz, and the page is starting the quiz on «' + DG.outline[DG.step] + '» now. Say ONE short sentence that a short quiz comes now (nothing else, do not start the next step), then stay quiet until the result comes.' } });
+      }
       return post('/api/class/' + id + '/progress', { step: args.step, note: args.note, outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
         if (d.ok) { self.o.onProgress(d); self.dirPlan(d); self.log('progress', 'step ' + d.step); }
         var out = { ok: !!d.ok }; if (d.where) out.where = d.where; if (d.note) out.note = d.note;
@@ -767,12 +844,25 @@
     });
     var n = quiz.questions.length, ok = n - wrong.length, isTest = quiz.kind === 'test';
     var head = (isTest ? '[نتیجهٔ آزمون پایانی]' : '[نتیجهٔ تمرین ' + (quiz.level || '') + ']') + ' The student finished the ' + (isTest ? 'final test' : quiz.level + ' quiz') + ': ' + ok + ' of ' + n + ' correct' + (skipped ? ', ' + skipped + ' skipped' : '') + '.';
-    var next = isTest
-      ? ' React warmly in ONE short sentence. Then take the weakest topic(s) from the mistakes and re-teach ONE of them on the board with a fresh example (clear first if needed), then offer to continue with the next class or to practice the weak part. Do not read the whole list.'
-      : ' React in ONE short warm sentence. If there were mistakes, show the main one on the board with a small example (clear first if needed), then give one new tiny practice step. If all correct, praise briefly and move to the next idea with a new example on the board.';
+    var D = this.dirState(), stepTitle = D.outline && D.step >= 0 ? D.outline[D.step] : '', score = n ? ok / n : 1, next;
+    if (!isTest) { D.quizBusy = false; D.quizTries++; }
+    var weak = []; quiz.questions.forEach(function (q, i) { if (answers[i] !== q.answer && q.topic && weak.indexOf(q.topic) < 0) weak.push(q.topic); });
+    if (isTest) next = ' React warmly in ONE short sentence. Then take the weakest topic(s) from the mistakes and re-teach ONE of them on the board with a fresh example (clear first if needed), then offer to continue with the next class or to practice the weak part. Do not read the whole list.' +
+      (D.weakSteps.length ? ' Steps that stayed weak during the class: ' + D.weakSteps.join('، ') + '.' : '');
+    else if (score >= PASS) {
+      D.quizPassed = true; D.review = false;
+      next = ' React in ONE short warm sentence (say what was good). ' + (wrong.length ? 'Then clear up the mistake(s) one at a time on the board, each with a small fresh example (clear first if needed). ' : '') +
+        'Then this step is finished: call progress with step=' + (D.step + 1) + ' and start the next step.';
+    } else if (D.quizTries < 2) {
+      D.review = true; D.reviewTurns = 0; D.weak = weak.slice(0, 3).join('، ');
+      next = ' Most answers were wrong, so DO NOT move on. React kindly in one sentence (mistakes are how we learn). Then go through the mistakes ONE AT A TIME on the board: show the right way with a fresh small example and let the student try a similar one, then the next mistake. After that the page gives a second, shorter quiz on these mistakes.';
+    } else {
+      D.review = false; if (stepTitle && D.weakSteps.indexOf(stepTitle) < 0) D.weakSteps.push(stepTitle);
+      next = ' This was the second quiz on this step and it is still weak. Be kind; clear up the main mistake once more on the board with a new example, tell the student you will come back to it later, then call progress with step=' + (D.step + 1) + ' and go on.';
+    }
     var note = head + (wrong.length ? ' Mistakes: ' + wrong.join('; ') + '.' : ' All correct.') +
       (pending ? ' BEFORE THE QUIZ YOU LEFT THIS OPEN: «' + pending + '». Come back to it now (briefly, on the board) together with the quiz mistakes; do not forget it.' : '') + next;
-    this.dirQuiz(ok + '/' + n + (wrong.length ? ' weak' : ' perfect'));
+    this.dirQuiz(ok + '/' + n + (score >= PASS ? (wrong.length ? ' passed' : ' perfect') : ' weak'));
     this.log('quiz-result', ok + '/' + n);
     this.nudged = false;
     this.sendBoardNote(note, [], true, '[' + (isTest ? 'آزمون' : 'تمرین') + '] ' + ok + '/' + n);
