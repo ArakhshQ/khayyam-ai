@@ -84,8 +84,19 @@
     ['board', 'chat'].forEach(function (n) {
       var t = $('tab-' + n); t.classList.toggle('active', n === name); t.setAttribute('aria-selected', n === name ? 'true' : 'false');
     });
+    if (name === 'board') { var tb = $('tab-board'); if (tb) tb.classList.remove('news'); }
     if (name === 'board' && board) setTimeout(function () { if (board) board.onResize(); }, 60);
   };
+  // the board changed while the student is on the chat screen (phone, or a narrow window that shows the two tabs): take them to
+  // the board, unless they are in the middle of typing; then a dot on the «تخته» tab says there is something new.
+  // (A student who typed their topic stayed on the chat screen and never saw the board: «تخته کو؟».)
+  function boardNews() {
+    var room = $('classroom');
+    if (room.dataset.pane !== 'chat' || !window.matchMedia('(max-width: 980px)').matches) return;
+    var inp = $('user-input'), typingNow = document.activeElement === inp && inp.value.trim();
+    if (typingNow) { var tb = $('tab-board'); if (tb) tb.classList.add('news'); return; }
+    showPane('board');
+  }
   window.voiceSoon = function () {
     if (live) { var m = !live.muted; live.setMuted(m); $('voice-record-btn').classList.toggle('muted', m); toast(m ? 'میکروفون خاموش شد.' : 'میکروفون روشن شد.'); return; }
     if (liveWanted && closing) { pendingVoice = true; Stat.info('صنف در حال ذخیره است؛ بعد از آن به استاد وصل می‌شوم…', 4000); return; }
@@ -722,7 +733,10 @@
       onBeat: function (from, beat) {
         if (!board || !board.model) return;
         leaveLobby(true);
+        // a drawing came: the welcome panel must never stay over the board, whatever path got here
+        if (!$('board-empty').hidden) { $('board-empty').hidden = true; $('board-controls').hidden = false; }
         quizToBoard();
+        boardNews();
         board.setTimeline(from, [beat]);
         // the student is looking back at earlier writing: do not pull them away; the chip counts what is new
         if (reviewing) { reviewNew++; showNowChip(); return; }
@@ -922,6 +936,7 @@
     if (!cls || !cls.lobby) return;
     cls.lobby = false;
     $('board-empty').hidden = true; $('board-controls').hidden = false;
+    boardNews();
     if (drawn && cls.title === 'گفتگو با استاد') $('lesson-title').textContent = 'گفتگو با استاد';
     renderPath();
   }

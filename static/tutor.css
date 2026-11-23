@@ -408,3 +408,7 @@
 }
 @media (min-width: 701px) { .top-mic { display: none !important; } }
 @media (prefers-reduced-motion: reduce) { .classroom.focus .talk-pane { transition: none; } .dock-btn.live.talking { animation: none; } }
+
+/* something new on the board while the student is on the chat tab */
+.pane-tab.news { position: relative; }
+.pane-tab.news::after { content: ''; position: absolute; top: 4px; inset-inline-end: 6px; width: 8px; height: 8px; border-radius: 50%; background: #d1366b; box-shadow: 0 0 0 2px #fff; }

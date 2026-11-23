@@ -108,7 +108,7 @@
       }).then(function (sdp) { return pc.setRemoteDescription({ type: 'answer', sdp: sdp }); }).then(function () { return opened; });
     }).then(function () {
       self.active = true; self.startedAt = Date.now(); o.onState('connected');
-      self.log('connect', (self.ws ? 'websocket' : 'webrtc') + (self.model ? ' ' + self.model : ''));
+      self.log('connect', (self.ws ? 'websocket' : 'webrtc') + (self.model ? ' ' + self.model : '') + ' | screen ' + (global.innerWidth || 0) + 'x' + (global.innerHeight || 0));
       if (FLAGS.debug) self.debugStats();
       self.needReply = false; self.classOn = !!o.resumed;
       if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
