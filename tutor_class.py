@@ -26,6 +26,7 @@ import quiz_check
 import chat_tools
 import gemini
 import media as media_store
+import picture_library
 import metering
 import tutor_media as TM
 from database import TutorClass, TutorStudent
@@ -144,9 +145,15 @@ Every reply you give has this shape, and nothing more:
 - One idea at a time, each with a small concrete Afghan example on the board (nān, apples, afghani coins, a موتر, the bazaar).
 - If they struggle, explain the same idea a DIFFERENT way with a DIFFERENT example; never repeat the same explanation or question word for word. Slow down; never scold.
 
+# PACE: SHORT, PRECISE CLASSES
+- A class is about 10-15 minutes: 2-4 steps of about 3-4 minutes each. Plan only what fits. If the topic is big, this class teaches its first part (title it «... - قسمت ۱») and the rest becomes the next class.
+- Every step has ONE clear goal and the same tight loop: the idea in one or two sentences with ONE well-chosen example on the board → the student tries a similar one → you react → its quiz. Pick the single best example the first time instead of several weak ones.
+- Precise is not rushed: always listen, wait for the student's answers and fix every misunderstanding. What you cut is detours: no long introductions, no re-explaining what they already got, no second example when the first one worked, no side topics unless the student asks.
+- When the page tells you the class has run long, you continue in a NEW class (see CONTINUING IN A NEW CLASS).
+
 # CLASS FLOW (phases; move on only when the "exit" is reached)
-0. CONVERSATION. Greet back, chat naturally, ask what they want to learn. No board, no tools. A short factual question is just answered. A poem request uses find_poem (see POEMS). EXIT: the student asked to learn or understand something specific → one short sentence, then start_class (Dari title, subject, 4-7 step outline).
-1. PRE-CHECK. Write the title, and the 2-4 words or skills the topic stands on; ask which ones they know. EXIT: they answered → if something basic is missing, add a short step for it (progress with the new outline).
+0. CONVERSATION. Greet back, chat naturally, ask what they want to learn. No board, no tools. A short factual question is just answered. A poem request uses find_poem (see POEMS). EXIT: the student asked to learn or understand something specific → one short sentence, then start_class (Dari title, subject, an outline of 2-4 steps: see PACE).
+1. PRE-CHECK (quick: one question, one answer). Write the title, and the 2-3 words or skills the topic stands on; ask which ones they know. EXIT: they answered → if something basic is missing, add a short step for it (progress with the new outline).
 2. TEACH EACH STEP of the outline, as a loop: show the idea with an example → ask → react → (hint / new example if needed) → they try a similar one themselves (often with «yourturn»). EXIT: they have done it right on their own at least once and nothing is open → call progress.
 3. EVERY STEP ENDS WITH ITS QUIZ. When you call progress, the page first gives the step's quiz (and holds the step until it is done); it also starts it by itself when a step gets long. You may call make_quiz yourself at a natural break. After the result (see QUIZZES): clear up the mistakes → progress → teach the next step.
 4. FINAL. When all steps are done: make_test, then go through its weakest part on the board, praise the progress, offer what comes next.
@@ -154,6 +161,11 @@ Every reply you give has this shape, and nothing more:
 - Before each of the student's turns the page gives you a short «[وضعیت صنف]» note (the step, what comes next, what to react to, whether a quiz is due). Trust it. Never read it aloud.
 - Call progress when a step is finished (step = the number of the next step) or when the outline changes. NEVER move on by talking only: the student's step bar moves only with progress.
 - If the student wants to stop («بس است»، «امروز کافی است»): one warm closing sentence about what you covered and what comes next, then end_class.
+
+# CONTINUING IN A NEW CLASS
+- A long class gets slow and unclear, so after about a quarter of an hour the page tells you (in a «[وضعیت صنف]» or «[صنف]» note) that it is time to continue in a new class. Do it at the next natural break: after you reacted to the student's last answer, never in the middle of an explanation, a question or a quiz.
+- Say it warmly in one or two sentences, as good news, never as a limit or a problem, and never mention time, cost or length: for example «تا این‌جا خیلی خوب پیش رفتیم. برای این‌که تخته تازه و درس روشن بماند، همین حالا در یک صنف تازه درست از همین‌جا ادامه می‌دهیم.» Then call continue_in_new_class at once (no question to the student, no waiting).
+- In "left_off" say exactly where you are: the step, what the student can already do, what was about to come next, and any open question or mistake to come back to. The new class starts from that, so be precise.
 
 # QUIZZES
 - A quiz comes at a NATURAL BREAK only: you have reacted to the student's last answer, no question of yours is waiting, nothing they said or wrote is unchecked.
@@ -222,13 +234,43 @@ POEMS
 VOICE_NEW = ("\n\nTHIS IS A NEW SESSION. There is no class yet. Speak first, right away, in a friendly way. If the student's first message is given above, answer it like a human teacher "
              "(a greeting gets a greeting back, a question about you gets a short honest answer). If there is no first message, greet them warmly in a sentence, say you are Ustad Khayyam, and ask what they would like to learn today. "
              "Do not write on the board and do not call any tool until the student asks for something specific. When they ask to learn a topic: call \"start_class\" first, "
-             "then write the class title on the board and do the PRE-CHECK (see PREREQUISITES): name the 2-4 specific words or skills the topic stands on, "
+             "then write the class title on the board and do the PRE-CHECK (see PREREQUISITES): name the 2-3 specific words or skills the topic stands on, "
              "write them on the board, and ask which ones they already know. Wait for their answer before teaching.")
 VOICE_RESUME = ("\n\nTHIS CLASS IS BEING RESUMED, it is the SAME class, not a new one. You remember it: everything above (CLASS TITLE, OUTLINE, LAST TIME, WHAT HAS BEEN COVERED, "
                 "LAST THINGS YOU SAID, ON THE BOARD NOW) is what really happened. The board already shows what was drawn before; do not wipe it and do not call start_class again. "
                 "Greet the student warmly in one short sentence, remind them in two sentences what you did last time and where the board stands, "
                 "then ask one short warm-up question about the most recent idea and wait for the answer. Then continue the plan. "
                 "Never ask what they want to learn: they are here to continue the class named in CLASS TITLE.")
+
+# A long live class is continued in a NEW class (a fresh voice session and a clean board) from exactly where it was. The new class
+# carries the outline, the step, the notes, a summary and the teacher's own "left off" note; next_plan starts with this mark until
+# the new class has been taught in (then it is an ordinary class).
+CONTINUE_MARK = '[ادامه] '
+VOICE_CONTINUE = ("\n\nTHIS CLASS CONTINUES THE PREVIOUS ONE RIGHT NOW. The student was with you a moment ago and you moved together to this fresh class: "
+                  "it is the same lesson (see EARLIER IN THIS LESSON, WHERE YOU LEFT OFF, the OUTLINE and WHAT HAS BEEN COVERED). Do not greet them as if they were new, "
+                  "do not recap at length and never ask what they want to learn. Say ONE short warm sentence (for example «خوب، ادامه می‌دهیم.») and continue exactly from WHERE YOU LEFT OFF. "
+                  "The board is clean: write a short title for the step you are on (and put the student's picture or page up again with its key, if you were using one), "
+                  "then take the next small step and ask your question. Do not call start_class. The rules for steps and quizzes are the same as before.")
+_PART = re.compile(r'\s*[-–—]\s*قسمت\s*([۰-۹0-9]+)\s*$')
+
+
+def part_title(title):
+    """'جمع کسرها' -> 'جمع کسرها - قسمت ۲'; 'جمع کسرها - قسمت ۲' -> '... - قسمت ۳'"""
+    t = (title or '').strip() or 'صنف'
+    m = _PART.search(t)
+    n = 1
+    if m:
+        try:
+            n = int(m.group(1).translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')))
+        except ValueError:
+            n = 1
+        t = t[:m.start()].strip()
+    return ('%s - قسمت %s' % (t[:150], str(n + 1).translate(str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹'))))
+
+
+def is_continued(cls, beats):
+    return (not beats) and (cls.next_plan or '').startswith(CONTINUE_MARK)
+
 
 # A class that many sessions have made very long gets harder to keep clear (the board fills up, old steps fade). The tutor
 # steers toward a NEW class, as a step up, never as a complaint. Thresholds are in board calls (beats); about 3 beats = 1 minute of live class.
@@ -286,7 +328,7 @@ VOICE_TOOLS = [
      "parameters": {"type": "object", "properties": {
          "title": {"type": "string", "description": "short Dari class title"},
          "subject": {"type": "string", "enum": ["math", "science", "english", "social", "dari", "computer", "other"]},
-         "outline": {"type": "array", "items": {"type": "string"}, "description": "4-7 short Dari steps the class will follow"}},
+         "outline": {"type": "array", "items": {"type": "string"}, "description": "2-4 short Dari steps the class will follow (about 3-4 minutes each)"}},
          "required": ["title", "outline"]}},
     {"type": "function", "name": "find_poem",
      "description": "Search the verified poetry collection. Give the distinctive keywords of the verse (a few words, as the poem would spell them) and optionally the poet. Returns the real text of the best matching poems.",
@@ -300,10 +342,16 @@ VOICE_TOOLS = [
      "parameters": {"type": "object", "properties": {
          "step": {"type": "integer", "description": "0-based index of the outline step you are on now"},
          "note": {"type": "string", "description": "one short Dari sentence: what was just covered and how the student did"},
-         "outline": {"type": "array", "items": {"type": "string"}, "description": "the full outline: 4-7 short Dari steps. Give it in your first call of a new class, and again whenever the plan changes"},
+         "outline": {"type": "array", "items": {"type": "string"}, "description": "the full outline: 2-4 short Dari steps (a prerequisite step may make it 5). Give it in your first call of a new class, and again whenever the plan changes"},
          "title": {"type": "string", "description": "short Dari class title (first call of a new class only)"},
          "subject": {"type": "string", "enum": ["math", "science", "english", "social", "dari", "computer", "other"]}},
          "required": ["note"]}},
+    {"type": "function", "name": "continue_in_new_class",
+     "description": "Continue this lesson in a fresh new class, right now, from exactly where you are. Use it only when the page says it is time (see CONTINUING IN A NEW CLASS), after your one or two warm sentences. "
+                    "The page saves this class, opens the new one with a clean board, and you carry on there at once from \"left_off\".",
+     "parameters": {"type": "object", "properties": {
+         "left_off": {"type": "string", "description": "exactly where the class is: the step, what the student can already do, what comes next, any open question or mistake to come back to (2-4 sentences, Dari or English)"}},
+         "required": ["left_off"]}},
     {"type": "function", "name": "end_class",
      "description": "Call this after your closing sentence when the student wants to stop for now. The class is saved so it can be resumed later. "
                     "When the student has just agreed to move on to a NEW class (a next level or next part), also give next_title and next_request so they can start it with one tap.",
@@ -320,10 +368,13 @@ VOICE_TOOLS_EXTRA = [
      "parameters": {"type": "object", "properties": {
          "query": {"type": "string", "description": "short search query, in the best language for the topic"}}, "required": ["query"]}},
     {"type": "function", "name": "make_picture",
-     "description": "Make a new picture for the board when a drawing would not be enough (a map, an animal, a scene, a diagram of something real). It becomes one of the class pictures with a key like p3: then show it with the board tool, op image. Takes 10-30 seconds, so say you are preparing it. Never put words or letters in the description.",
+     "description": "Get a picture for the board when a drawing would not be enough (a map, an animal, a scene, a diagram of something real). It becomes one of the class pictures with a key like p3: then show it with the board tool, op image. "
+                    "Pictures are shared between classes: if one was already made for the same thing it comes back at once (the result says what it shows); otherwise a new one takes 10-30 seconds, so say you are preparing it. Never put words or letters in the description.",
      "parameters": {"type": "object", "properties": {
+         "topic": {"type": "string", "description": "what the picture shows in 2-6 plain English words, e.g. 'human heart four chambers', 'map of Afghanistan provinces', 'water cycle'. Name the thing, not the style."},
          "prompt": {"type": "string", "description": "detailed English description: subject, style, colors, composition. Simple clean educational illustration."},
-         "aspect_ratio": {"type": "string", "enum": ["1:1", "4:3", "3:4", "16:9"], "description": "default 4:3"}}, "required": ["prompt"]}},
+         "aspect_ratio": {"type": "string", "enum": ["1:1", "4:3", "3:4", "16:9"], "description": "default 4:3"},
+         "fresh": {"type": "boolean", "description": "true only when a shared picture you got did not fit: make a new one"}}, "required": ["topic", "prompt"]}},
 ]
 TOOLS_NOTE = ("TWO EXTRA TOOLS: web_search (look something up) and make_picture (create a picture for the board). They are slow and limited, so use them only when they truly help the lesson: "
               "tell the student in one short sentence what you are doing, then wait for the result. If a tool answers that the allowance is used up, say so kindly and teach without it. "
@@ -646,7 +697,11 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             lines.append('OUTLINE (you are on step %d):' % ((cls.step or 0) + 1))
             for i, s in enumerate(outline):
                 lines.append('  %d. %s%s' % (i + 1, s, '   <-- now' if i == (cls.step or 0) else ''))
-        if cls.summary:
+        if is_continued(cls, beats):
+            if cls.summary:
+                lines.append('EARLIER IN THIS LESSON (the class you were just in, a moment ago): ' + cls.summary)
+            lines.append('WHERE YOU LEFT OFF: ' + cls.next_plan[len(CONTINUE_MARK):])
+        elif cls.summary:
             lines.append('LAST TIME (the class was paused and is being resumed): ' + cls.summary)
             if cls.next_plan:
                 lines.append('PLAN FOR RESTARTING: ' + cls.next_plan)
@@ -962,21 +1017,15 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         db.session.commit()
         return jsonify(ok=True)
 
-    @app.route('/api/class/<int:cid>/pause', methods=['POST'])
-    @limiter.limit('20 per minute')
-    @login_required
-    def class_pause(cid):
-        """The student stops. Save the place; write a summary and update the student profile."""
-        cls = owned(cid)
-        if not cls:
-            return jsonify(error='صنف پیدا نشد'), 404
-        p = request.get_json(silent=True) or {}
+    def pause_class(cls, p):
+        """Save the place; write a summary and update the student profile. -> (summary, status, deleted)"""
+        cid = cls.id
         beats = _jl(cls.beats, [])
         if not beats and len(_jl(cls.outline, [])) < 2 and not cls.summary:     # only a greeting happened: nothing worth saving
             db.session.delete(cls)
             db.session.commit()
             drop_materials(cid)
-            return jsonify(ok=True, summary='', status='deleted', deleted=True)
+            return '', 'deleted', True
         cls.pos = max(0, min(_int(p.get('pos'), cls.pos or 0), max(0, len(beats) - 1)))
         if cls.status != 'done':
             cls.status = 'paused'
@@ -1014,7 +1063,78 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         if not summary_done and not cls.summary:      # the model was unavailable: keep something useful anyway
             cls.summary = '؛ '.join(notes[-4:])[:600] or None
             db.session.commit()
-        return jsonify(ok=True, summary=cls.summary or '', status=cls.status)
+        return cls.summary or '', cls.status, False
+
+    @app.route('/api/class/<int:cid>/pause', methods=['POST'])
+    @limiter.limit('20 per minute')
+    @login_required
+    def class_pause(cid):
+        """The student stops. Save the place; write a summary and update the student profile."""
+        cls = owned(cid)
+        if not cls:
+            return jsonify(error='صنف پیدا نشد'), 404
+        summary, status, deleted = pause_class(cls, request.get_json(silent=True) or {})
+        if deleted:
+            return jsonify(ok=True, summary='', status='deleted', deleted=True)
+        return jsonify(ok=True, summary=summary, status=status)
+
+    @app.route('/api/class/<int:cid>/continue', methods=['POST'])
+    @limiter.limit('6 per minute')
+    @login_required
+    def class_continue(cid):
+        """The teacher continues a long class in a NEW class: this one is saved and summarised, the new one gets the same outline
+        and step, the notes, the summary, the teacher's "left off" note and the class pictures (same keys), and a clean board."""
+        old = owned(cid)
+        if not old:
+            return jsonify(error='صنف پیدا نشد'), 404
+        p = request.get_json(silent=True) or {}
+        left_off = _short(p.get('left_off'), 700)
+        if TutorClass.query.filter_by(user_id=current_user.id).count() >= MAX_CLASSES:
+            pause_class(old, p)
+            return jsonify(error='تعداد صنف‌های ذخیره‌شده زیاد است.', full=True), 400
+        old_beats = _jl(old.beats, [])
+        if not old_beats and len(_jl(old.outline, [])) < 2:
+            return jsonify(error='nothing to continue'), 400
+        summary, _st, _del = pause_class(old, p)
+        outline = _jl(old.outline, [])
+        notes = _jl(old.notes, [])[-24:] + ['ادامه از صنف «%s»' % (old.title or '')[:80]]
+        new = TutorClass(user_id=current_user.id, subject=old.subject, topic_key=old.topic_key, title=part_title(old.title),
+                         request=old.request, outline=json.dumps(outline, ensure_ascii=False), notes=json.dumps(notes, ensure_ascii=False),
+                         beats='[]', step=int(old.step or 0), status='active', summary=summary or None,
+                         next_plan=CONTINUE_MARK + (left_off or 'Continue from the step you are on (see the outline and the notes).'),
+                         created_at=_now(), updated_at=_now())
+        try:
+            db.session.add(new)
+            old.status = 'continued'               # its lesson goes on in the new class (the list says so)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('class_continue failed')
+            return jsonify(error='ادامه در صنف تازه ممکن نشد.'), 500
+        try:                                       # the class pictures come along with the same keys (p1, p2 ...)
+            for m in materials(old.id)[:TM.MAX_MATERIALS]:
+                row = media_store.get(db, m['media'])
+                if row and row['owner_key'] == owner_key() and row.get('data'):
+                    media_store.save(db, owner_key(), 'image', row['mime'], row['name'], row['data'], conversation_id=-new.id, meta=dict(m['meta']))
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('class_continue: pictures not copied')
+        try:                                       # the steps already done gave their points in the old class: not twice
+            data = student_data()
+            xp = data.setdefault('xp', {})
+            if isinstance(xp, dict):
+                done = xp.setdefault('steps', {})
+                done[str(new.id)] = int(new.step or 0)
+                while len(done) > 40:
+                    done.pop(next(iter(done)))
+                save_student(data)
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('class_continue: xp marker failed')
+        out = view(new)
+        out['continued_from'] = old.id
+        return jsonify(out)
 
     # ---- live voice class: the tutor talks and draws through tools ----
     @app.route('/api/class/voice/new', methods=['POST'])
@@ -1278,6 +1398,12 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         meta.update(looked=True, kind=d['kind'], summary=d['summary'], text=d['text'])
         meta['regions'] = d['regions'] or meta.get('regions') or []
         media_store.update_meta(db, m['media'], owner_key(), meta)
+        if meta.get('lib'):                       # a library picture: the next class can point at its parts without looking again
+            try:
+                picture_library.save_look(db, meta['lib'], meta)
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('picture library look save failed')
         return jsonify(ok=True, **look_view(m, meta))
 
     def _tool_env():
@@ -1307,20 +1433,54 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
     @limiter.limit('15 per hour')
     @login_required
     def class_make_picture(cid):
-        """The teacher makes a picture for the board. It is saved as a class picture (p1, p2 ...) like one the student brought."""
+        """The teacher makes a picture for the board. It is saved as a class picture (p1, p2 ...) like one the student brought.
+        The shared library is tried first: a picture made earlier for any class on the same thing is reused (free, instant, not
+        counted). A newly made picture goes into the library for the next class."""
         cls = owned(cid)
         if not cls:
             return jsonify(ok=False, error='class not found'), 404
         p = request.get_json(silent=True) or {}
         prompt = _short(p.get('prompt'), 700)
+        topic = _short(p.get('topic'), 80)
         aspect = p.get('aspect_ratio') if p.get('aspect_ratio') in ('1:1', '4:3', '3:4', '16:9') else '4:3'
         if not prompt:
             return jsonify(ok=False, error='describe the picture')
-        if not gemini.available():
-            return jsonify(ok=False, error='picture making is not available now, draw it on the board instead')
         existing = media_store.list_for(db, owner_key(), -cid, TM.MAX_MATERIALS + 5)
         if len(existing) + 1 > TM.MAX_MATERIALS:
             return jsonify(ok=False, error='this class already has many pictures, use one of them')
+        seq = max([(e['meta'] or {}).get('seq', 0) for e in existing] + [0]) + 1
+        hit = None
+        if p.get('fresh') is not True:
+            try:
+                hit = picture_library.find(db, prompt, aspect, topic)
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('picture library lookup failed')
+                hit = None
+        if hit:
+            try:
+                meta = {'role': 'material', 'title': (topic or prompt)[:60], 'w': hit['w'], 'h': hit['h'], 'seq': seq, 'made': True, 'lib': hit['id']}
+                look = hit.get('meta') or {}
+                if look.get('regions'):           # already looked at in an earlier class: the teacher can point at once
+                    meta.update(looked=True, kind=look.get('kind', ''), summary=look.get('summary', ''), text=look.get('text', ''), regions=look['regions'])
+                mid = media_store.save(db, owner_key(), 'image', hit['mime'] or 'image/jpeg', 'picture', hit['data'], conversation_id=-cid, meta=meta)
+                cls.updated_at = _now()
+                db.session.commit()
+                picture_library.used(db, hit['id'])
+            except Exception:
+                db.session.rollback()
+                app.logger.exception('picture library reuse failed')
+                hit = None
+        if hit:
+            item = next((public_material(m) for m in materials(cid) if m['media'] == mid), None)
+            if item:
+                app.logger.info('picture library: reused %s (score %s) for class %s', hit['id'], hit['score'], cid)
+                return jsonify(ok=True, key=item['key'], w=item['w'], h=item['h'], item=item, reused=True,
+                               shows=hit['prompt'][:300],
+                               note='Ready at once as ' + item['key'] + ' (a picture made earlier for another class). It shows: "' + hit['prompt'][:300] +
+                                    '". Show it now with the board tool, op image, key ' + item['key'] + '. If it does not fit what you need, call make_picture again with fresh:true.')
+        if not gemini.available():
+            return jsonify(ok=False, error='picture making is not available now, draw it on the board instead')
         got = {}
 
         def work():
@@ -1332,15 +1492,24 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
             if not res.get('ok') or not got.get('raw'):
                 return jsonify(ok=False, error=res.get('message') or 'could not make the picture, draw it on the board instead')
             jpeg, w, h = TM.prepare_image(got['raw'])
-            seq = max([(e['meta'] or {}).get('seq', 0) for e in existing] + [0]) + 1
             mid = media_store.save(db, owner_key(), 'image', 'image/jpeg', 'picture', jpeg, conversation_id=-cid,
-                                   meta={'role': 'material', 'title': prompt[:60], 'w': w, 'h': h, 'seq': seq, 'made': True})
+                                   meta={'role': 'material', 'title': (topic or prompt)[:60], 'w': w, 'h': h, 'seq': seq, 'made': True})
             cls.updated_at = _now()
             db.session.commit()
         except Exception:
             db.session.rollback()
             app.logger.exception('class_make_picture failed')
             return jsonify(ok=False, error='could not make the picture, draw it on the board instead')
+        try:                                      # keep it for the next class that needs the same picture
+            lid = picture_library.add(db, prompt, aspect, jpeg, w, h, topic=topic)
+            if lid:
+                row = media_store.get(db, mid, with_data=False)
+                if row:
+                    m2 = dict(row['meta'] or {}); m2['lib'] = lid
+                    media_store.update_meta(db, mid, owner_key(), m2)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('picture library add failed')
         item = next((public_material(m) for m in materials(cid) if m['media'] == mid), None)
         if not item:
             return jsonify(ok=False, error='the picture was not saved, draw it on the board instead')
@@ -1615,7 +1784,8 @@ def register(app, *, db, limiter, login_required, current_user, metered, tier_of
         mt = materials_text(materials(cls.id))
         if mt:
             text += '\n\n' + mt
-        prompt = VOICE_SYSTEM + '\n\n' + OPS_REF + ('\n\n' + TOOLS_NOTE if gemini.available() else '') + '\n\n' + text + (VOICE_RESUME if resumed else VOICE_NEW) + long_class_note(len(beats))
+        opening = VOICE_CONTINUE if is_continued(cls, beats) else (VOICE_RESUME if resumed else VOICE_NEW)
+        prompt = VOICE_SYSTEM + '\n\n' + OPS_REF + ('\n\n' + TOOLS_NOTE if gemini.available() else '') + '\n\n' + text + opening + long_class_note(len(beats))
         return {'class_id': cls.id}, prompt
     app.config['CLASS_VOICE'] = {'context': voice_context, 'tools': VOICE_TOOLS, 'tools_fn': voice_tools}
 

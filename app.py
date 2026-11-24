@@ -39,7 +39,8 @@ from metering import (VOICE_PLANS, voice_usd_cap, voice_usd_daily_cap, SESSION_M
     finalize as finalize_api, summary as api_meter_summary, chat_plan as active_chat_plan,
     tutor_plan as active_tutor_plan, tutor_tier as active_tutor_tier,
     voice_tier as active_voice_tier, usd_micro, recent_requests,
-    record_voice_usage, voice_cost_for_user, cost_history, voice_recent, transcribe_cost_micro, TTS_PER_MIN)
+    record_voice_usage, voice_cost_for_user, cost_history, voice_recent, transcribe_cost_micro, TTS_PER_MIN,
+    voice_week_status, voice_borrow)
 
 load_dotenv()
 
@@ -236,10 +237,16 @@ with app.app_context():
         conn.execute(sql_text("UPDATE users SET chat_plan='free' WHERE chat_plan IS NULL"))
         conn.execute(sql_text("UPDATE users SET tutor_plan='free' WHERE tutor_plan IS NULL"))
     ensure_api_meter(db)
-    from metering import ensure_tool_storage, ensure_voice_usage_storage
+    from metering import ensure_tool_storage, ensure_voice_usage_storage, ensure_voice_borrow_storage
     ensure_tool_storage(db)
     ensure_voice_usage_storage(db)
+    ensure_voice_borrow_storage(db)
     media_store.ensure_media_storage(db)
+    try:
+        import picture_library
+        picture_library.ensure(db)
+    except Exception:
+        app.logger.exception('Could not create the shared picture library table')
 
     def _sync_table_columns(model):
         """Bring a table that already exists (e.g. created by an earlier build) in line with
@@ -3857,10 +3864,22 @@ def _voice_snapshot_locked(uid,now):
         db.session.rollback(); cost_ok=False; usd_used=usd_cap; usd_today=day_cap or 0.0
     usd_left=max(0.0,usd_cap-usd_used)
     day_left=None if day_cap is None else max(0.0,day_cap-usd_today)
-    if usd_left<=0 or (day_left is not None and day_left<=0): monthly=0         # a dollar ceiling is reached
+    # This week's share of the month (with what was borrowed from next week). FAIL CLOSED like the month.
+    week=None
+    try:
+        if cost_ok:
+            week=voice_week_status(db,uid,tier,now)
+    except Exception:
+        app.logger.exception('voice week lookup failed: refusing new voice until it works again')
+        db.session.rollback(); cost_ok=False; usd_left=0.0
+    week_left=None if week is None else week['left']/1e6
+    if usd_left<=0 or (day_left is not None and day_left<=0) or (week_left is not None and week_left<=0): monthly=0         # a dollar ceiling is reached
     return {'plan':active_voice_tier(db.session.get(User,uid)),
       'usd_cap':usd_cap,'usd_used':round(usd_used,4),'usd_left':round(usd_left,4),
       'usd_day_cap':day_cap,'usd_day_left':None if day_left is None else round(day_left,4),'cost_check_ok':cost_ok,
+      'week':None if week is None else {'n':week['week'],'pct_used':week['pct_used'],'resets_at':week['resets_at'],
+             'left_usd':round(week['left']/1e6,4),'limit_usd':round(week['limit']/1e6,4),'can_borrow':week['can_borrow'],
+             'borrowed':week['borrowed']>0,'next_week_pct':0 if not week['base'] else int(round(week['next_limit']*100.0/week['base']))},
       'limit_seconds':profile['daily'],'monthly_limit_seconds':profile['monthly'],
       'used_seconds':used_day,'monthly_used_seconds':used_month,
       'daily_remaining_seconds':daily,'monthly_remaining_seconds':monthly,
@@ -3964,6 +3983,30 @@ def _int_or0(v):
     except (TypeError, ValueError): return 0
 
 
+@app.route("/api/voice/borrow", methods=["POST"])
+@limiter.limit("10 per hour")
+@login_required
+def voice_borrow_next_week():
+    """This week's voice is used up: move half of next week's allowance into this week (the month's total stays the same)."""
+    if not current_user.email_verified:
+        return jsonify(error="Email verification required"), 403
+    try:
+        _ensure_voice_quota_storage()
+        now = _voice_now()
+        _voice_quota_lock(current_user.id, now.date().isoformat())          # one borrow at a time per student
+        ok, st, why = voice_borrow(db, current_user.id, active_voice_tier(current_user), now)
+        db.session.commit()
+        if not ok:
+            msg = {"last_week": "این آخرین هفتهٔ ماه است؛ سهمیهٔ تازه با ماه بعد می‌آید.",
+                   "nothing_left": "سهمیهٔ هفتهٔ بعد قبلاً استفاده شده است.",
+                   "not_used_up": "سهمیهٔ این هفته هنوز تمام نشده است."}.get(why, "حالا ممکن نیست.")
+            return jsonify(ok=False, error=msg, reason=why), 400
+        return jsonify(ok=True, quota=_voice_quota_snapshot(current_user.id))
+    except Exception:
+        db.session.rollback(); app.logger.exception("voice borrow failed")
+        return jsonify(error="Voice allowance temporarily unavailable"), 503
+
+
 @app.route("/api/voice/usage", methods=["POST"])
 @limiter.limit("600 per hour")
 @login_required
@@ -4000,6 +4043,7 @@ def voice_usage_report():
             dcap = voice_usd_daily_cap(tier)
             if dcap is not None:
                 left = min(left, max(0, int(dcap * 1e6) - today_m))
+            left = min(left, voice_week_status(db, current_user.id, tier)["left"])      # this week's share
             if left <= 0:
                 out["cap_seconds"] = 0
             elif micro > 0 and elapsed >= 30:
@@ -4090,10 +4134,12 @@ def create_live_voice_session():
         app.logger.error("GLOBAL DAILY SPEND LIMIT REACHED: new voice sessions are refused until 00:00 UTC")
         return jsonify(error="Voice is paused for today. Try again after 00:00 UTC."), 503
     if quota["remaining_seconds"] <= 0:
+        wk = quota.get("week") or {}
         why = "Voice allowance for this month is used up." if quota.get("usd_left", 1) <= 0 else \
               ("Today's voice allowance is used up. Try again after 00:00 UTC." if (quota.get("usd_day_left") is not None and quota["usd_day_left"] <= 0)
-               else "Daily voice allowance exhausted. Try again after 00:00 UTC.")
-        return jsonify(error=why, quota=quota), 429
+               else ("سهمیهٔ صدای این هفته تمام شد." + (" می‌توانید نیمی از سهمیهٔ هفتهٔ بعد را حالا استفاده کنید." if wk.get("can_borrow") else "")
+                     if wk and wk.get("left_usd", 1) <= 0 else "Daily voice allowance exhausted. Try again after 00:00 UTC."))
+        return jsonify(error=why, quota=quota, week_used_up=bool(wk and wk.get("left_usd", 1) <= 0)), 429
 
     import urllib.request
     import urllib.error

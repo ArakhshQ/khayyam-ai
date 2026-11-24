@@ -162,7 +162,17 @@
       if (s.closed) return;
       const response = await fetch('/api/voice/session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(context)});
       const session = await response.json();
-      if (!response.ok || !session.value || !session.receipt) throw new Error(session.error || 'Voice session unavailable');
+      if (!response.ok || !session.value || !session.receipt) {
+        // this week's voice is used up: offer half of next week's allowance (next week gets that much less)
+        const wk = session.quota && session.quota.week;
+        if (response.status === 429 && session.week_used_up && wk && wk.can_borrow &&
+            window.confirm('سهمیهٔ صدای این هفته تمام شد. نیمی از سهمیهٔ هفتهٔ بعد را حالا استفاده می‌کنید؟ (هفتهٔ بعد همان‌قدر کمتر می‌شود)')) {
+          const b = await fetch('/api/voice/borrow', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}).then(r => r.json()).catch(() => ({}));
+          if (b && b.ok) { teardown(s); note('سهمیهٔ تازه فعال شد؛ دوباره میکروفون را بزنید.', true); return; }
+          throw new Error((b && b.error) || 'ممکن نشد.');
+        }
+        throw new Error(session.error || 'Voice session unavailable');
+      }
       if (s.closed) return;
       s.receipt = session.receipt;
       // The quota deadline is issued by the backend, not trusted client input.

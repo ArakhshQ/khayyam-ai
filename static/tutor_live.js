@@ -77,7 +77,7 @@
         return go();
       });
     }).then(function (s) {
-      if (s.__status !== 200 || !s.value || !s.receipt) { var er = new Error('session ' + s.__status + ': ' + (s.detail || s.error || '')); er.stage = 'session'; er.status = s.__status; throw er; }
+      if (s.__status !== 200 || !s.value || !s.receipt) { var er = new Error('session ' + s.__status + ': ' + (s.detail || s.error || '')); er.stage = 'session'; er.status = s.__status; er.quota = s.quota || null; er.weekUsedUp = s.week_used_up === true; throw er; }
       self.model = s.model || '';
       self.manual = s.manual_turns === true;           // the page decides what counts as the student speaking (noise and echo do not start a reply)
       self.receipt = s.receipt; self.deadline = Number(s.allowance_deadline || 0) * 1000; self.warnAt = Number(s.warning_seconds || 120);
@@ -110,12 +110,25 @@
       self.active = true; self.startedAt = Date.now(); o.onState('connected');
       self.log('connect', (self.ws ? 'websocket' : 'webrtc') + (self.model ? ' ' + self.model : '') + ' | screen ' + (global.innerWidth || 0) + 'x' + (global.innerHeight || 0));
       if (FLAGS.debug) self.debugStats();
-      self.needReply = false; self.classOn = !!o.resumed;
-      if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
-      if (o.firstPicture) self.putPicture(o.firstPicture);
-      if (o.resumed) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[ادامهٔ صنف] The student is back and presses continue. This is the same class as before, not a new one: greet them and carry on from what is in your notes and on the board. Do not ask what they want to learn.' }] } });
-      self.ask('start');                               // the teacher speaks first
+      self.opening();
     });
+  };
+  // the first things the teacher gets once the voice is connected, then it speaks first
+  P.opening = function () {
+    var self = this, o = this.o;
+    self.needReply = false; self.classOn = !!o.resumed;
+    if (o.firstText) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[نوشته شاگرد] ' + o.firstText }] } });
+    if (o.firstPicture) self.putPicture(o.firstPicture);
+    if (o.continued) {
+      self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[صنف تازه، همان درس] You and the student just moved to this fresh class a moment ago. Say one short warm sentence and continue exactly from WHERE YOU LEFT OFF. Do not greet as new, do not recap at length, do not ask what they want to learn.' }] } });
+      if (o.carry && o.getPlan) {
+        var pl = o.getPlan(); if (pl) self.dirPlan(pl);
+        var D0 = self.dirState(), cy = o.carry;
+        if (cy.step === D0.step) ['quizPassed', 'quizTries', 'quizFailedGen', 'quizResult', 'review', 'weak'].forEach(function (k) { if (cy[k] != null) D0[k] = cy[k]; });
+        if (Array.isArray(cy.weakSteps)) D0.weakSteps = cy.weakSteps.slice();
+      }
+    } else if (o.resumed) self.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '[ادامهٔ صنف] The student is back and presses continue. This is the same class as before, not a new one: greet them and carry on from what is in your notes and on the board. Do not ask what they want to learn.' }] } });
+    self.ask('start');                               // the teacher speaks first
   };
 
   // Voice over a WebSocket (TCP): same session, same events, but audio is sent and played by the page itself (see realtime_ws.js)
@@ -178,6 +191,7 @@
     if (c.text_tokens != null || c.audio_tokens != null || c.image_tokens != null) { U.cin_text += n(c.text_tokens); U.cin_audio += n(c.audio_tokens); U.cin_image += n(c.image_tokens); }
     else U.cin_text += n(d.cached_tokens);                       // no breakdown given: count the cached part as text (cached text and audio are priced alike)
     U.out_text += n(o.text_tokens); U.out_audio += n(o.audio_tokens); U.responses += 1;
+    if (Number(u.input_tokens) > 0) this.ctxTokens = Number(u.input_tokens);          // the whole conversation the model just re-read
     if (!d.text_tokens && !d.audio_tokens && !d.image_tokens && u.input_tokens) U.in_text += n(u.input_tokens);
     if (!o.text_tokens && !o.audio_tokens && u.output_tokens) U.out_audio += n(u.output_tokens);
     var self = this;
@@ -214,8 +228,9 @@
   };
   P.tick = function () {
     if (this.startedAt && this.active && !this.closed) {
-      var ran = Date.now() - this.startedAt, k = this.breaksSent || 0;
-      if (k < BREAKS.length && ran >= BREAKS[k]) { this.breaksSent = k + 1; this.breakNote(Math.round(BREAKS[k] / 60000)); }
+      var ran = Date.now() - this.startedAt, k = this.breaksSent || 0, planned = this._dir && this._dir.outline && this._dir.outline.length > 1;
+      if (!planned && k < BREAKS.length && ran >= BREAKS[k]) { this.breaksSent = k + 1; this.breakNote(Math.round(BREAKS[k] / 60000)); }
+      this.splitTick();
     }
     this.watchdog();
     if (!this.deadline) return;
@@ -390,12 +405,64 @@
     });
   };
 
+  /* ───────── continuing in a new class ─────────
+     Every reply re-reads the whole conversation, so a class gets slower and dearer the longer one voice session runs. After about
+     a quarter of an hour of teaching (time with a quiz card open does not count), or once the conversation is big, the teacher is
+     asked to continue in a NEW class from exactly where it is: at a natural break first, then in its next reply, and in the end the
+     page does it itself. The new class gets the outline, the step, the notes and the teacher's "left off" note (see tutor.js). */
+  var SPLIT = { min: [12, 16, 20], tokens: [40000, 55000, 70000], lastStepExtra: 4, wait: 45000 };
+  P.splitCfg = function () { var c = global.TUTOR_SPLIT || {}; return { min: c.min || SPLIT.min, tokens: c.tokens || SPLIT.tokens, lastStepExtra: c.lastStepExtra != null ? c.lastStepExtra : SPLIT.lastStepExtra, wait: c.wait || SPLIT.wait }; };
+  P.splitTick = function () {
+    var D = this._dir;
+    if (!this.classOn || !D || !D.outline || D.outline.length < 2 || D.step < 0 || this.ending) return;
+    if (!D.quizBusy) this.classMs = (this.classMs || 0) + 1000;          // teaching time (a quiz card on screen costs almost nothing)
+    var c = this.splitCfg(), n = D.outline.length, min = (this.classMs || 0) / 60000, ctx = this.ctxTokens || 0;
+    if (D.step >= n) return;                                             // every step done: the final test and goodbye, no new class
+    var extra = D.step >= n - 1 ? c.lastStepExtra : 0, lvl = 0;          // on the last step: a little more time to finish it here
+    for (var i = 0; i < 3; i++) if (min >= c.min[i] + extra || ctx >= c.tokens[i]) lvl = i + 1;
+    if (lvl > (this.splitDue || 0)) { this.splitDue = lvl; this.log('split', 'level ' + lvl + ' (' + min.toFixed(1) + ' min, context ' + ctx + ' tokens)'); }
+    if (this.splitDue >= 3) {
+      if (!this.splitAskedAt && !D.quizBusy && !this.responding && !this.pendingAsk && !this.speakingNow() && !this.toolBusy()) {
+        this.splitAskedAt = Date.now();
+        this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text:
+          '[صنف] It is time to continue in a new class, now. Say warmly in one or two sentences that you continue right away in a fresh class from exactly here (never mention time or limits), then call continue_in_new_class with left_off. Nothing else.' }] } });
+        this.ask('continue now');
+      } else if (this.splitAskedAt && Date.now() - this.splitAskedAt > c.wait && !this.responding) this.autoContinue('the teacher did not move');
+    }
+  };
+  P.splitNote = function () {
+    var D = this.dirState();
+    if (!this.splitDue || this.ending) return '';
+    if (D.quizBusy) return ' After this quiz and its result, it is time to continue in a new class.';
+    if (this.splitDue >= 2) return ' TIME TO CONTINUE IN A NEW CLASS: in THIS reply react to the student in one short sentence, then say warmly in one sentence that you continue right away in a fresh class from exactly here, and call continue_in_new_class (left_off: exactly where you are and what is open).';
+    return ' The class has run long: at the next natural break (the student\'s answer is handled and nothing is open, for example when this step is finished) say warmly that you continue in a fresh class from exactly here, and call continue_in_new_class.';
+  };
+  // where the class stands, in words (used when the page has to continue by itself)
+  P.leftOff = function () {
+    var D = this.dirState(), o = D.outline || [], st = Math.max(0, Math.min(D.step, o.length - 1));
+    return 'Step ' + (st + 1) + ' of ' + o.length + ': «' + (o[st] || '') + '»' + (D.quizPassed ? ' (its quiz is done)' : '') +
+      (D.lastQ ? '. Your last question: «' + D.lastQ + '»' + (D.stuAfter > 0 ? ', the student answered «' + D.lastStu + '»' : ', not answered yet') : '') +
+      (D.review ? '. Reviewing the mistakes of the quiz: ' + (D.weak || '') : '') + '.';
+  };
+  P.autoContinue = function (why) {
+    if (this.ending || !this.active) return;
+    this.ending = true; this.continueNew = { left_off: this.leftOff(), auto: true };
+    this.log('continue', 'by the page: ' + why);
+    if (this.o.onContinueSoon) this.o.onContinueSoon();
+    this.finishSoon(Math.max(0, this.spEnd - Date.now()) + 600);
+  };
+  // what the new class should know of the step it starts on (quiz already done, review going on ...)
+  P.carry = function () {
+    var D = this.dirState();
+    return { step: D.step, quizPassed: D.quizPassed, quizTries: D.quizTries, quizFailedGen: D.quizFailedGen, quizResult: D.quizResult, review: D.review, weak: D.weak, weakSteps: (D.weakSteps || []).slice() };
+  };
+
   /* ───────── class director ─────────
      Tracks the lesson state (step, turns, questions asked, quiz status) HERE, not in the model's memory.
      Before each student turn the teacher gets one short context note. The note guides but does not command:
      it tells the tutor where they are, what the student said, and whether a quiz is due.
      The previous note is deleted each time so they do not pile up. */
-  var DIR_SAME = 0.45, DIR_QUIZ = 3, DIR_NUDGE = 8, DIR_FORCE = 14;      // counted in the student's turns on one step
+  var DIR_SAME = 0.45, DIR_QUIZ = 3, DIR_NUDGE = 7, DIR_FORCE = 12;      // counted in the student's turns on one step
   P.dirState = function () { return this._dir || (this._dir = { step: -1, outline: null, turns: 0, qs: [], lastQ: '', asked: 0, stuAfter: 0, lastStu: '', noteId: '', n: 0, moved: '', forcing: false, quizDone: false, quizResult: '',
     quizBusy: false, quizTries: 0, quizPassed: false, quizFailedGen: false, review: false, reviewTurns: 0, weak: '', weakSteps: [] }); };
   P.dirPlan = function (d) {
@@ -530,6 +597,7 @@
     if (D.review) s += ' REVIEW: the step quiz went badly (' + D.quizResult + '; weak: ' + (D.weak || 'see the mistakes') + '). Go through the mistakes ONE AT A TIME on the board, each with a fresh small example, and let the student try a similar one. Do not start the next step: a second, shorter quiz follows.';
     else if (D.quizPassed) s += ' This step\'s quiz is done (' + D.quizResult + '). Clear up its mistakes if any, then call progress with step=' + (i + 1) + ' and start the next step.';
     else if (i + 1 < n && D.turns >= DIR_QUIZ) s += ' This step ends with its quiz: when you are ready to move on, call progress and the page gives the quiz (or call make_quiz at a natural break). Never move on by talking only.';
+    s += this.splitNote();
     s += ' Do not read this note aloud.';
     return s;
   };
@@ -648,7 +716,7 @@
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'search failed, teach without it' } }; });
     }
     if (it.name === 'make_picture') {
-      return post('/api/class/' + id + '/make_picture', { prompt: args.prompt, aspect_ratio: args.aspect_ratio }).then(function (d) {
+      return post('/api/class/' + id + '/make_picture', { prompt: args.prompt, topic: args.topic, aspect_ratio: args.aspect_ratio, fresh: args.fresh === true }).then(function (d) {
         delete d.__status; delete d.item; return { call_id: it.call_id, output: d };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false, error: 'could not make the picture, draw it on the board instead' } }; });
     }
@@ -689,8 +757,21 @@
       return post('/api/class/' + id + '/progress', { step: args.step, note: args.note, outline: args.outline, title: args.title, subject: args.subject }).then(function (d) {
         if (d.ok) { self.o.onProgress(d); self.dirPlan(d); self.log('progress', 'step ' + d.step); }
         var out = { ok: !!d.ok }; if (d.where) out.where = d.where; if (d.note) out.note = d.note;
+        if (d.ok && self.splitDue && !d.all_done && d.outline && d.step < d.outline.length) out.now = 'This is the natural moment to continue in a new class: instead of starting the next step here, say warmly in one sentence that you continue in a fresh class right away, and call continue_in_new_class (left_off: the next step to teach and what the student can already do).';
         return { call_id: it.call_id, output: out };
       }).catch(function () { return { call_id: it.call_id, output: { ok: false } }; });
+    }
+    if (it.name === 'continue_in_new_class') {
+      var DC = self.dirState();
+      if (self.ending) return Promise.resolve({ call_id: it.call_id, quiet: true, output: { ok: true } });
+      if (!self.splitDue) return Promise.resolve({ call_id: it.call_id, output: { ok: false, error: 'Not now: this class is not long yet. Go on teaching here; the page tells you when it is time.' } });
+      if (DC.quizBusy) return Promise.resolve({ call_id: it.call_id, output: { ok: false, error: 'A quiz is on the student\'s screen: wait for its result, clear it up, then continue in a new class.' } });
+      self.ending = true;
+      self.continueNew = { left_off: String(args.left_off || '').trim().slice(0, 700) || self.leftOff() };
+      self.log('continue', self.continueNew.left_off);
+      if (self.o.onContinueSoon) self.o.onContinueSoon();
+      self.finishSoon(Math.max(0, self.spEnd - Date.now()) + 5000);          // normally ended earlier by the end of the speech
+      return Promise.resolve({ call_id: it.call_id, quiet: true, output: { ok: true, note: 'The new class opens now. Say nothing more here.' } });
     }
     if (it.name === 'end_class') {
       this.ending = true;

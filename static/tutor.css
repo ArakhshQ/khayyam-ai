@@ -283,6 +283,8 @@
 .ps-xp-t { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
 .ps-voice { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid var(--line-light); border-radius: 999px; color: var(--ink-soft); font-size: 12.5px; white-space: nowrap; }
 .ps-voice[hidden] { display: none; }
+.ps-voice[role=button] { cursor: pointer; }
+.ps-voice[role=button]:focus-visible { outline: 2px solid var(--line-light); outline-offset: 2px; }
 .ps-voice svg { width: 15px; height: 15px; }
 .ps-voice b { font-weight: 600; }
 .ps-voice.mid { color: #9a6a12; border-color: rgba(169, 130, 47, .55); }

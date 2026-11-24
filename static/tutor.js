@@ -157,7 +157,7 @@
     saved.slice(0, 3).forEach(function (c) {
       var b = document.createElement('button'); b.type = 'button'; b.className = 'resume-card';
       var t = document.createElement('span'); t.className = 'rc-title'; t.textContent = c.title;
-      var m = document.createElement('span'); m.className = 'rc-meta'; m.textContent = (c.status === 'done' ? 'تمام‌شده' : 'ادامه از همان‌جا') + ' · ' + faNum(Math.max(1, Math.round(c.minutes))) + ' دقیقه';
+      var m = document.createElement('span'); m.className = 'rc-meta'; m.textContent = (c.status === 'done' ? 'تمام‌شده' : c.status === 'continued' ? 'ادامه در قسمت بعد' : 'ادامه از همان‌جا') + ' · ' + faNum(Math.max(1, Math.round(c.minutes))) + ' دقیقه';
       b.appendChild(t); b.appendChild(m);
       b.addEventListener('click', function () { openSaved(c.id); });
       box.appendChild(b);
@@ -198,7 +198,7 @@
       var b = document.createElement('button'); b.type = 'button'; b.className = 'class-open';
       var t = document.createElement('span'); t.className = 'ci-title'; t.textContent = c.title;
       var m = document.createElement('span'); m.className = 'ci-meta';
-      m.textContent = (c.status === 'done' ? 'تمام‌شده' : c.status === 'paused' ? 'ذخیره‌شده' : 'در جریان') + ' · ' + faNum(Math.max(1, Math.round(c.minutes))) + ' دقیقه';
+      m.textContent = (c.status === 'done' ? 'تمام‌شده' : c.status === 'continued' ? 'ادامه در قسمت بعد' : c.status === 'paused' ? 'ذخیره‌شده' : 'در جریان') + ' · ' + faNum(Math.max(1, Math.round(c.minutes))) + ' دقیقه';
       b.appendChild(t); b.appendChild(m);
       b.addEventListener('click', function () { openSaved(c.id); if (isMobile()) { sidebarOpen = false; applySidebar(); } });
       var d = document.createElement('button'); d.type = 'button'; d.className = 'class-del'; d.setAttribute('aria-label', 'حذف صنف');
@@ -780,9 +780,13 @@
         else if (Stat.has('net')) Stat.ok('net', 'اتصال برگشت ✓', 2000); else Stat.clear('net');
       },
       onEnd: function () { if (live && !closing) finishLive(); },
+      onContinueSoon: function () { Stat.busy('cont', 'ادامه در صنف تازه، از همین‌جا…', 0, 60000); },
       onQuota: function (kind, minutes) {
         if (kind === 'warn') Stat.warn('quota', 'از سهمیهٔ گفتگوی صوتی حدود ' + faNum(minutes) + ' دقیقه باقی مانده است.', 9000);
-        else { Stat.fail('quota', 'سهمیهٔ صوتی تمام شد؛ صنف ذخیره می‌شود.', 8000); if (live && !closing) finishLive(); }
+        else {
+          Stat.fail('quota', 'سهمیهٔ صوتی تمام شد؛ صنف ذخیره می‌شود.', 8000); if (live && !closing) finishLive();
+          setTimeout(function () { api('/api/voice/quota').then(function (q) { if (q && q.__status === 200) { lastQuota = q; loadVoice(); offerBorrow(q, resumeVoiceNow); } }); }, 2500);
+        }
       },
       onError: function (msg) { Stat.fail('err', msg, 6000); }
     };
@@ -889,6 +893,7 @@
     var m = String((err && err.message) || ''), st = err && err.stage, code = err && err.status;
     if (st === 'session') {
       if (code === 429 && /another session/i.test(m)) return 'جلسهٔ صوتی قبلی هنوز بسته نشده است. چند ثانیه صبر کنید و دوباره امتحان کنید.';
+      if (code === 429 && err.weekUsedUp) return 'سهمیهٔ صدای این هفته تمام شد.';
       if (code === 429) return 'سهمیهٔ صوتی امروز تمام شده است.';
       if (code === 403) return 'این حساب هنوز اجازهٔ گفتگوی صوتی ندارد (ایمیل تأیید نشده یا حساب آزمایشی نیست).';
       if (code === 401) return 'وارد حساب‌تان نیستید؛ دوباره وارد شوید.';
@@ -898,9 +903,10 @@
     if (st === 'channel') return 'اتصال صدا برقرار نشد (کانال باز نشد). اینترنت را بررسی کنید.';
     return 'اتصال صوتی برقرار نشد.';
   }
-  function connectLive(d, resumed, pic) {
+  function connectLive(d, resumed, pic, carry) {
     if (cls) cls.voiceClass = true;
     var h = liveHandlers(); h.classId = d.id; h.resumed = !!resumed; h.firstText = resumed ? '' : (d.request || ''); if (pic) h.firstPicture = pic;
+    if (carry) { h.continued = true; h.carry = carry; }
     live = new TutorLive.Session(h);
     setPrep(true, 'در حال اتصال به استاد…', 'اگر مرورگر اجازهٔ میکروفون را پرسید، «اجازه» را بزنید.', true);
     Stat.busy('voice', 'در حال اتصال به استاد…', 0, 60000);
@@ -922,6 +928,7 @@
       var denied = err && /Permission|NotAllowed|denied/i.test(String(err.name || err.message || err));
       var why = voiceWhy(err), tech = String((err && (err.message || err.name)) || '').slice(0, 160);
       Stat.fail('voice', denied ? 'میکروفون اجازه نگرفت. اجازه بدهید و دوباره امتحان کنید.' : why, 9000);
+      if (err && err.status === 429 && err.quota && err.quota.week) { lastQuota = err.quota; loadVoice(); if (offerBorrow(err.quota, resumeVoiceNow)) return false; }
       addMessage('ai', denied ? 'برای صنف صوتی به میکروفون نیاز است. اجازهٔ میکروفون را بدهید و دوباره امتحان کنید.' : why + (tech ? '\n(' + tech + ')' : ''),
         linkRow('ادامه با نوشتن', function (a) {
           a.parentNode.remove();
@@ -963,8 +970,32 @@
     Stat.busy('voice', 'در حال برگرداندن صنف…', 0, 60000);
     connectLive(d, true).then(function () { loadSaved(); });
   }
+  // the teacher continues the lesson in a NEW class (a fresh voice and a clean board, same plan and step): save this one, open that one
+  function continueLive() {
+    var info = live.continueNew || {}, carry = null;
+    try { carry = live.carry(); } catch (e) { carry = null; }
+    closing = true;
+    var id = cls.id, tr = live.stop(); live = null; resetStu(); afterLive = [];
+    Stat.clear('think'); Stat.clear('wait'); hideQuiz();
+    $('voice-record-btn').classList.remove('live', 'muted', 'talking'); delete $('classroom').dataset.live;
+    Stat.busy('cont', 'صنف تازه آماده می‌شود…', 0, 90000);
+    function sameClass() {                    // no new class could be made: the same class goes on with a fresh voice
+      return api('/api/class/' + id).then(function (o) {
+        closing = false; Stat.clear('cont');
+        if (o.__status !== 200) { Stat.fail('save', 'باز کردن صنف ممکن نشد.'); loadSaved(); return; }
+        return openClass(o, {}).then(function () { board.live = true; return connectLive(o, true); }).then(function () { loadSaved(); });
+      });
+    }
+    api('/api/class/' + id + '/continue', { pos: Math.max(0, stepCount() - 1), transcript: tr, left_off: info.left_off || '' }).then(function (d) {
+      if (d.__status !== 200 || !d.id) { Stat.warn('cont', 'صنف تازه باز نشد؛ همین صنف ادامه می‌یابد.', 5000); return sameClass(); }
+      closing = false; Stat.clear('cont');
+      addMessage('ai', 'ادامهٔ درس در صنف تازه: «' + d.title + '». تخته تازه است و از همان‌جا ادامه می‌دهیم.');
+      return openClass(d, {}).then(function () { board.live = true; return connectLive(d, true, null, carry || {}); }).then(function () { loadSaved(); });
+    }).catch(function () { Stat.warn('cont', 'صنف تازه باز نشد؛ همین صنف ادامه می‌یابد.', 5000); sameClass().catch(function () { closing = false; }); });
+  }
   function finishLive() {
     if (!live || !cls || closing) return;
+    if (live.continueNew) { continueLive(); return; }
     closing = true;
     var id = cls.id, nx = live.nextClass || null, tr = live.stop(); live = null; resetStu(); afterLive = [];
     Stat.clear('think'); Stat.clear('wait'); Stat.busy('save', 'صنف ذخیره می‌شود…', 0, 90000);
@@ -1250,20 +1281,56 @@
   function loadMe() {
     api('/api/class/me').then(function (d) { if (d && d.ok) { me = d; renderStrip(); } });
   }
-  // Voice time left: the dollar caps decide it. Show the one that runs out first (today or this month).
+  // Voice allowance: the month's voice is split into four weeks. The chip shows how much of THIS week is used; a tap explains it
+  // (and offers next week's allowance when this week is used up). Plans without a week (old server) show what is left, as before.
+  var lastQuota = null;
+  function weekDay(ts) {
+    try { return new Date(ts * 1000).toLocaleDateString('fa-AF', { weekday: 'long', day: 'numeric', month: 'long' }); } catch (e) { return ''; }
+  }
   function loadVoice() {
     var el = $('ps-voice'); if (!el) return;
     api('/api/voice/quota').then(function (q) {
       if (!q || q.__status !== 200 || !q.usd_cap) { el.hidden = true; return; }
-      var left = q.usd_left, cap = q.usd_cap, label = 'این ماه';
-      if (q.usd_day_cap && q.usd_day_left != null && q.usd_day_left < q.usd_left) { left = q.usd_day_left; cap = q.usd_day_cap; label = 'امروز'; }
-      var pct = Math.max(0, Math.min(100, Math.round(left / Math.max(0.0001, cap) * 100)));
-      $('ps-voice-t').textContent = faNum(pct) + '٪';
-      el.className = 'ps-voice' + (pct <= 10 ? ' low' : pct <= 30 ? ' mid' : '');
-      el.title = 'صدای باقی‌مانده ' + label + ': ' + faNum(pct) + '٪';
-      el.setAttribute('aria-label', el.title);
+      lastQuota = q;
+      var wk = q.week, pct, title;
+      if (wk) {
+        pct = Math.max(0, Math.min(100, wk.pct_used || 0));
+        if (q.usd_day_cap && q.usd_day_left != null && q.usd_day_left <= 0) pct = 100;
+        $('ps-voice-t').textContent = faNum(pct) + '٪';
+        el.className = 'ps-voice' + (pct >= 90 ? ' low' : pct >= 70 ? ' mid' : '');
+        title = 'صدای این هفته: ' + faNum(pct) + '٪ استفاده شده' + (wk.resets_at ? '؛ تازه می‌شود: ' + weekDay(wk.resets_at) : '');
+      } else {
+        var left = q.usd_left, cap = q.usd_cap, label = 'این ماه';
+        if (q.usd_day_cap && q.usd_day_left != null && q.usd_day_left < q.usd_left) { left = q.usd_day_left; cap = q.usd_day_cap; label = 'امروز'; }
+        pct = Math.max(0, Math.min(100, Math.round(left / Math.max(0.0001, cap) * 100)));
+        $('ps-voice-t').textContent = faNum(pct) + '٪';
+        el.className = 'ps-voice' + (pct <= 10 ? ' low' : pct <= 30 ? ' mid' : '');
+        title = 'صدای باقی‌مانده ' + label + ': ' + faNum(pct) + '٪';
+      }
+      el.title = title; el.setAttribute('aria-label', title);
       el.hidden = false;
     }).catch(function () { el.hidden = true; });
+  }
+  // the student taps the chip: what the week looks like, in words
+  window.showVoiceWeek = function () {
+    var q = lastQuota, wk = q && q.week; if (!wk) return;
+    var t = 'صدای این هفته: ' + faNum(wk.pct_used || 0) + '٪ استفاده شده.' + (wk.resets_at ? ' سهمیهٔ تازه: ' + weekDay(wk.resets_at) + '.' : '') +
+      '\nسهمیهٔ صدای هر ماه به چهار هفته تقسیم شده است.' + (wk.borrowed ? ' این هفته از سهمیهٔ هفتهٔ بعد هم استفاده کرده‌اید.' : '');
+    if (!offerBorrow(q, null, t)) addMessage('ai', t);
+    showPane('chat');
+  };
+  // this week is used up: offer half of next week's allowance now (next week gets that much less)
+  function offerBorrow(q, then, lead) {
+    var wk = q && q.week; if (!wk || !wk.can_borrow) return false;
+    addMessage('ai', (lead ? lead + '\n\n' : 'سهمیهٔ صدای این هفته تمام شد. ') + 'اگر بخواهید، نیمی از سهمیهٔ هفتهٔ بعد را همین حالا استفاده کنید؛ هفتهٔ بعد همان‌قدر کمتر می‌شود.',
+      linkRow('استفاده از سهمیهٔ هفتهٔ بعد', function (a) {
+        if (a.dataset.busy) return; a.dataset.busy = '1';
+        api('/api/voice/borrow', {}).then(function (d) {
+          if (d && d.ok) { a.parentNode.remove(); Stat.ok('quota', 'سهمیهٔ تازه فعال شد ✓', 3000); loadVoice(); if (then) then(); }
+          else { delete a.dataset.busy; Stat.fail('quota', (d && d.error) || 'حالا ممکن نشد.', 6000); }
+        }).catch(function () { delete a.dataset.busy; Stat.fail('quota', 'ارتباط برقرار نشد.', 5000); });
+      }));
+    return true;
   }
   function gainXP(d) {
     if (!d || !d.xp || !me) return;

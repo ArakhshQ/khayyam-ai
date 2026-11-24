@@ -723,3 +723,90 @@ def voice_recent(db, limit=40):
         d['per_min'] = round(d['usd'] / (d['seconds'] / 60.0), 3) if d['seconds'] >= 30 else None
         out.append(d)
     return out
+
+
+# =============================================================================================
+# WEEKLY VOICE ALLOWANCE
+# =============================================================================================
+# The month's voice dollars are split into four weeks, so a student can never use the whole month in a few days and then
+# wait three weeks. Weeks are fixed parts of the calendar month (UTC): days 1-7, 8-14, 15-21 and 22 to the end.
+# A week's allowance does not carry over. When it is used up, the student may move half of NEXT week's allowance into
+# this week (twice at most, which is all of next week); next week then has that much less. The month's total never grows.
+# The last week of a month cannot borrow: next month is a new payment.
+VOICE_WEEKS = 4
+BORROW_PARTS = 2                                   # next week's allowance is borrowed in halves
+BORROW_WHEN_USED = float(os.getenv('VOICE_BORROW_WHEN_USED', '0.85'))    # borrowing opens once 85% of this week is used
+
+
+def voice_week_index(day):
+    """0-3: which week of its month a date (or 'YYYY-MM-DD') belongs to."""
+    d = int(str(day)[8:10]) if not hasattr(day, 'day') else day.day
+    return min(VOICE_WEEKS - 1, (d - 1) // 7)
+
+
+def voice_week_bounds(now=None, week=None):
+    """-> (month 'YYYY-MM', week index, first day 'YYYY-MM-DD', first day of the next week or month, UTC timestamp when it ends)"""
+    now = now or utc_now()
+    w = voice_week_index(now) if week is None else week
+    start = now.replace(day=1 + 7 * w, hour=0, minute=0, second=0, microsecond=0)
+    if w < VOICE_WEEKS - 1:
+        end = now.replace(day=1 + 7 * (w + 1), hour=0, minute=0, second=0, microsecond=0)
+    else:
+        end = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end = end.replace(year=end.year + 1, month=1) if end.month == 12 else end.replace(month=end.month + 1)
+    return now.strftime('%Y-%m'), w, start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d'), int(end.replace(tzinfo=timezone.utc).timestamp())
+
+
+def ensure_voice_borrow_storage(db):
+    with db.engine.begin() as conn:
+        conn.execute(text('''CREATE TABLE IF NOT EXISTS voice_borrow (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            month_key VARCHAR(7) NOT NULL,
+            week INTEGER NOT NULL,
+            micro INTEGER NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)'''))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS ix_voice_borrow_user ON voice_borrow (user_id, month_key)'))
+
+
+def _borrowed(db, uid, month):
+    """{week: micro moved INTO that week from the week after it}"""
+    out = {}
+    for w, m in db.session.execute(text('SELECT week, COALESCE(SUM(micro),0) FROM voice_borrow WHERE user_id=:u AND month_key=:m GROUP BY week'),
+                                   {'u': uid, 'm': month}).all():
+        out[int(w)] = int(m or 0)
+    return out
+
+
+def voice_week_status(db, uid, plan, now=None):
+    """This week's voice allowance for one student, in micro-USD:
+    {'week','limit','used','left','pct_used','resets_at','borrowed','can_borrow','borrow_micro','next_limit','base'}"""
+    now = now or utc_now()
+    month, w, start, end, resets = voice_week_bounds(now)
+    base = int(round(voice_usd_cap(plan) * 1e6 / VOICE_WEEKS))
+    into = _borrowed(db, uid, month)
+    limit = base + into.get(w, 0) - into.get(w - 1, 0)
+    used = int(db.session.execute(text('SELECT COALESCE(SUM(micro),0) FROM voice_usage WHERE user_id=:u AND usage_day>=:a AND usage_day<:b'),
+                                  {'u': uid, 'a': start, 'b': end}).scalar() or 0)
+    left = max(0, limit - used)
+    chunk = int(base / BORROW_PARTS)
+    next_limit = base - into.get(w, 0) if w < VOICE_WEEKS - 1 else 0
+    can = (w < VOICE_WEEKS - 1 and chunk > 0 and next_limit >= chunk and limit > 0 and used >= limit * BORROW_WHEN_USED)
+    return {'week': w + 1, 'limit': limit, 'used': used, 'left': left,
+            'pct_used': 100 if limit <= 0 else min(100, int(round(used * 100.0 / limit))),
+            'resets_at': resets, 'borrowed': into.get(w, 0), 'can_borrow': bool(can), 'borrow_micro': chunk if can else 0,
+            'next_limit': max(0, next_limit), 'base': base}
+
+
+def voice_borrow(db, uid, plan, now=None):
+    """Move half of next week's allowance into this week. -> (ok, status after, reason)"""
+    now = now or utc_now()
+    st = voice_week_status(db, uid, plan, now)
+    if not st['can_borrow']:
+        why = 'last_week' if st['week'] >= VOICE_WEEKS else ('nothing_left' if st['next_limit'] < int(st['base'] / BORROW_PARTS) else 'not_used_up')
+        return False, st, why
+    month, w, _s, _e, _r = voice_week_bounds(now)
+    db.session.execute(text('INSERT INTO voice_borrow (id, user_id, month_key, week, micro, created_at) VALUES (:i, :u, :m, :w, :c, :n)'),
+                       {'i': str(uuid.uuid4()), 'u': uid, 'm': month, 'w': w, 'c': st['borrow_micro'], 'n': now})
+    db.session.commit()
+    return True, voice_week_status(db, uid, plan, now), ''
