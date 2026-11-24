@@ -489,6 +489,12 @@ TOOLS_OFF_BLOCK = (
     'ساختن فایل (PDF، ورد، اکسل) و نوشتن متن دری روی عکسی که کاربر می‌فرستد فعال است.'
 )
 
+VIDEO_BLOCK = (
+    'کاربر ویدیو یا انیمیشن خواسته است. ساختن ویدیو هنوز در خیام فعال نیست؛ این را کوتاه و صادقانه بگو (نگو «من نمی‌توانم»، '
+    'بگو «ساختن ویدیو هنوز اضافه نشده است») و بلافاصله بهترین جایگزین را واقعاً بساز: یک تصویر باکیفیت از همان صحنه، یا اگر '
+    'کار مرحله‌به‌مرحله است (مثلاً تقسیم حجره یا حرکت یک جسم)، دو تا چهار تصویر پشت سر هم که مراحل را نشان بدهند.'
+)
+
 TOOLS_GUEST_BLOCK = (
     'کاربر هنوز وارد حساب نشده است. ساختن و ویرایش تصویر، ساختن فایل و جستجوی وب فقط برای کاربران ثبت‌نام‌شده است. '
     'اگر چنین چیزی خواست، با مهربانی بگو برای این امکان ثبت‌نام رایگان لازم است، و تا جایی که می‌شود بدون ابزار کمک کن.'
@@ -592,13 +598,22 @@ def extract_memory_text(message):
 # Which tools to offer (decided by words, no model call). Tools cost input tokens, so a plain
 # chat never carries them.
 _IMG = re.compile(r'(عکس|تصویر|نقاشی|پوستر|بنر|لوگو|کارت\s*(تبریک|دعوت|ویزیت|پستال)|پس\s*زمینه|والپیپر|طراحی\s*کن|'
+                  # Dari ways of asking for a picture that were missed: «یک گربه بکش», «رسم کن», «چه شکلی است»
+                  r'بکش|بکشید|بکشین|رسم\s*(کن|کنید|نما)|شکل\s*(اش|ش|ی\s+از|\s+از|\s+بکش|\s+بساز)|چه\s*شکلی|کارتون|کارتونی|کاریکاتور|انیمه|'
+                  r'استیکر|آیکون|ایکون|اینفوگرافیک|دیاگرام|نمودار\s*تصویری|طرح\s*(یک|از|بساز|بکش)|'
                   r'image|picture|photo|draw|poster|logo|banner|illustration|wallpaper|thumbnail|sticker|icon|artwork|'
-                  r'render|sketch|design\s+(a|an|me))', re.I)
+                  r'render|sketch|design\s+(a|an|me)|visuali[sz]e|infographic|what\s+does\s+.{1,40}\s+look\s+like|generate\s+(a|an|me))', re.I)
+# video and animation: not made yet; the model must say so honestly and offer a picture (or a series of pictures) instead
+_VIDEO = re.compile(r'(ویدیو|ویدئو|ویدیویی|فیلم\s*(کوتاه|بساز)|انیمیشن|متحرک|کلیپ|video|animation|animate|clip|gif|movie)', re.I)
+_YES = re.compile(r'^\s*(بله|بلی|آری|آره|ها|خوب|خب|باشه|درست|بساز|بکش|بسازید|بکشید|حتما|حتماً|ok|okay|yes|sure|go|do it)\b', re.I)
 _IMG_EDIT = re.compile(r'(ویرایش|ادیت|تغییر|عوض|حذف|پاک|اضافه|رنگ|روشن|تاریک|پس\s*زمینه|متن|بنویس|بکش|زیباتر|قشنگ|'
                        r'edit|remove|erase|add|change|make\s+it|background|brighter|darker|caption|text|retouch|colorize|enhance|crop)', re.I)
 _DOC = re.compile(r'(pdf|docx|xlsx|\bword\b|ورد|اکسل|excel|فایل|دانلود|download|رزومه|سی\s*وی|\bcv\b|resume|spreadsheet|'
                   r'document|سند|نامه\s*رسمی|فاکتور|بروشور|قرارداد|چاپ\s*کن|ورق)', re.I)
 _SEARCH = re.compile(r'(جستجو|سرچ|search|google|گوگل|اخبار|خبر|\bnews\b|امروز|today|الان|اکنون|هم‌?اکنون|currently|'
+                     r'دیروز|yesterday|فردا|tomorrow|امسال|this\s+year|اخیر|اخیراً|recent|recently|این\s*هفته|this\s+week|'
+                     r'چه\s*کسی\s*(برد|برنده)|who\s+won|انتخابات|election|سهام|stock|بیت\s*کوین|bitcoin|کریکت|cricket|فوتبال|football|'
+                     r'جدید\s*ترین|newest|update|آپدیت|زمان\s*(برگزاری|شروع)|when\s+is|کجا\s*(بخرم|پیدا)|where\s+to\s+buy|'
                      r'latest|آخرین|جدیدترین|تازه‌?ترین|قیمت|\bprice|نرخ|ارزش|دالر|دلار|افغانی|ارز|weather|هوا\b|آب\s*و\s*هوا|'
                      r'نتیجه|score|بازی\s*(دیروز|امروز)|رییس|رئیس|president|وزیر|ceo|release|ریلیز|۲۰۲[5-9]|202[5-9]|۱۴۰[4-9])', re.I)
 
@@ -608,6 +623,11 @@ def tool_hints(message, last_assistant='', has_image=False, recent_user=''):
     m = message or ''
     hints = set()
     pending = bool(has_image and (_IMG.search(recent_user or '') or _IMG_EDIT.search(recent_user or '')))
+    # «بله، بساز» after talking about a picture (the assistant asked a question, or the user's last request was a picture)
+    if not pending and _YES.search(m) and len(m) < 60 and (_IMG.search(recent_user or '') or _VIDEO.search(recent_user or '')):
+        pending = True
+    if _VIDEO.search(m):
+        hints.add('video'); hints.add('image')            # no video tool yet: offer pictures, and say so honestly
     if _IMG.search(m) or pending or (has_image and _IMG_EDIT.search(m)) or ('[[media:' in (last_assistant or '') and
                                                                   (_IMG_EDIT.search(m) or len(m) < 120)):
         hints.add('image')

@@ -2200,6 +2200,8 @@ def _chat_prepare(allow_tools=False):
                     system_prompt += '\n\n' + note
             if not chat_tools.gemini.available() and hints & {'image', 'search'}:
                 system_prompt += '\n\n' + khr.TOOLS_OFF_BLOCK
+            elif 'video' in hints:
+                system_prompt += '\n\n' + khr.VIDEO_BLOCK
     return {'user_message': user_message, 'history': history, 'conv': conv, 'user_id': user_id, 'plan': plan,
             'image_b64': image_b64, 'image_type': image_type, 'intent': intent, 'canned': canned,
             'system_prompt': system_prompt, 'poem_ctx': poem_ctx, 'tools': tools, 'tool_env': tool_env,
